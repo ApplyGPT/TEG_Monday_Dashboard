@@ -205,7 +205,7 @@ def format_data(data):
 def main():
     """Main application function"""
     # Header
-    st.markdown('<div class="embed-header">📊 Google Ads Attribution Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="embed-header">📊 GOOGLE ADS ATTRIBUTION DASHBOARD</div>', unsafe_allow_html=True)
     
     # Sidebar for configuration
     with st.sidebar:
