@@ -14,6 +14,16 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Helper function to format numbers with K format
+def format_currency(value):
+    """Format currency values with K for thousands"""
+    if value >= 1000000:
+        return f"${value/1000000:.1f}M"
+    elif value >= 1000:
+        return f"${value/1000:.1f}K"
+    else:
+        return f"${value:.0f}"
+
 # Monday.com API settings from credentials.txt
 def load_credentials():
     """Load credentials from credentials.txt file"""
@@ -332,7 +342,7 @@ def main():
         sales_mtd = 0
         avg_contract = 0
     
-    # Display KPIs in columns at the top
+    # Display KPIs in columns at the top with larger numbers and K format
     col1, col2, col3 = st.columns(3)
     
     with col1:
@@ -378,14 +388,16 @@ def main():
         # Add numerical amounts above each bar
         fig_monthly.update_traces(
             texttemplate='<b>$%{y:,.2f}</b>',  # Bold text
-            textposition='outside'
+            textposition='outside',
+            textfont=dict(size=16, color='black')  # Larger text
         )
         
         fig_monthly.update_layout(
             height=500, 
             showlegend=False,
             xaxis_title='Month',
-            yaxis_title='Revenue ($)'
+            yaxis_title='Revenue ($)',
+            font=dict(size=14)  # Larger font for all text
         )
         st.plotly_chart(fig_monthly, use_container_width=True)
     else:
@@ -412,14 +424,16 @@ def main():
     # Add numerical amounts above each bar
     fig_yearly.update_traces(
         texttemplate='<b>$%{y:,.2f}</b>',  # Bold text
-        textposition='outside'
+        textposition='outside',
+        textfont=dict(size=16, color='black')  # Larger text
     )
     
     fig_yearly.update_layout(
         height=500, 
         showlegend=False,
         xaxis_title='Year',
-        yaxis_title='Revenue ($)'
+        yaxis_title='Revenue ($)',
+        font=dict(size=14)  # Larger font for all text
     )
     st.plotly_chart(fig_yearly, use_container_width=True)
     
@@ -452,8 +466,9 @@ def main():
             x=year_data['Month_Name'],
             y=year_data['Total Value'],
             marker_color=colors[i],
-            text=[f'<b>${val:,.2f}</b>' for val in year_data['Total Value']],  # Bold text
-            textposition='outside'
+            text=[format_currency(val) for val in year_data['Total Value']],  # K format
+            textposition='outside',
+            textfont=dict(size=14, color='black')  # Larger text
         ))
     
     fig_grouped.update_layout(
@@ -463,6 +478,7 @@ def main():
         height=500,
         bargap=0.15,
         bargroupgap=0.0,
+        font=dict(size=14),  # Larger font for all text
         xaxis=dict(
             categoryorder='array',
             categoryarray=month_order_filtered
@@ -474,9 +490,10 @@ def main():
     # 4. Comparison of Revenue by Salesman by Month
     st.subheader("Comparison of Revenue by Salesman by Month")
     
-    # Year selector for salesman chart
+    # Year selector for salesman chart - default to 2025
     available_years = sorted([int(year) for year in df_filtered['Year'].unique() if pd.notna(year)])
-    selected_year_salesman = st.selectbox("Select Year for Salesman Analysis:", available_years, key="salesman_year")
+    default_year_index = available_years.index(2025) if 2025 in available_years else 0
+    selected_year_salesman = st.selectbox("Select Year for Salesman Analysis:", available_years, index=default_year_index, key="salesman_year")
     
     df_salesman_year = df_filtered[df_filtered['Year'] == selected_year_salesman]
     
@@ -526,8 +543,9 @@ def main():
                 x=salesman_data['Month_Name'],
                 y=salesman_data['Total Value'],
                 marker_color=color,
-                text=[f'<b>${val:,.2f}</b>' for val in salesman_data['Total Value']],  # Bold text
-                textposition='outside'
+                text=[format_currency(val) for val in salesman_data['Total Value']],  # K format
+                textposition='outside',
+                textfont=dict(size=14, color='black')  # Larger text
             ))
         
         fig_salesman.update_layout(
@@ -538,6 +556,7 @@ def main():
             bargap=0.15,
             bargroupgap=0.0,
             showlegend=True,
+            font=dict(size=14),  # Larger font for all text
             xaxis=dict(
                 categoryorder='array',
                 categoryarray=month_order_filtered
@@ -550,9 +569,10 @@ def main():
     # 5. Comparison of Revenue by Category by Month
     st.subheader("Comparison of Revenue by Category by Month")
     
-    # Year selector for category chart
+    # Year selector for category chart - default to 2025
     available_years_category = sorted([int(year) for year in df_filtered['Year'].unique() if pd.notna(year)])
-    selected_year_category = st.selectbox("Select Year for Category Analysis:", available_years_category, key="category_year")
+    default_year_index_category = available_years_category.index(2025) if 2025 in available_years_category else 0
+    selected_year_category = st.selectbox("Select Year for Category Analysis:", available_years_category, index=default_year_index_category, key="category_year")
     
     df_category_year = df_filtered[df_filtered['Year'] == selected_year_category]
     
@@ -602,8 +622,9 @@ def main():
                 x=category_data['Month_Name'],
                 y=category_data['Total Value'],
                 marker_color=color,
-                text=[f'<b>${val:,.2f}</b>' for val in category_data['Total Value']],  # Bold text
-                textposition='outside'
+                text=[format_currency(val) for val in category_data['Total Value']],  # K format
+                textposition='outside',
+                textfont=dict(size=14, color='black')  # Larger text
             ))
         
         fig_category.update_layout(
@@ -614,6 +635,7 @@ def main():
             bargap=0.15,
             bargroupgap=0.0,
             showlegend=True,
+            font=dict(size=14),  # Larger font for all text
             xaxis=dict(
                 categoryorder='array',
                 categoryarray=month_order_filtered
