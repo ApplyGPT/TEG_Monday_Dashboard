@@ -1,69 +1,91 @@
-# Monday.com Streamlit Dashboard
+# TEG Monday Dashboard
 
-A simple Streamlit dashboard with dummy data designed for embedding in Monday.com.
+A comprehensive multi-page Streamlit dashboard for analyzing Monday.com data across multiple boards.
 
 ## Features
 
-- 📊 Interactive charts and visualizations
-- 📈 Sales trends and metrics
-- 📦 Product performance analysis
-- 👥 Team performance tracking
-- 📋 Data tables with recent information
-- 🎨 Responsive design optimized for embedding
+### 📊 ADS DASHBOARD (Default Page)
+- Google Ads attribution data
+- Ad spend tracking by month
+- Campaign performance metrics
+- Data export functionality
+- Year filtering and analysis
 
-## Installation
+### 📈 SALES DASHBOARD (`/sales_dashboard`)
+- Sales performance analytics
+- Revenue tracking by month/year
+- Salesman and category analysis
+- YTD and MTD metrics
+- Interactive charts and filters
 
-1. Install the required dependencies:
-```bash
-pip install -r requirements.txt
+## Setup
+
+1. **Install Dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Configure Credentials**
+   Create a `credentials.txt` file in the root directory with your Monday.com API credentials:
+   ```
+   api_token=your_monday_api_token_here
+   sales_board_id=your_sales_board_id_here
+   ads_board_id=your_ads_board_id_here
+   ```
+
+3. **Run the Application**
+   ```bash
+   streamlit run ads_dashboard.py
+   ```
+
+## Access URLs
+
+Once the application is running, you can access the different dashboards at:
+
+- **ADS DASHBOARD (Default)**: `http://localhost:8501`
+- **SALES DASHBOARD**: `http://localhost:8501/sales_dashboard`
+
+## File Structure
+
+```
+TEG_Monday_Dashboard/
+├── ads_dashboard.py           # ADS DASHBOARD (default page)
+├── pages/
+│   └── sales_dashboard.py     # SALES DASHBOARD
+├── credentials.txt           # API credentials (create this)
+├── requirements.txt          # Python dependencies
+└── README.md                # This file
 ```
 
-## Running the Dashboard
+## Navigation
 
-1. Start the Streamlit app:
-```bash
-streamlit run app.py
-```
+- The ADS DASHBOARD is the default landing page
+- Use the navigation sidebar to switch to the SALES DASHBOARD
+- Each dashboard has its own refresh button to update data
+- All dashboards share the same credentials file
 
-2. The dashboard will be available at `http://localhost:8501`
+## Features
 
-## Embedding in Monday.com
+- **Real-time Data**: Connects directly to Monday.com API
+- **Caching**: 5-minute cache for better performance
+- **Responsive Design**: Works on desktop and mobile
+- **Data Export**: Download data as CSV files
+- **Interactive Charts**: Built with Plotly for rich visualizations
+- **Multi-page Structure**: Clean separation of concerns
 
-To embed this dashboard in Monday.com:
+## Troubleshooting
 
-1. **Deploy the dashboard** to a hosting service (e.g., Streamlit Cloud, Heroku, or your own server)
-
-2. **Get the public URL** of your deployed dashboard
-
-3. **In Monday.com:**
-   - Go to your board
-   - Add a new column of type "Link"
-   - Or use the "Website" widget in a dashboard view
-   - Paste your dashboard URL
-
-4. **Alternative embedding methods:**
-   - Use an iframe in a Monday.com dashboard
-   - Create a custom widget using Monday.com's API
-
-## Dashboard Components
-
-- **KPIs**: Total Sales, Orders, Revenue, and Team Satisfaction
-- **Charts**: Sales trends, product performance, team metrics
-- **Data Tables**: Recent sales, product, and team data
-- **Responsive Design**: Optimized for various screen sizes
-
-## Customization
-
-The dashboard uses dummy data generated randomly. To customize:
-
-- Modify the `generate_dummy_data()` function in `app.py`
-- Replace with real data sources
-- Adjust charts and metrics as needed
-- Update styling in the CSS section
+1. **API Token Issues**: Make sure your Monday.com API token has the correct permissions
+2. **Board Access**: Verify that your API token can access the specified board IDs
+3. **Data Loading**: Check the console for any error messages during data fetching
+4. **Port Conflicts**: If port 8501 is busy, Streamlit will automatically use the next available port
 
 ## Dependencies
 
-- streamlit==1.28.1
-- pandas==2.1.3
-- plotly==5.17.0
-- numpy==1.24.3
+- streamlit
+- pandas
+- plotly
+- requests
+- datetime
+
+See `requirements.txt` for specific versions.
