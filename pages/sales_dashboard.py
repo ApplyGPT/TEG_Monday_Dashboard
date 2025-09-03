@@ -196,7 +196,7 @@ def process_sales_data(data):
             "Amount Paid or Contract Value": "",
             "Contract Amount": "",
             "Numbers3": "",
-            "Assigned": "",
+            "Assigned Person": "",
             "Client Type": ""
         }
         
@@ -210,8 +210,8 @@ def process_sales_data(data):
                 record["Contract Amount"] = text if text else ""
             elif col_id == "numbers3":  # Numbers3 column
                 record["Numbers3"] = text if text else ""
-            elif col_id == "person":  # Assigned
-                record["Assigned"] = text if text else ""
+            elif col_id == "person":  # Assigned Person
+                record["Assigned Person"] = text if text else ""
             elif col_id == "status_14__1":  # Client Type (CORRECT COLUMN)
                 record["Client Type"] = text if text else ""
             elif col_id == "date_mktq7npm":  # CORRECT Close Date (Date MK7)
@@ -505,7 +505,7 @@ def main():
     df_salesman_year = df_filtered[df_filtered['Year'] == selected_year_salesman]
     
     if not df_salesman_year.empty:
-        salesman_monthly = df_salesman_year.groupby(['Month', 'Month_Name', 'Assigned'])['Total Value'].sum().reset_index()
+        salesman_monthly = df_salesman_year.groupby(['Month', 'Month_Name', 'Assigned Person'])['Total Value'].sum().reset_index()
         salesman_monthly = salesman_monthly.sort_values('Month')
         
         # Create proper month order for x-axis
@@ -519,7 +519,7 @@ def main():
         # Create grouped bar chart by salesman with hardcoded colors
         fig_salesman = go.Figure()
         
-        salesmen = sorted(salesman_monthly['Assigned'].unique())
+        salesmen = sorted(salesman_monthly['Assigned Person'].unique())
         
         # Hardcoded colors for specific salesmen
         salesman_colors = {
@@ -534,7 +534,7 @@ def main():
         all_colors = ['#DDA0DD', '#98D8C8', '#F7DC6F', '#FF8A80', '#26A69A', '#42A5F5', '#66BB6A', '#FFCA28']
         
         for i, salesman in enumerate(salesmen):
-            salesman_data = salesman_monthly[salesman_monthly['Assigned'] == salesman]
+            salesman_data = salesman_monthly[salesman_monthly['Assigned Person'] == salesman]
             
             # Handle empty salesmen
             salesman_name = salesman if salesman and salesman.strip() else 'Unassigned'
