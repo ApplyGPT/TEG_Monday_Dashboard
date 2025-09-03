@@ -404,7 +404,7 @@ def main():
         st.info("No sales data available for 2025.")
     
     # 2. Sales by Year (All Years)
-    st.subheader("Sales by Year (All Years)")
+    st.subheader("Sales by Year")
     # Extract year and month for all filtered data
     df_filtered['Close Date'] = pd.to_datetime(df_filtered['Close Date'], errors='coerce')
     df_filtered['Year'] = df_filtered['Close Date'].dt.year
@@ -438,7 +438,7 @@ def main():
     st.plotly_chart(fig_yearly, use_container_width=True)
     
     # 3. Comparison of Revenue by Year by Month (All Years)
-    st.subheader("Comparison of Revenue by Year by Month (All Years)")
+    st.subheader("Comparison of Revenue by Year by Month")
     
     # Create pivot table for grouped bar chart using all filtered data
     monthly_yearly = df_filtered.groupby(['Year', 'Month', 'Month_Name'])['Total Value'].sum().reset_index()
@@ -482,6 +482,13 @@ def main():
         xaxis=dict(
             categoryorder='array',
             categoryarray=month_order_filtered
+        ),
+        legend=dict(
+            orientation="h",   # horizontal
+            yanchor="top",
+            y=-0.2,            # below the chart
+            xanchor="center",
+            x=0.5
         )
     )
     
@@ -560,6 +567,13 @@ def main():
             xaxis=dict(
                 categoryorder='array',
                 categoryarray=month_order_filtered
+            ),
+            legend=dict(
+                orientation="h",   # horizontal
+                yanchor="top",
+                y=-0.2,            # below the chart
+                xanchor="center",
+                x=0.5
             )
         )
         st.plotly_chart(fig_salesman, use_container_width=True)
@@ -632,13 +646,20 @@ def main():
             xaxis_title='Month',
             yaxis_title='Revenue ($)',
             height=500,
-            bargap=0.15,
+            bargap=0.0,
             bargroupgap=0.0,
             showlegend=True,
             font=dict(size=14),  # Larger font for all text
             xaxis=dict(
                 categoryorder='array',
                 categoryarray=month_order_filtered
+            ),
+            legend=dict(
+                orientation="h",   # horizontal
+                yanchor="top",
+                y=-0.2,            # below the chart
+                xanchor="center",
+                x=0.5
             )
         )
         st.plotly_chart(fig_category, use_container_width=True)
