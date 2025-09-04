@@ -13,30 +13,32 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Monday.com API settings from credentials.txt
+# Monday.com API settings from Streamlit secrets
 def load_credentials():
-    """Load credentials from credentials.txt file"""
-    credentials = {}
+    """Load credentials from Streamlit secrets"""
     try:
-        with open('credentials.txt', 'r') as f:
-            for line in f:
-                line = line.strip()
-                if '=' in line and not line.startswith('[') and not line.startswith('#'):
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip().strip('"').strip("'")  # Remove quotes
-                    if key == 'api_token':
-                        credentials['api_token'] = value
-                    elif key == 'ads_board_id':
-                        credentials['ads_board_id'] = int(value)
-    except FileNotFoundError:
-        st.error("credentials.txt file not found. Please create it with your Monday.com API credentials.")
-        st.stop()
+        # Access secrets from Streamlit
+        if 'monday' not in st.secrets:
+            st.error("Monday.com configuration not found in secrets.toml. Please check your configuration.")
+            st.stop()
+        
+        monday_config = st.secrets['monday']
+        
+        if 'api_token' not in monday_config:
+            st.error("API token not found in secrets.toml. Please add your Monday.com API token.")
+            st.stop()
+            
+        if 'ads_board_id' not in monday_config:
+            st.error("Ads board ID not found in secrets.toml. Please add your ads board ID.")
+            st.stop()
+        
+        return {
+            'api_token': monday_config['api_token'],
+            'ads_board_id': int(monday_config['ads_board_id'])
+        }
     except Exception as e:
-        st.error(f"Error reading credentials: {str(e)}")
+        st.error(f"Error reading secrets: {str(e)}")
         st.stop()
-    
-    return credentials
 
 credentials = load_credentials()
 API_TOKEN = credentials['api_token']
