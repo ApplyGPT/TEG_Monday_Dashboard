@@ -24,6 +24,16 @@ def format_currency(value):
     else:
         return f"${value:.0f}"
 
+# Helper function to format numbers with K format (one decimal place)
+def format_currency_one_decimal(value):
+    """Format currency values with K for thousands - one decimal place"""
+    if value >= 1000000:
+        return f"${value/1000000:.1f}M"
+    elif value >= 1000:
+        return f"${value/1000:.1f}K"
+    else:
+        return f"${value:.1f}"
+
 # Monday.com API settings from Streamlit secrets
 def load_credentials():
     """Load credentials from Streamlit secrets"""
@@ -371,7 +381,7 @@ def main():
             delta=None
         )
     
-    # 1. Sales by Month (2025)
+    # 1. Sales by Month (2025) - Contract Amount vs Amount Paid
     st.subheader(f"Sales by Month (2025)")
     if not df_2025.empty:
         # Extract year and month for 2025 data
@@ -380,29 +390,70 @@ def main():
         df_2025['Month'] = df_2025['Close Date'].dt.month
         df_2025['Month_Name'] = df_2025['Close Date'].dt.strftime('%B')
         
-        monthly_sales = df_2025.groupby(['Month', 'Month_Name'])['Total Value'].sum().reset_index()
+        # Separate contract amounts and amounts paid
+        df_2025['Contract Amount'] = pd.to_numeric(df_2025['Contract Amount'], errors='coerce').fillna(0)
+        df_2025['Numbers3'] = pd.to_numeric(df_2025['Numbers3'], errors='coerce').fillna(0)
+        
+        # Group by month and sum both contract amounts and amounts paid
+        monthly_contract = df_2025.groupby(['Month', 'Month_Name'])['Contract Amount'].sum().reset_index()
+        monthly_paid = df_2025.groupby(['Month', 'Month_Name'])['Numbers3'].sum().reset_index()
+        
+        # Merge the data
+        monthly_sales = monthly_contract.merge(monthly_paid, on=['Month', 'Month_Name'], how='outer')
+        monthly_sales = monthly_sales.fillna(0)
         monthly_sales = monthly_sales.sort_values('Month')
         
-        fig_monthly = px.bar(
-            monthly_sales,
-            x='Month_Name',
-            y='Total Value',
-            labels={'Total Value': 'Revenue ($)', 'Month_Name': 'Month'}
-        )
+        # Calculate total for each month (contract amount + amount paid)
+        monthly_sales['Total'] = monthly_sales['Contract Amount'] + monthly_sales['Numbers3']
         
-        # Add numerical amounts above each bar
-        fig_monthly.update_traces(
-            texttemplate='<b>$%{y:,.2f}</b>',  # Bold text
-            textposition='outside',
-            textfont=dict(size=16, color='black')  # Larger text
-        )
+        # Create stacked bar chart with two colors
+        fig_monthly = go.Figure()
+        
+        # Add Contract Amount bars
+        fig_monthly.add_trace(go.Bar(
+            name='Contract Amount',
+            x=monthly_sales['Month_Name'],
+            y=monthly_sales['Contract Amount'],
+            marker_color='#1f77b4',  # Blue color for contract amount
+            textposition='inside',  # No text for individual segments
+            showlegend=True
+        ))
+        
+        # Add Amount Paid bars
+        fig_monthly.add_trace(go.Bar(
+            name='Amount Paid',
+            x=monthly_sales['Month_Name'],
+            y=monthly_sales['Numbers3'],
+            marker_color='#ff7f0e',  # Orange color for amount paid
+            textposition='inside',  # No text for individual segments
+            showlegend=True
+        ))
+        
+        # Add total values on top of the stacked bars
+        fig_monthly.add_trace(go.Scatter(
+            x=monthly_sales['Month_Name'],
+            y=monthly_sales['Total'],
+            mode='text',
+            text=[format_currency_one_decimal(val) for val in monthly_sales['Total']],
+            textposition='top center',
+            textfont=dict(size=14, color='black'),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
         
         fig_monthly.update_layout(
-            height=500, 
-            showlegend=False,
+            barmode='stack',
+            height=500,
             xaxis_title='Month',
             yaxis_title='Revenue ($)',
-            font=dict(size=14)  # Larger font for all text
+            font=dict(size=14),
+            legend=dict(
+                orientation="h",
+                yanchor="top",
+                y=-0.2,
+                xanchor="center",
+                x=0.5
+            )
         )
         st.plotly_chart(fig_monthly, use_container_width=True)
     else:
