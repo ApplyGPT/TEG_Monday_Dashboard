@@ -2,9 +2,45 @@ import streamlit as st
 import json
 import os
 import openai
+import pandas as pd
+import time
 
-# Initialize the OpenAI client with the API key from environment variables.
-client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Set page config at the top of the script
+st.set_page_config(page_title="Jennifer's Lead Qualifier", layout="wide")
+
+def load_openai_api_key(filepath="credentials.txt"):
+    """Loads the OpenAI API key from a specified file, handling optional 'OPENAI_API_KEY = ...' format."""
+    try:
+        with open(filepath, "r") as f:
+            content = f.read().strip()
+
+            if "OPENAI_API_KEY" in content:
+                # Extract the key using regex
+                import re
+                match = re.search(r'["\']?sk-[\w-]+["\']?', content)
+                if match:
+                    return match.group(0).replace('"', '').replace("'", "")
+                else:
+                    st.error("Não foi possível extrair a chave do arquivo.")
+                    return None
+            else:
+                # Retorn string
+                return content
+    except FileNotFoundError:
+        st.error(f"Error: The file '{filepath}' was not found. Please ensure your OpenAI API key is in this file.")
+        return None
+    except Exception as e:
+        st.error(f"An error occurred while reading the API key file: {e}")
+        return None
+
+# Load the API key from the credentials.txt file
+openai_api_key = load_openai_api_key()
+
+# Initialize the OpenAI client with the API key
+if openai_api_key:
+    openai.api_key = openai_api_key
+else:
+    st.stop() # Stop the app if the API key is not found
 
 # New, comprehensive prompt template
 PROMPT_TEMPLATE = """
@@ -27,7 +63,7 @@ CRITERIA FOR SCORE 1 (UNQUALIFIED):
 - **Primary Reason:** The lead's project is not a right fit for **The Evans Group (TEG)**, a high-end, luxury fashion manufacturer specializing in couture and small-to-medium volume production. This is the most important factor, even if the request is professional and detailed.
 - **Specific examples of "Not Right Fit" projects:**
     - Leads requesting large, mass-market quantities (e.g., thousands of units per style) that do not align with TEG's specialized **small-to-medium volume production model (1-300 pieces per style)**.
-    - Projects for basic apparel, sports uniforms, simple activewear, or workwear.
+    - Projects for basic apparel, sports, gymnastics and/or rhythmic uniforms, simple activewear, or workwear.
     - Medical apparel, underwear, or other non-fashion garments.
     - General spam, such as advertising services, or unrelated inquiries (e.g., "Do you need an electrician?").
     - Vague or generic project descriptions that lack substance, details, or a clear vision, regardless of the lead's professional title.
@@ -75,7 +111,7 @@ heard_from = st.radio(
 )
 
 # Create a radio button for "What kind of designer are you?"
-st.subheader("What kind of designer are you? *")
+st.subheader("What kind of designer are you?")
 designer_type = st.radio(
     "Select an option:",
     ("None Selected", "Emerging Designer", "Established High-End Designer", "Somewhere in the Middle", "Other"),
@@ -129,7 +165,7 @@ if st.button("Classify Lead"):
 
         try:
             # Send the comprehensive prompt to the LLM
-            response = client.chat.completions.create(
+            response = openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
@@ -146,3 +182,179 @@ if st.button("Classify Lead"):
             st.error("Failed to parse JSON response from the LLM. Please try again.")
         except Exception as e:
             st.error(f"An error occurred: {e}")
+
+# --- Section 2: Batch test all JSON files ---
+st.header("🔹 Run Batch Test on JSON Files")
+
+test_folder = st.text_input("Enter test folder path (e.g., test_leads/)", "test_leads/")
+
+if st.button("Run Batch Test"):
+    if not os.path.exists(test_folder):
+        st.error(f"Folder not found: {test_folder}")
+    else:
+        results = []
+        # Sort filenames numerically (works for file_1.json ... file_10.json)
+        json_files = sorted(
+            [f for f in os.listdir(test_folder) if f.endswith(".json")],
+            key=lambda x: int("".join(filter(str.isdigit, x)) or 0)
+        )
+
+        for file_name in json_files:
+            file_path = os.path.join(test_folder, file_name)
+            with open(file_path, "r", encoding="utf-8") as f:
+                lead_data = json.load(f)
+
+            prompt = PROMPT_TEMPLATE.format(
+                first_name=lead_data.get("first_name", ""),
+                last_name=lead_data.get("last_name", ""),
+                brand_name=lead_data.get("brand_name", ""),
+                website=lead_data.get("website", ""),
+                email=lead_data.get("email", ""),
+                phone_number=lead_data.get("phone_number", ""),
+                heard_from=lead_data.get("heard_from", ""),
+                designer_type=lead_data.get("designer_type", ""),
+                about_project=lead_data.get("about_project", "")
+            )
+
+            try:
+                response = openai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"}
+                )
+                response_json = json.loads(response.choices[0].message.content)
+                results.append({"file": file_name, **response_json})
+            except Exception as e:
+                results.append({"file": file_name, "error": str(e)})
+
+        st.success("Batch Results:")
+        st.json(results)
+
+# --- Section 3: Batch test on a single JSON file with accuracy evaluation ---
+st.header("🔹 Run Batch Test on a Single JSON File (with Accuracy Metrics)")
+
+if st.button("Run Test on test_qualifier.json"):
+    test_file_path = "test_qualifier.json"
+    
+    if not os.path.exists(test_file_path):
+        st.error(f"File not found: {test_file_path}. Please ensure the file is in the same directory as the app.")
+    else:
+        try:
+            with open(test_file_path, "r", encoding="utf-8") as f:
+                leads_data = json.load(f)
+
+            results = []
+            total_rows = len(leads_data)
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            correct = 0
+            total = 0
+            # Counters for per-category accuracy
+            category_stats = {
+                "spam": {"correct": 0, "total": 0},
+                "not_right_fit": {"correct": 0, "total": 0},
+                "fit": {"correct": 0, "total": 0}
+            }
+
+            for idx, lead_data in enumerate(leads_data):
+                status_text.text(f"Processing lead {idx + 1} of {total_rows}...")
+
+                # Ground truth (expected)
+                expected = lead_data.get("expected_output", {})
+                expected_score = expected.get("score")
+
+                # Build prompt
+                prompt = PROMPT_TEMPLATE.format(
+                    first_name=lead_data.get("first_name", ""),
+                    last_name=lead_data.get("last_name", ""),
+                    brand_name=lead_data.get("brand_name", ""),
+                    website=lead_data.get("website", ""),
+                    email=lead_data.get("email", ""),
+                    phone_number=lead_data.get("phone_number", ""),
+                    heard_from=lead_data.get("heard_from", ""),
+                    designer_type=lead_data.get("designer_type", ""),
+                    about_project=lead_data.get("about_project", "")
+                )
+
+                try:
+                    response = openai.chat.completions.create(
+                        model="gpt-4.1-mini",
+                        messages=[{"role": "user", "content": prompt}],
+                        response_format={"type": "json_object"}
+                    )
+                    response_json = json.loads(response.choices[0].message.content)
+                    predicted_score = response_json.get("score")
+
+                    # Track accuracy
+                    total += 1
+                    if predicted_score == expected_score:
+                        correct += 1
+
+                        # Category-specific check
+                        if expected_score == 1 and "spam" in expected.get("reason", "").lower():
+                            category_stats["spam"]["correct"] += 1
+                        elif expected_score == 1:
+                            category_stats["not_right_fit"]["correct"] += 1
+                        elif expected_score == 3:
+                            category_stats["fit"]["correct"] += 1
+
+                    # Update totals per category
+                    if expected_score == 1 and "spam" in expected.get("reason", "").lower():
+                        category_stats["spam"]["total"] += 1
+                    elif expected_score == 1:
+                        category_stats["not_right_fit"]["total"] += 1
+                    elif expected_score == 3:
+                        category_stats["fit"]["total"] += 1
+
+                    results.append({
+                        "predicted": response_json,
+                        "expected": expected,
+                        "original_data": lead_data
+                    })
+
+                except Exception as e:
+                    results.append({
+                        "predicted": {"score": None, "reason": f"Error: {e}"},
+                        "expected": expected,
+                        "original_data": lead_data
+                    })
+
+                progress_bar.progress((idx + 1) / total_rows)
+                time.sleep(0.01)
+
+            progress_bar.empty()
+            status_text.empty()
+
+            # Overall accuracy
+            overall_acc = correct / total if total > 0 else 0.0
+
+            # Category accuracies
+            spam_acc = category_stats["spam"]["correct"] / category_stats["spam"]["total"] if category_stats["spam"]["total"] > 0 else 0
+            nrf_acc = category_stats["not_right_fit"]["correct"] / category_stats["not_right_fit"]["total"] if category_stats["not_right_fit"]["total"] > 0 else 0
+            fit_acc = category_stats["fit"]["correct"] / category_stats["fit"]["total"] if category_stats["fit"]["total"] > 0 else 0
+
+            st.success(f"✅ Batch classification completed! Processed {total_rows} leads.")
+            st.write("### 📊 Accuracy Metrics")
+            st.write(f"**Overall Accuracy:** {overall_acc:.2%}")
+            st.write(f"**Spam Accuracy:** {spam_acc:.2%} ({category_stats['spam']['correct']}/{category_stats['spam']['total']})")
+            st.write(f"**Not Right Fit Accuracy:** {nrf_acc:.2%} ({category_stats['not_right_fit']['correct']}/{category_stats['not_right_fit']['total']})")
+            st.write(f"**Fit Accuracy:** {fit_acc:.2%} ({category_stats['fit']['correct']}/{category_stats['fit']['total']})")
+
+            # Display first few results as sample
+            st.write("### Sample Results")
+            st.json(results[:10])
+
+            # Download all results
+            json_out = json.dumps(results, indent=2, ensure_ascii=False).encode("utf-8")
+            st.download_button(
+                "Download Classified JSON (with predictions + expected)",
+                json_out,
+                "classified_leads_with_expected.json",
+                "application/json"
+            )
+
+        except json.JSONDecodeError:
+            st.error("Failed to parse the JSON file. Please ensure it's in a valid JSON format.")
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {e}")
