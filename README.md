@@ -26,11 +26,39 @@ A comprehensive multi-page Streamlit dashboard for analyzing Monday.com data acr
    ```
 
 2. **Configure Credentials**
-   Create a `credentials.txt` file in the root directory with your Monday.com API credentials:
+   Create a `.streamlit/secrets.toml` file in the root directory with your API credentials:
+   ```toml
+   [monday]
+   api_token = "your_monday_api_token_here"
+   sales_board_id = your_sales_board_id_here
+   ads_board_id = your_ads_board_id_here
+   
+   [openai]
+   api_key = "your_openai_api_key_here"
+   ``` DASHBOARD (`/sales_dashboard`)
+- Sales performance analytics
+- Revenue tracking by month/year
+- Salesman and category analysis
+- YTD and MTD metrics
+- Interactive charts and filters
+
+## Setup
+
+1. **Install Dependencies**
+   ```bash
+   pip install -r requirements.txt
    ```
-   api_token=your_monday_api_token_here
-   sales_board_id=your_sales_board_id_here
-   ads_board_id=your_ads_board_id_here
+
+2. **Configure Credentials**
+   Create a `.streamlit/secrets.toml` file in the root directory with your API credentials:
+   ```toml
+   [monday]
+   api_token = "your_monday_api_token_here"
+   sales_board_id = your_sales_board_id_here
+   ads_board_id = your_ads_board_id_here
+   
+   [openai]
+   api_key = "your_openai_api_key_here"
    ```
 
 3. **Run the Application**
@@ -52,7 +80,8 @@ TEG_Monday_Dashboard/
 ├── ads_dashboard.py           # ADS DASHBOARD (default page)
 ├── pages/
 │   └── sales_dashboard.py     # SALES DASHBOARD
-├── credentials.txt           # API credentials (create this)
+├── .streamlit/
+│   └── secrets.toml          # API credentials (create this)
 ├── requirements.txt          # Python dependencies
 └── README.md                # This file
 ```
@@ -62,7 +91,7 @@ TEG_Monday_Dashboard/
 - The ADS DASHBOARD is the default landing page
 - Use the navigation sidebar to switch to the SALES DASHBOARD
 - Each dashboard has its own refresh button to update data
-- All dashboards share the same credentials file
+- All dashboards share the same secrets configuration
 
 ## Features
 
@@ -88,4 +117,4 @@ TEG_Monday_Dashboard/
 - requests
 - datetime
 
-See `requirements.txt` for specific versions.
+See `secrets.toml` for specific versions.

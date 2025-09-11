@@ -8,39 +8,16 @@ import time
 # Set page config at the top of the script
 st.set_page_config(page_title="Jennifer's Lead Qualifier", layout="wide")
 
-def load_openai_api_key(filepath="credentials.txt"):
-    """Loads the OpenAI API key from a specified file, handling optional 'OPENAI_API_KEY = ...' format."""
-    try:
-        with open(filepath, "r") as f:
-            content = f.read().strip()
-
-            if "OPENAI_API_KEY" in content:
-                # Extract the key using regex
-                import re
-                match = re.search(r'["\']?sk-[\w-]+["\']?', content)
-                if match:
-                    return match.group(0).replace('"', '').replace("'", "")
-                else:
-                    st.error("Não foi possível extrair a chave do arquivo.")
-                    return None
-            else:
-                # Retorn string
-                return content
-    except FileNotFoundError:
-        st.error(f"Error: The file '{filepath}' was not found. Please ensure your OpenAI API key is in this file.")
-        return None
-    except Exception as e:
-        st.error(f"An error occurred while reading the API key file: {e}")
-        return None
-
-# Load the API key from the credentials.txt file
-openai_api_key = load_openai_api_key()
-
-# Initialize the OpenAI client with the API key
-if openai_api_key:
+# Load the API key from Streamlit secrets
+try:
+    openai_api_key = st.secrets["openai"]["api_key"]
     openai.api_key = openai_api_key
-else:
-    st.stop() # Stop the app if the API key is not found
+except KeyError:
+    st.error("OpenAI API key not found in secrets.toml. Please ensure the [openai] section with api_key is configured.")
+    st.stop()
+except Exception as e:
+    st.error(f"An error occurred while loading the API key from secrets: {e}")
+    st.stop()
 
 # New, comprehensive prompt template
 PROMPT_TEMPLATE = """

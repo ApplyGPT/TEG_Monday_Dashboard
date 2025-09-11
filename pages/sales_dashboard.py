@@ -455,6 +455,23 @@ def main():
                 x=0.5
             )
         )
+        
+        # Calculate average contract amount per month for display
+        monthly_avg = df_2025.groupby(['Month', 'Month_Name'])['Contract Amount'].mean().reset_index()
+        monthly_avg = monthly_avg.sort_values('Month')
+        
+        # Add average contract amount text below each bar
+        fig_monthly.add_trace(go.Scatter(
+            x=monthly_avg['Month_Name'],
+            y=[0] * len(monthly_avg),  # Position at bottom
+            mode='text',
+            text=[f"Avg. C.A. = ${val:,.0f}" for val in monthly_avg['Contract Amount']],
+            textposition='bottom center',
+            textfont=dict(size=14, color='black'),
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
         st.plotly_chart(fig_monthly, use_container_width=True)
     else:
         st.info("No sales data available for 2025.")
@@ -580,7 +597,7 @@ def main():
         # Hardcoded colors for specific salesmen
         salesman_colors = {
             'Jennifer Evans': '#df2f4a',            # Red
-            'Jeet Sangamnerkar': '#a358df',         # Teal
+            'Gabriela Tamayo': '#a358df',           # Green
             'Anthony Alba': '#579bfc',              # Blue
             'Unassigned': '#96CEB4',                # Green
             'Heather Castagno': '#ffcb00'           # Yellow
