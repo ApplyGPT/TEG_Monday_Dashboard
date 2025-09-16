@@ -8,22 +8,30 @@ app = Flask(__name__)
 
 # Load OpenAI API key from Streamlit secrets.toml
 def load_openai_key():
-    """Load OpenAI API key from secrets.toml"""
+    """Load OpenAI API key from environment variable or .streamlit/secrets.toml"""
+    # 1. Check environment variable
+    env_key = os.environ.get("OPENAI_API_KEY")
+    if env_key:
+        return env_key
+
+    # 2. Check secrets.toml
     try:
         secrets_path = os.path.join('.streamlit', 'secrets.toml')
         if os.path.exists(secrets_path):
             secrets = toml.load(secrets_path)
             return secrets.get('openai', {}).get('api_key')
         else:
-            print("Warning: secrets.toml not found. Please ensure it exists in .streamlit/ directory.")
+            print("⚠️ Warning: secrets.toml not found in .streamlit/ directory.")
             return None
     except Exception as e:
-        print(f"Error loading secrets.toml: {e}")
+        print(f"❌ Error while loading secrets.toml: {e}")
         return None
 
+
 openai_api_key = load_openai_key()
+
 if not openai_api_key:
-    print("Warning: OpenAI API key not found in secrets.toml")
+    print("⚠️ OpenAI API key not found in env var or secrets.toml. Using dummy key for testing.")
     openai_api_key = "dummy_key_for_testing"
 
 openai.api_key = openai_api_key
@@ -213,4 +221,4 @@ def root():
 
 if __name__ == '__main__':
     # Run the Flask app
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)
