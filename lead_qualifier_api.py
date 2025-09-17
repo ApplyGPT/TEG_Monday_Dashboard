@@ -1,8 +1,10 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 import json
 import openai
 import toml
 import os
+import csv
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -36,21 +38,19 @@ if not openai_api_key:
 
 openai.api_key = openai_api_key
 
-# Qualification prompt template (extracted from new_leads.py)
+# Qualification prompt template (simplified version)
 PROMPT_TEMPLATE = """
 ANALYZE THE FOLLOWING LEAD INFORMATION FROM JENNIFER'S FASHION MANUFACTURING FORM.
-CLASSIFY THE LEAD AS EITHER:
-SCORE 1: UNQUALIFIED/SPAM - OR - SCORE 3: QUALIFIED/BEST FIT
+CLASSIFY THE LEAD AS:
+SCORE 1: UNQUALIFIED/SPAM
+SCORE 2: UNSURE (not clearly spam but not clearly qualified either)
+SCORE 3: QUALIFIED/BEST FIT
 
 Lead Information:
 - First Name: {first_name}
 - Last Name: {last_name}
-- Brand Name: {brand_name}
-- Website: {website}
 - Email: {email}
 - Phone Number: {phone_number}
-- Heard From: {heard_from}
-- Designer Type: {designer_type}
 - About Project: {about_project}
 
 CRITERIA FOR SCORE 1 (UNQUALIFIED):
@@ -74,16 +74,65 @@ CRITERIA FOR SCORE 3 (QUALIFIED):
     - **Project Details:** The request includes specific details on materials, quantities, design elements, and timelines.
 - **Professionalism:** The lead provides clear, professional information across all fields (brand name, website, and designer type).
 
+CRITERIA FOR SCORE 2 (UNSURE):
+- **When to use:** The lead is clearly not spam or completely unfit, but there's not enough information to confidently classify as qualified.
+- **Examples:** Vague project descriptions that could be legitimate but lack detail, or projects that might align with TEG but need more information.
+
+CRITERIA FOR SCORE 3 (QUALIFIED):
+- **Primary Reason:** The "About Project" description is detailed and aligns with TEG's services for **high-end, luxury, and couture fashion brands**. This is a crucial requirement.
+- **Project alignment:** The lead's request fits with TEG's services, which include:
+    - **Client Types:** Established high-end designers, luxury brands, or emerging designers with a professional vision.
+    - **Production Scale:** The request aligns with **small-to-medium volume production (1-300 pieces per style)**, or other TEG services like pattern making or sample creation.
+    - **Specific products:** Runway looks, bridal, evening wear, formal wear, high-end menswear and womenswear, complex knitwear, or specific, elevated basics.
+    - **Specific materials:** Delicate silks, leather, wovens, beading, lace, or complex knits.
+
 OUTPUT FORMAT:
 Provide ONLY a JSON response with the following structure, AND NOTHING ELSE:
 {{
-  "score": 1 or 3,
+  "score": 1, 2, or 3,
   "confidence": "high/medium/low",
   "reason": "brief explanation of classification decision"
 }}
 
-Focus on the substance, specificity, and professional context of the entire lead profile, and its alignment with TEG's specialized business model.
+Focus on the substance, specificity, and professional context of the lead profile, and its alignment with TEG's specialized business model.
 """
+
+# Calendar URLs for redirection based on score
+CALENDAR_URLS = {
+    1: "https://www.google.com",  # Dummy URL for score 1 (unqualified)
+    2: "https://www.yahoo.com",   # Dummy URL for score 2 (unsure)
+    3: "https://www.gmail.com"    # Dummy URL for score 3 (qualified)
+}
+
+def log_request(lead_data, result):
+    """Log the request and response to a CSV file"""
+    try:
+        log_file = 'lead_qualification_log.csv'
+        file_exists = os.path.exists(log_file)
+        
+        with open(log_file, 'a', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['timestamp', 'first_name', 'last_name', 'email', 'phone_number', 
+                         'about_project', 'score', 'confidence', 'reason']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            
+            # Write header if file is new
+            if not file_exists:
+                writer.writeheader()
+            
+            # Write the log entry
+            writer.writerow({
+                'timestamp': datetime.now().isoformat(),
+                'first_name': lead_data.get('first_name', ''),
+                'last_name': lead_data.get('last_name', ''),
+                'email': lead_data.get('email', ''),
+                'phone_number': lead_data.get('phone_number', ''),
+                'about_project': lead_data.get('about_project', ''),
+                'score': result.get('score', ''),
+                'confidence': result.get('confidence', ''),
+                'reason': result.get('reason', '')
+            })
+    except Exception as e:
+        print(f"Error logging request: {e}")
 
 def qualify_lead(lead_data):
     """
@@ -104,16 +153,12 @@ def qualify_lead(lead_data):
                 "reason": "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
             }
         
-        # Format the prompt with the lead data
+        # Format the prompt with the simplified lead data
         prompt = PROMPT_TEMPLATE.format(
             first_name=lead_data.get('first_name', ''),
             last_name=lead_data.get('last_name', ''),
-            brand_name=lead_data.get('brand_name', ''),
-            website=lead_data.get('website', ''),
             email=lead_data.get('email', ''),
             phone_number=lead_data.get('phone_number', ''),
-            heard_from=lead_data.get('heard_from', ''),
-            designer_type=lead_data.get('designer_type', ''),
             about_project=lead_data.get('about_project', '')
         )
         
@@ -140,6 +185,52 @@ def qualify_lead(lead_data):
             "confidence": "low", 
             "reason": f"Error during qualification: {str(e)}"
         }
+
+@app.route('/qualify', methods=['GET'])
+def qualify_lead_get_endpoint():
+    """
+    GET endpoint that accepts query parameters and redirects based on qualification score
+    
+    Expected query parameters:
+    - first_name: string
+    - last_name: string
+    - email: string
+    - phone_number: string
+    - about_project: string
+    
+    Redirects to appropriate calendar URL based on score (1, 2, or 3)
+    """
+    try:
+        # Get data from query parameters
+        lead_data = {
+            'first_name': request.args.get('first_name', ''),
+            'last_name': request.args.get('last_name', ''),
+            'email': request.args.get('email', ''),
+            'phone_number': request.args.get('phone_number', ''),
+            'about_project': request.args.get('about_project', '')
+        }
+        
+        # Validate required fields
+        required_fields = ['first_name', 'last_name', 'email', 'phone_number', 'about_project']
+        missing_fields = [field for field in required_fields if not lead_data.get(field)]
+        
+        if missing_fields:
+            return f"Missing required query parameters: {', '.join(missing_fields)}", 400
+        
+        # Qualify the lead
+        result = qualify_lead(lead_data)
+        
+        # Log the request and response
+        log_request(lead_data, result)
+        
+        # Get the score and redirect to appropriate URL
+        score = result.get('score', 1)
+        redirect_url = CALENDAR_URLS.get(score, CALENDAR_URLS[1])  # Default to score 1 URL
+        
+        return redirect(redirect_url)
+        
+    except Exception as e:
+        return f"Internal server error: {str(e)}", 500
 
 @app.route('/qualify-lead', methods=['POST'])
 def qualify_lead_endpoint():
@@ -175,8 +266,8 @@ def qualify_lead_endpoint():
                 "error": "No JSON data provided"
             }), 400
         
-        # Validate required fields
-        required_fields = ['first_name', 'last_name', 'email', 'phone_number', 'heard_from', 'designer_type', 'about_project']
+        # Validate required fields (simplified)
+        required_fields = ['first_name', 'last_name', 'email', 'phone_number', 'about_project']
         missing_fields = [field for field in required_fields if not lead_data.get(field)]
         
         if missing_fields:
@@ -186,6 +277,9 @@ def qualify_lead_endpoint():
         
         # Qualify the lead
         result = qualify_lead(lead_data)
+        
+        # Log the request and response
+        log_request(lead_data, result)
         
         return jsonify(result)
         
@@ -208,15 +302,23 @@ def root():
     return jsonify({
         "message": "Jennifer's Lead Qualifier API",
         "endpoints": {
-            "POST /qualify-lead": "Qualify a lead and return score (1 or 3)",
+            "GET /qualify": "Qualify a lead via query parameters and redirect to calendar (NEW)",
+            "POST /qualify-lead": "Qualify a lead and return JSON score (1, 2, or 3)",
             "GET /health": "Health check endpoint",
             "GET /": "This information endpoint"
         },
         "required_fields": [
-            "first_name", "last_name", "email", "phone_number", 
-            "heard_from", "designer_type", "about_project"
+            "first_name", "last_name", "email", "phone_number", "about_project"
         ],
-        "optional_fields": ["brand_name", "website"]
+        "scoring": {
+            "1": "Unqualified/Spam - redirects to Google",
+            "2": "Unsure - redirects to Yahoo", 
+            "3": "Qualified/Best Fit - redirects to Gmail"
+        },
+        "example_urls": {
+            "GET": "/qualify?first_name=John&last_name=Doe&email=john@example.com&phone_number=555-1234&about_project=I need help with luxury fashion production",
+            "POST": "Send JSON to /qualify-lead with the required fields"
+        }
     })
 
 if __name__ == '__main__':
