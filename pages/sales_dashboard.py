@@ -409,22 +409,22 @@ def main():
         # Create stacked bar chart with two colors
         fig_monthly = go.Figure()
         
-        # Add Contract Amount bars
-        fig_monthly.add_trace(go.Bar(
-            name='Contract Amount',
-            x=monthly_sales['Month_Name'],
-            y=monthly_sales['Contract Amount'],
-            marker_color='#1f77b4',  # Blue color for contract amount
-            textposition='inside',  # No text for individual segments
-            showlegend=True
-        ))
-        
         # Add Amount Paid bars
         fig_monthly.add_trace(go.Bar(
             name='Amount Paid',
             x=monthly_sales['Month_Name'],
+            y=monthly_sales['Contract Amount'],
+            marker_color='#1f77b4',  # Blue color for amount paid
+            textposition='inside',  # No text for individual segments
+            showlegend=True
+        ))
+        
+        # Add Contract Amount bars
+        fig_monthly.add_trace(go.Bar(
+            name='Contract Amount',
+            x=monthly_sales['Month_Name'],
             y=monthly_sales['Numbers3'],
-            marker_color='#ff7f0e',  # Orange color for amount paid
+            marker_color='#ff7f0e',  # Orange color for contract amount
             textposition='inside',  # No text for individual segments
             showlegend=True
         ))
