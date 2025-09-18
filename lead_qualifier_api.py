@@ -99,9 +99,9 @@ Focus on the substance, specificity, and professional context of the lead profil
 
 # Calendar URLs for redirection based on score
 CALENDAR_URLS = {
-    1: "https://www.google.com",  # Dummy URL for score 1 (unqualified)
-    2: "https://www.yahoo.com",   # Dummy URL for score 2 (unsure)
-    3: "https://www.gmail.com"    # Dummy URL for score 3 (qualified)
+    1: "https://tegmade.com/thank-you/",  # URL for score 1 (unqualified)
+    2: "https://tegmade.com/thank-you/",   # URL for score 2 (unsure)
+    3: "https://tegmade.com/thank-you/"    # URL for score 3 (qualified)
 }
 
 def log_request(lead_data, result):
@@ -311,9 +311,9 @@ def root():
             "first_name", "last_name", "email", "phone_number", "about_project"
         ],
         "scoring": {
-            "1": "Unqualified/Spam - redirects to Google",
-            "2": "Unsure - redirects to Yahoo", 
-            "3": "Qualified/Best Fit - redirects to Gmail"
+            "1": "Unqualified/Spam ",
+            "2": "Unsure", 
+            "3": "Qualified/Best Fit"
         },
         "example_urls": {
             "GET": "/qualify?first_name=John&last_name=Doe&email=john@example.com&phone_number=555-1234&about_project=I need help with luxury fashion production",
