@@ -38,13 +38,14 @@ if not openai_api_key:
 
 openai.api_key = openai_api_key
 
-# Qualification prompt template (simplified version)
+# Qualification prompt template (updated with 0-3 scoring system)
 PROMPT_TEMPLATE = """
 ANALYZE THE FOLLOWING LEAD INFORMATION FROM JENNIFER'S FASHION MANUFACTURING FORM.
-CLASSIFY THE LEAD AS:
-SCORE 1: UNQUALIFIED/SPAM
-SCORE 2: UNSURE (not clearly spam but not clearly qualified either)
-SCORE 3: QUALIFIED/BEST FIT
+CLASSIFY THE LEAD USING THE NEW 4-LEVEL SCORING SYSTEM:
+SCORE 0: SPAM
+SCORE 1: NOT RIGHT FIT
+SCORE 2: UNSURE
+SCORE 3: RIGHT FIT
 
 Lead Information:
 - First Name: {first_name}
@@ -53,43 +54,40 @@ Lead Information:
 - Phone Number: {phone_number}
 - About Project: {about_project}
 
-CRITERIA FOR SCORE 1 (UNQUALIFIED):
-- **Primary Reason:** The lead's project is not a right fit for **The Evans Group (TEG)**, a high-end, luxury fashion manufacturer specializing in couture and small-to-medium volume production. This is the most important factor, even if the request is professional and detailed.
+CRITERIA FOR SCORE 0 (SPAM):
+- **Clear spam indicators:** Generic promotional messages, advertising services unrelated to fashion manufacturing, or completely irrelevant inquiries (e.g., "Do you need an electrician?", "SEO services", "Marketing opportunities").
+- **Fake or suspicious information:** Obviously fake names, email addresses from disposable mail services, nonsensical phone numbers, or gibberish text.
+- **Bot-generated content:** Repetitive, template-like messages with no real substance or context.
+
+CRITERIA FOR SCORE 1 (NOT RIGHT FIT):
+- **Primary Reason:** The lead's project is not a right fit for **The Evans Group (TEG)**, a high-end, luxury fashion manufacturer specializing in couture and small-to-medium volume production, even though the inquiry appears legitimate.
 - **Specific examples of "Not Right Fit" projects:**
     - Leads requesting large, mass-market quantities (e.g., thousands of units per style) that do not align with TEG's specialized **small-to-medium volume production model (1-300 pieces per style)**.
     - Projects for basic apparel, sports, gymnastics and/or rhythmic uniforms, simple activewear, or workwear.
     - Medical apparel, underwear, or other non-fashion garments.
-    - General spam, such as advertising services, or unrelated inquiries (e.g., "Do you need an electrician?").
-    - Vague or generic project descriptions that lack substance, details, or a clear vision, regardless of the lead's professional title.
+    - Budget-focused projects that don't align with luxury manufacturing.
 
-- **Unprofessional or missing information:** A generic, non-existent, or irrelevant brand name and website. Generic email addresses (e.g., disposable mail services) or fake phone numbers.
+CRITERIA FOR SCORE 2 (UNSURE):
+- **When to use:** The lead appears legitimate and professional, but there's not enough information to confidently classify as right fit or not right fit.
+- **Examples:** 
+    - Vague project descriptions that could be legitimate but lack detail about materials, quantities, or design vision.
+    - Projects that might align with TEG but need more information to determine fit.
+    - Professional inquiries with incomplete information about the scope or nature of the project.
 
-CRITERIA FOR SCORE 3 (QUALIFIED):
-- **Primary Reason:** The "About Project" description is detailed and aligns with TEG's services for **high-end, luxury, and couture fashion brands**. This is a crucial requirement.
+CRITERIA FOR SCORE 3 (RIGHT FIT):
+- **Primary Reason:** The "About Project" description is detailed and clearly aligns with TEG's services for **high-end, luxury, and couture fashion brands**. This is a crucial requirement.
 - **Project alignment:** The lead's request fits with TEG's services, which include:
     - **Client Types:** Established high-end designers, luxury brands, or emerging designers with a professional vision.
     - **Production Scale:** The request aligns with **small-to-medium volume production (1-300 pieces per style)**, or other TEG services like pattern making or sample creation.
     - **Specific products:** Runway looks, bridal, evening wear, formal wear, high-end menswear and womenswear, complex knitwear, or specific, elevated basics.
     - **Specific materials:** Delicate silks, leather, wovens, beading, lace, or complex knits.
     - **Project Details:** The request includes specific details on materials, quantities, design elements, and timelines.
-- **Professionalism:** The lead provides clear, professional information across all fields (brand name, website, and designer type).
-
-CRITERIA FOR SCORE 2 (UNSURE):
-- **When to use:** The lead is clearly not spam or completely unfit, but there's not enough information to confidently classify as qualified.
-- **Examples:** Vague project descriptions that could be legitimate but lack detail, or projects that might align with TEG but need more information.
-
-CRITERIA FOR SCORE 3 (QUALIFIED):
-- **Primary Reason:** The "About Project" description is detailed and aligns with TEG's services for **high-end, luxury, and couture fashion brands**. This is a crucial requirement.
-- **Project alignment:** The lead's request fits with TEG's services, which include:
-    - **Client Types:** Established high-end designers, luxury brands, or emerging designers with a professional vision.
-    - **Production Scale:** The request aligns with **small-to-medium volume production (1-300 pieces per style)**, or other TEG services like pattern making or sample creation.
-    - **Specific products:** Runway looks, bridal, evening wear, formal wear, high-end menswear and womenswear, complex knitwear, or specific, elevated basics.
-    - **Specific materials:** Delicate silks, leather, wovens, beading, lace, or complex knits.
+- **Professionalism:** The lead provides clear, professional information and demonstrates understanding of luxury fashion manufacturing.
 
 OUTPUT FORMAT:
 Provide ONLY a JSON response with the following structure, AND NOTHING ELSE:
 {{
-  "score": 1, 2, or 3,
+  "score": 0, 1, 2, or 3,
   "confidence": "high/medium/low",
   "reason": "brief explanation of classification decision"
 }}
@@ -99,9 +97,10 @@ Focus on the substance, specificity, and professional context of the lead profil
 
 # Calendar URLs for redirection based on score
 CALENDAR_URLS = {
-    1: "https://tegmade.com/thank-you/",  # URL for score 1 (unqualified)
-    2: "https://tegmade.com/thank-you/",   # URL for score 2 (unsure)
-    3: "https://tegmade.com/thank-you/"    # URL for score 3 (qualified)
+    0: "https://tegmade.com/thank-you/",  # URL for score 0 (spam)
+    1: "https://tegmade.com/thank-you/",  # URL for score 1 (not right fit)
+    2: "https://tegmade.com/thank-you/",  # URL for score 2 (unsure)
+    3: "https://tegmade.com/thank-you/"   # URL for score 3 (right fit)
 }
 
 def log_request(lead_data, result):
@@ -148,7 +147,7 @@ def qualify_lead(lead_data):
         # Check if API key is properly configured
         if openai_api_key == "dummy_key_for_testing":
             return {
-                "score": 1,
+                "score": 0,
                 "confidence": "low",
                 "reason": "OpenAI API key not configured. Please set OPENAI_API_KEY environment variable."
             }
@@ -175,13 +174,13 @@ def qualify_lead(lead_data):
         
     except json.JSONDecodeError as e:
         return {
-            "score": 1,
+            "score": 0,
             "confidence": "low",
             "reason": f"Error parsing AI response: {str(e)}"
         }
     except Exception as e:
         return {
-            "score": 1,
+            "score": 0,
             "confidence": "low", 
             "reason": f"Error during qualification: {str(e)}"
         }
@@ -224,8 +223,8 @@ def qualify_lead_get_endpoint():
         log_request(lead_data, result)
         
         # Get the score and redirect to appropriate URL
-        score = result.get('score', 1)
-        redirect_url = CALENDAR_URLS.get(score, CALENDAR_URLS[1])  # Default to score 1 URL
+        score = result.get('score', 0)
+        redirect_url = CALENDAR_URLS.get(score, CALENDAR_URLS[0])  # Default to score 0 URL
         
         return redirect(redirect_url)
         
@@ -252,7 +251,7 @@ def qualify_lead_endpoint():
     
     Returns:
     {
-        "score": 1 or 3,
+        "score": 0, 1, 2, or 3,
         "confidence": "high/medium/low",
         "reason": "string"
     }
@@ -303,7 +302,7 @@ def root():
         "message": "Jennifer's Lead Qualifier API",
         "endpoints": {
             "GET /qualify": "Qualify a lead via query parameters and redirect to calendar (NEW)",
-            "POST /qualify-lead": "Qualify a lead and return JSON score (1, 2, or 3)",
+            "POST /qualify-lead": "Qualify a lead and return JSON score (0, 1, 2, or 3)",
             "GET /health": "Health check endpoint",
             "GET /": "This information endpoint"
         },
@@ -311,9 +310,10 @@ def root():
             "first_name", "last_name", "email", "phone_number", "about_project"
         ],
         "scoring": {
-            "1": "Unqualified/Spam ",
+            "0": "Spam",
+            "1": "Not right fit",
             "2": "Unsure", 
-            "3": "Qualified/Best Fit"
+            "3": "Right fit"
         },
         "example_urls": {
             "GET": "/qualify?first_name=John&last_name=Doe&email=john@example.com&phone_number=555-1234&about_project=I need help with luxury fashion production",
