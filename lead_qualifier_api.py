@@ -99,8 +99,8 @@ Focus on the substance, specificity, and professional context of the lead profil
 CALENDAR_URLS = {
     0: "https://tegmade.com/thank-you/",  # URL for score 0 (spam)
     1: "https://tegmade.com/thank-you/",  # URL for score 1 (not right fit)
-    2: "https://tegmade.com/thank-you/",  # URL for score 2 (unsure)
-    3: "https://tegmade.com/thank-you/"   # URL for score 3 (right fit)
+    2: "https://calendly.com/jamie-the-evans-group/teg-let-s-chat",  # URL for score 2 (unsure)
+    3: "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call"   # URL for score 3 (right fit)
 }
 
 def log_request(lead_data, result):
