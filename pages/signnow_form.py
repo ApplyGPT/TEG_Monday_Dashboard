@@ -11,6 +11,19 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from signnow_integration import SignNowAPI, load_signnow_credentials, create_sample_contract_template
+import html
+
+def get_decoded_query_params():
+    """Get query parameters and decode HTML entities"""
+    query_params = st.query_params
+    decoded_params = {}
+    
+    for key, value in query_params.items():
+        # Decode HTML entities (like &amp; -> &)
+        decoded_value = html.unescape(str(value))
+        decoded_params[key] = decoded_value
+    
+    return decoded_params
 
 # Page configuration
 st.set_page_config(
@@ -57,35 +70,49 @@ def main():
     # Main form
     st.subheader("Contract Information")
     
-    # Get data from URL parameters (if coming from Monday.com)
-    query_params = st.query_params
+    # Get data from session state (from redirect) or URL parameters
+    if 'signnow_data' in st.session_state:
+        # Data from redirect page
+        data = st.session_state['signnow_data']
+        first_name_default = data.get('first_name', '')
+        last_name_default = data.get('last_name', '')
+        email_default = data.get('email', '')
+        contract_amount_default = data.get('contract_amount', '')
+        st.success("✅ Data loaded from Monday.com")
+    else:
+        # Fallback to URL parameters
+        query_params = get_decoded_query_params()
+        first_name_default = query_params.get('first_name', '')
+        last_name_default = query_params.get('last_name', '')
+        email_default = query_params.get('email', '')
+        contract_amount_default = query_params.get('contract_amount', '')
     
-    # Form fields with auto-filled values from URL parameters
+    # Form fields with auto-filled values
     col1, col2 = st.columns(2)
     
     with col1:
         first_name = st.text_input(
             "First Name",
-            value=query_params.get('first_name', ''),
+            value=first_name_default,
             help="Enter the client's first name"
         )
         
         email = st.text_input(
             "Email Address",
-            value=query_params.get('email', ''),
+            value=email_default,
             help="Enter the client's email address"
         )
     
     with col2:
         last_name = st.text_input(
             "Last Name", 
-            value=query_params.get('last_name', ''),
+            value=last_name_default,
             help="Enter the client's last name"
         )
         
         contract_amount = st.text_input(
             "Contract Amount",
-            value=query_params.get('contract_amount', ''),
+            value=contract_amount_default,
             help="Enter the contract amount (e.g., $10,000)"
         )
     
