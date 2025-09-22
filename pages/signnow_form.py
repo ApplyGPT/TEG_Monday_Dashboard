@@ -108,58 +108,28 @@ def main():
         st.error("❌ Please enter a valid contract amount (e.g., $10,000).")
         return
     
-    # Display summary
-    st.subheader("📋 Contract Summary")
-    
-    summary_col1, summary_col2 = st.columns(2)
-    
-    with summary_col1:
-        st.info(f"**Client:** {first_name} {last_name}")
-        st.info(f"**Email:** {email}")
-    
-    with summary_col2:
-        st.info(f"**Contract Amount:** ${contract_amount}")
-        st.info(f"**Status:** Ready to send")
-    
-    # Action buttons
+    # Action button
     st.subheader("🚀 Actions")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("📝 Create & Send Contract", type="primary", use_container_width=True):
-            with st.spinner("Creating and sending contract..."):
-                # Get template ID
-                template_id = create_sample_contract_template()
-                
-                # Create and send contract
-                success, message = signnow_api.create_and_send_contract(
-                    first_name=first_name,
-                    last_name=last_name,
-                    email=email,
-                    contract_amount=contract_amount,
-                    template_id=template_id
-                )
-                
-                if success:
-                    st.success(f"✅ {message}")
-                    st.balloons()
-                else:
-                    st.error(f"❌ {message}")
-    
-    with col2:
-        if st.button("📄 Preview Contract", use_container_width=True):
-            st.info("📄 Contract preview would be displayed here")
-            st.markdown(f"""
-            **Contract Preview:**
+    if st.button("📝 Create & Send Contract", type="primary", use_container_width=False):
+        with st.spinner("Creating and sending contract..."):
+            # Get template ID
+            template_id = create_sample_contract_template()
             
-            **Client Name:** {first_name} {last_name}
-            **Email:** {email}
-            **Contract Amount:** ${contract_amount}
-            **Date:** {st.session_state.get('current_date', 'Today')}
+            # Create and send contract
+            success, message = signnow_api.create_and_send_contract(
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                contract_amount=contract_amount,
+                template_id=template_id
+            )
             
-            *This is a sample contract template. The actual contract would be generated from your SignNow template.*
-            """)
+            if success:
+                st.success(f"✅ {message}")
+                st.balloons()
+            else:
+                st.error(f"❌ {message}")
 
 if __name__ == "__main__":
     main()

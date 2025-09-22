@@ -149,59 +149,25 @@ def main():
         st.error("❌ Please enter a valid contract amount (e.g., $10,000).")
         return
     
-    # Display summary
-    st.subheader("📋 Invoice Summary")
-    
-    summary_col1, summary_col2 = st.columns(2)
-    
-    with summary_col1:
-        st.info(f"**Client:** {first_name} {last_name}")
-        st.info(f"**Email:** {email}")
-        st.info(f"**Invoice Date:** {invoice_date}")
-    
-    with summary_col2:
-        st.info(f"**Amount:** ${contract_amount}")
-        st.info(f"**Description:** {description}")
-        st.info(f"**Due Date:** {due_date}")
-    
-    # Action buttons
+    # Action button
     st.subheader("🚀 Actions")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("💰 Create & Send Invoice", type="primary", use_container_width=True):
-            with st.spinner("Creating and sending invoice..."):
-                # Create and send invoice
-                success, message = quickbooks_api.create_and_send_invoice(
-                    first_name=first_name,
-                    last_name=last_name,
-                    email=email,
-                    contract_amount=contract_amount,
-                    description=description
-                )
-                
-                if success:
-                    st.success(f"✅ {message}")
-                    st.balloons()
-                else:
-                    st.error(f"❌ {message}")
-    
-    with col2:
-        if st.button("📄 Preview Invoice", use_container_width=True):
-            st.info("📄 Invoice preview would be displayed here")
-            st.markdown(f"""
-            **Invoice Preview:**
+    if st.button("💰 Create & Send Invoice", type="primary", use_container_width=False):
+        with st.spinner("Creating and sending invoice..."):
+            # Create and send invoice
+            success, message = quickbooks_api.create_and_send_invoice(
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                contract_amount=contract_amount,
+                description=description
+            )
             
-            **Bill To:** {first_name} {last_name}
-            **Email:** {email}
-            **Invoice Date:** {invoice_date}
-            **Due Date:** {due_date}
-            **Amount:** ${contract_amount}
-            **Description:** {description}
-            
-            *This is a preview. The actual invoice will be created in QuickBooks.*
-            """)
+            if success:
+                st.success(f"✅ {message}")
+                st.balloons()
+            else:
+                st.error(f"❌ {message}")
 
 if __name__ == "__main__":
     main()

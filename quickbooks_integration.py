@@ -101,17 +101,25 @@ class QuickBooksAPI:
             st.info("🔧 Sandbox Mode: Using existing customer for testing")
             return self._get_or_create_sandbox_customer(first_name, last_name, email)
         
+        # First check if customer already exists
+        existing_customer = self._find_customer_by_email(email)
+        if existing_customer:
+            st.info(f"✅ Customer already exists with email: {email}")
+            return existing_customer
+        
         try:
-            customer_url = f"{self.base_url}/v3/company/{self.company_id}/customers"
+            customer_url = f"{self.base_url}/v3/company/{self.company_id}/customer"
             
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
-                "Accept": "application/json"
+                "Accept": "application/json",
+                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
+            # Use the correct format based on QuickBooks API documentation
             customer_data = {
-                "Name": f"{first_name} {last_name}",
+                "DisplayName": f"{first_name} {last_name}",
                 "GivenName": first_name,
                 "FamilyName": last_name,
                 "PrimaryEmailAddr": {
@@ -119,9 +127,8 @@ class QuickBooksAPI:
                 }
             }
             
-            payload = {
-                "Customer": customer_data
-            }
+            # Customer object should be at root level, not wrapped
+            payload = customer_data
             
             response = requests.post(customer_url, json=payload, headers=headers)
             response.raise_for_status()
@@ -158,7 +165,8 @@ class QuickBooksAPI:
             
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
-                "Accept": "application/json"
+                "Accept": "application/json",
+                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
             response = requests.get(query_url, headers=headers)
@@ -199,7 +207,8 @@ class QuickBooksAPI:
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
-                "Accept": "application/json"
+                "Accept": "application/json",
+                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
             # Query to find customer by email
@@ -252,15 +261,16 @@ class QuickBooksAPI:
             amount_str = contract_amount.replace('$', '').replace(',', '')
             amount = float(amount_str)
             
-            invoice_url = f"{self.base_url}/v3/company/{self.company_id}/invoices"
+            invoice_url = f"{self.base_url}/v3/company/{self.company_id}/invoice"
             
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json",
-                "Accept": "application/json"
+                "Accept": "application/json",
+                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
-            # Create invoice data
+            # Create invoice data using correct format
             invoice_data = {
                 "CustomerRef": {
                     "value": customer_id
@@ -284,9 +294,8 @@ class QuickBooksAPI:
                 "EmailStatus": "NotSet"
             }
             
-            payload = {
-                "Invoice": invoice_data
-            }
+            # Invoice object should be at root level, not wrapped
+            payload = invoice_data
             
             response = requests.post(invoice_url, json=payload, headers=headers)
             response.raise_for_status()
@@ -367,19 +376,18 @@ class QuickBooksAPI:
             return True
         
         try:
-            send_url = f"{self.base_url}/v3/company/{self.company_id}/invoices/{invoice_id}/send"
+            # Use the correct endpoint format from QuickBooks API documentation
+            send_url = f"{self.base_url}/v3/company/{self.company_id}/invoice/{invoice_id}/send?sendTo={email}"
             
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json"
+                "Content-Type": "application/octet-stream",
+                "Accept": "application/json",
+                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
-            send_data = {
-                "SendTo": email
-            }
-            
-            response = requests.post(send_url, json=send_data, headers=headers)
+            # Send empty body as per API documentation
+            response = requests.post(send_url, headers=headers)
             response.raise_for_status()
             
             return True
