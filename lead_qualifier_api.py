@@ -5,6 +5,7 @@ import toml
 import os
 import csv
 from datetime import datetime
+import urllib.parse
 
 app = Flask(__name__)
 
@@ -96,12 +97,25 @@ Focus on the substance, specificity, and professional context of the lead profil
 """
 
 # Calendar URLs for redirection based on score
-CALENDAR_URLS = {
-    0: "https://tegmade.com/thank-you/",  # URL for score 0 (spam)
-    1: "https://tegmade.com/thank-you/",  # URL for score 1 (not right fit)
-    2: "https://calendly.com/jamie-the-evans-group/teg-let-s-chat",  # URL for score 2 (unsure)
-    3: "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call"   # URL for score 3 (right fit)
-}
+def get_calendar_url(score, lead_data):
+    """
+    Get the appropriate calendar URL based on score and lead data
+    
+    Args:
+        score (int): Qualification score (0, 1, 2, or 3)
+        lead_data (dict): Lead information for pre-filling
+        
+    Returns:
+        str: Calendar URL with pre-filled data
+    """
+    if score == 0 or score == 1:
+        return "https://tegmade.com/thank-you/"
+    elif score == 2:
+        return generate_calendly_url_lets_chat(lead_data)
+    elif score == 3:
+        return generate_calendly_url_introductory_call(lead_data)
+    else:
+        return "https://tegmade.com/thank-you/"  # Default fallback
 
 def log_request(lead_data, result):
     """Log the request and response to a CSV file"""
@@ -132,6 +146,153 @@ def log_request(lead_data, result):
             })
     except Exception as e:
         print(f"Error logging request: {e}")
+
+def format_phone_for_calendly_location(phone_number):
+    """
+    Format phone number for Calendly location parameter in +1XXXXXXXXXX format
+    
+    Args:
+        phone_number (str): Raw phone number input
+        
+    Returns:
+        str: Formatted phone number for location parameter or None if invalid
+    """
+    if not phone_number:
+        return None
+    
+    # Remove all non-digit characters
+    digits_only = ''.join(filter(str.isdigit, phone_number))
+    
+    # Handle different input formats
+    if len(digits_only) == 10:
+        # US number without country code: 2064124253 -> +12064124253
+        return f"+1{digits_only}"
+    elif len(digits_only) == 11 and digits_only.startswith('1'):
+        # US number with country code: 12064124253 -> +12064124253
+        return f"+{digits_only}"
+    elif len(digits_only) > 11:
+        # International number: keep as is but add + if not present
+        if not phone_number.startswith('+'):
+            return f"+{digits_only}"
+        return phone_number
+    else:
+        # Invalid length, return original if it looks like it has formatting
+        if any(char in phone_number for char in ['-', '(', ')', ' ', '+']):
+            return phone_number
+        return None
+
+def format_phone_for_calendly(phone_number):
+    """
+    Format phone number for Calendly in +1 XXX-XXX-XXXX format
+    
+    Args:
+        phone_number (str): Raw phone number input
+        
+    Returns:
+        str: Formatted phone number or None if invalid
+    """
+    if not phone_number:
+        return None
+    
+    # Remove all non-digit characters
+    digits_only = ''.join(filter(str.isdigit, phone_number))
+    
+    # Handle different input formats
+    if len(digits_only) == 10:
+        # US number without country code: 2064124253 -> +1 206-412-4253
+        return f"+1 {digits_only[:3]}-{digits_only[3:6]}-{digits_only[6:]}"
+    elif len(digits_only) == 11 and digits_only.startswith('1'):
+        # US number with country code: 12064124253 -> +1 206-412-4253
+        return f"+1 {digits_only[1:4]}-{digits_only[4:7]}-{digits_only[7:]}"
+    elif len(digits_only) > 11:
+        # International number: keep as is but add + if not present
+        if not phone_number.startswith('+'):
+            return f"+{digits_only}"
+        return phone_number
+    else:
+        # Invalid length, return original if it looks like it has formatting
+        if any(char in phone_number for char in ['-', '(', ')', ' ', '+']):
+            return phone_number
+        return None
+
+def generate_calendly_url_lets_chat(lead_data):
+    """
+    Generate Calendly URL for 'let's chat' (score 2) with pre-filled data
+    
+    Pre-fills: Name (Full Name), Email, Phone Number, Send text messages to (same as Phone Number), 
+    and About Project
+    """
+    base_url = "https://calendly.com/jamie-the-evans-group/teg-let-s-chat"
+    
+    # Prepare parameters
+    params = {}
+    
+    # Full name
+    first_name = lead_data.get('first_name', '')
+    last_name = lead_data.get('last_name', '')
+    full_name = f"{first_name} {last_name}".strip()
+    if full_name:
+        params['name'] = full_name
+    
+    # Email
+    email = lead_data.get('email', '')
+    if email:
+        params['email'] = email
+    
+    # Phone number (for both phone and text messages)
+    phone_number = lead_data.get('phone_number', '')
+    if phone_number:
+        # Format phone number for Calendly location parameter
+        formatted_phone = format_phone_for_calendly_location(phone_number)
+        if formatted_phone:
+            params['location'] = formatted_phone  # Location parameter for phone number
+    
+    # About project
+    about_project = lead_data.get('about_project', '')
+    if about_project:
+        params['a2'] = about_project  # About project parameter (second custom question)
+    
+    # Build URL with parameters
+    if params:
+        param_string = urllib.parse.urlencode(params)
+        return f"{base_url}?{param_string}"
+    else:
+        return base_url
+
+def generate_calendly_url_introductory_call(lead_data):
+    """
+    Generate Calendly URL for 'introductory call' (score 3) with pre-filled data
+    
+    Pre-fills: Name, Email, and About Project
+    """
+    base_url = "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call"
+    
+    # Prepare parameters
+    params = {}
+    
+    # Full name
+    first_name = lead_data.get('first_name', '')
+    last_name = lead_data.get('last_name', '')
+    full_name = f"{first_name} {last_name}".strip()
+    if full_name:
+        params['name'] = full_name
+    
+    # Email
+    email = lead_data.get('email', '')
+    if email:
+        params['email'] = email
+    
+    # About project
+    about_project = lead_data.get('about_project', '')
+    if about_project:
+        params['a1'] = about_project  # About project parameter (first custom question)
+    
+    # Build URL with parameters
+    if params:
+        param_string = urllib.parse.urlencode(params)
+        return f"{base_url}?{param_string}"
+    else:
+        return base_url
 
 def qualify_lead(lead_data):
     """
@@ -222,9 +383,9 @@ def qualify_lead_get_endpoint():
         # Log the request and response
         log_request(lead_data, result)
         
-        # Get the score and redirect to appropriate URL
+        # Get the score and redirect to appropriate URL with pre-filled data
         score = result.get('score', 0)
-        redirect_url = CALENDAR_URLS.get(score, CALENDAR_URLS[0])  # Default to score 0 URL
+        redirect_url = get_calendar_url(score, lead_data)
         
         return redirect(redirect_url)
         
