@@ -277,6 +277,16 @@ class SignNowAPI:
                 textColor=colors.blue
             )
             
+            screenshot_placeholder_style = ParagraphStyle(
+                'ScreenshotPlaceholder',
+                parent=styles['Normal'],
+                fontSize=16,
+                spaceAfter=12,
+                alignment=1,  # Center alignment
+                fontName='Helvetica-Bold',
+                textColor=colors.red
+            )
+            
             # Normalize highlight values
             highlight_values = [v for v in (highlight_values or []) if isinstance(v, str) and v.strip()]
 
@@ -290,6 +300,20 @@ class SignNowAPI:
             
             # Add document content with exact formatting preservation
             for paragraph in doc.paragraphs:
+                # Check if this paragraph contains an image (screenshot placeholder)
+                has_image = False
+                if paragraph.runs:
+                    for run in paragraph.runs:
+                        if run._element.xpath('.//a:blip'):
+                            has_image = True
+                            break
+                
+                # If paragraph has an image, show red placeholder
+                if has_image:
+                    story.append(Paragraph("IMAGE ATTACHED GOES HERE", screenshot_placeholder_style))
+                    story.append(Spacer(1, 12))
+                    continue
+                
                 if paragraph.text.strip():
                     text = paragraph.text.strip()
                     
@@ -407,9 +431,22 @@ class SignNowAPI:
         
         # Check for images/logos first
         if hasattr(doc, 'inline_shapes') and doc.inline_shapes:
-            html_parts.append('<div class="image-placeholder">IMAGE/LOGO NOT DISPLAYED IN PREVIEW</div>')
+            html_parts.append('<div class="image-placeholder" style="color: blue; font-weight: bold; text-align: center; font-size: 16px;">IMAGE/LOGO NOT DISPLAYED IN PREVIEW</div>')
         
         for paragraph in doc.paragraphs:
+            # Check if this paragraph contains an image (screenshot placeholder)
+            has_image = False
+            if paragraph.runs:
+                for run in paragraph.runs:
+                    if run._element.xpath('.//a:blip'):
+                        has_image = True
+                        break
+            
+            # If paragraph has an image, show red placeholder
+            if has_image:
+                html_parts.append('<div class="screenshot-placeholder" style="color: red; font-weight: bold; text-align: center; font-size: 16px;">IMAGE ATTACHED GOES HERE</div>')
+                continue
+            
             if paragraph.text.strip():
                 text = paragraph.text.strip()
                 
@@ -529,6 +566,124 @@ class SignNowAPI:
                 
         except Exception as e:
             return False, f"Error in contract workflow: {str(e)}"
+    
+    def create_and_send_document_pair(self, pair_type, client_name, email, 
+                                    contract_amount=None, contract_date=None,
+                                    deposit_amount=None, total_contract_amount=None,
+                                    sewing_cost=None, pre_production_fee=None):
+        """
+        Create and send a document pair for signing
+        
+        Args:
+            pair_type: Type of document pair ('development_pair' or 'production_pair')
+            client_name: Client name
+            email: Email address of the signer
+            contract_amount: Contract amount (for development contracts)
+            contract_date: Contract date (optional, defaults to current date)
+            deposit_amount: Deposit amount (for production contracts)
+            total_contract_amount: Total contract amount (for production contracts)
+            sewing_cost: Sewing cost (for production contracts)
+            pre_production_fee: Pre-production fee (for production contracts)
+            
+        Returns:
+            Tuple[bool, str]: (success, message)
+        """
+        try:
+            # Set default date if not provided
+            if not contract_date:
+                from datetime import datetime
+                contract_date = datetime.now().strftime("%B %d, %Y")
+            
+            # Determine which documents to process
+            if pair_type == 'development_pair':
+                # Process development contract and terms
+                contract_template = 'development_contract'
+                terms_template = 'development_terms'
+            elif pair_type == 'production_pair':
+                # Process production contract and terms
+                contract_template = 'production_contract'
+                terms_template = 'production_terms'
+            else:
+                return False, f"Unknown pair type: {pair_type}"
+            
+            # Process both documents
+            from docx_template_processor import DocxTemplateProcessor
+            processor = DocxTemplateProcessor()
+            
+            # Process contract document
+            contract_path = processor.process_document(
+                template_type=contract_template,
+                client_name=client_name,
+                email=email,
+                contract_amount=contract_amount,
+                contract_date=contract_date,
+                deposit_amount=deposit_amount,
+                total_contract_amount=total_contract_amount,
+                sewing_cost=sewing_cost,
+                pre_production_fee=pre_production_fee
+            )
+            
+            # Process terms document
+            terms_path = processor.process_document(
+                template_type=terms_template,
+                client_name=client_name,
+                email=email,
+                contract_amount=None,
+                contract_date=contract_date
+            )
+            
+            # Upload both documents to SignNow
+            document_ids = []
+            
+            for doc_path, doc_type in [(contract_path, "Contract"), (terms_path, "Terms")]:
+                with open(doc_path, 'rb') as docx_file:
+                    docx_content = docx_file.read()
+                
+                actual_filename = os.path.basename(doc_path)
+                files = {
+                    'file': (actual_filename, docx_content, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                }
+                
+                data = {
+                    'name': f'{pair_type}_{doc_type} - {client_name}'
+                }
+                
+                headers = {
+                    "Authorization": f"Bearer {self.access_token}"
+                }
+                
+                # Create document in SignNow
+                response = requests.post(
+                    f"{self.base_url}/document",
+                    files=files,
+                    data=data,
+                    headers=headers,
+                    timeout=90
+                )
+                response.raise_for_status()
+                
+                create_response = response.json()
+                document_id = create_response.get("id")
+                document_ids.append(document_id)
+                
+                # Clean up processed document
+                os.remove(doc_path)
+            
+            # Send both documents for signing
+            for document_id in document_ids:
+                send_url = f"{self.base_url}/document/{document_id}/invite"
+                send_data = {
+                    "to": email,
+                    "from": self.user_email
+                }
+                
+                send_response = requests.post(send_url, json=send_data, headers=headers)
+                send_response.raise_for_status()
+            
+            return True, f"Document pair sent successfully to {email}. Document IDs: {', '.join(document_ids)}"
+                
+        except Exception as e:
+            return False, f"Error creating and sending document pair: {str(e)}"
 
 
 def load_signnow_credentials() -> Dict[str, str]:

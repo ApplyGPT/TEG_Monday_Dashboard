@@ -31,15 +31,21 @@ class DocxTemplateProcessor:
                     'JUNE 16, 2025': 'CONTRACT_DATE'
                 }
             },
-            'terms_conditions': {
-                'file': 'TERMS AND CONDITIONS.docx',
-                'replacements': {
-                    'Natalie Barrett': 'CLIENT_NAME',
-                    'December 06, 2024': 'CONTRACT_DATE'
-                }
-            },
             'production_contract': {
                 'file': 'Production Contract.docx',
+                'replacements': {
+                    'Natalie Barrett': 'CLIENT_NAME',
+                    'December 06, 2024': 'CONTRACT_DATE',
+                    # These will be populated with actual values from the form
+                    # Note: These placeholders need to be added to the actual Production Contract.docx file
+                    'DEPOSIT_AMOUNT': 'DEPOSIT_AMOUNT',
+                    'TOTAL_CONTRACT_AMOUNT': 'TOTAL_CONTRACT_AMOUNT',
+                    'SEWING_COST': 'SEWING_COST',
+                    'PRE_PRODUCTION_FEE': 'PRE_PRODUCTION_FEE'
+                }
+            },
+            'production_terms': {
+                'file': 'Production Terms and Conditions.docx',
                 'replacements': {
                     'Natalie Barrett': 'CLIENT_NAME',
                     'December 06, 2024': 'CONTRACT_DATE'
@@ -48,7 +54,10 @@ class DocxTemplateProcessor:
         }
     
     def process_document(self, template_type, client_name, email, 
-                        contract_amount=None, contract_date=None):
+                        contract_amount=None, contract_date=None,
+                        deposit_amount=None, total_contract_amount=None,
+                        sewing_cost=None, pre_production_fee=None,
+                        uploaded_image=None):
         """
         Process a document template with variable replacement
         
@@ -58,6 +67,11 @@ class DocxTemplateProcessor:
             email: Client email (for reference)
             contract_amount: Contract amount (if applicable)
             contract_date: Contract date (if not provided, uses current date)
+            deposit_amount: Deposit amount (for production contracts)
+            total_contract_amount: Total contract amount (for production contracts)
+            sewing_cost: Sewing cost (for production contracts)
+            pre_production_fee: Pre-production fee (for production contracts)
+            uploaded_image: Uploaded image file (Streamlit UploadedFile object)
             
         Returns:
             str: Path to the processed document
@@ -95,11 +109,20 @@ class DocxTemplateProcessor:
         replacement_values = {
             'CLIENT_NAME': client_name,
             'CONTRACT_DATE': contract_date,
-            'CONTRACT_AMOUNT': self._format_contract_amount(contract_amount) if contract_amount else '$0.00'
+            'CONTRACT_AMOUNT': self._format_contract_amount(contract_amount) if contract_amount else '$0.00',
+            'DEPOSIT_AMOUNT': self._format_contract_amount(deposit_amount) if deposit_amount else '$0.00',
+            'TOTAL_CONTRACT_AMOUNT': self._format_contract_amount(total_contract_amount) if total_contract_amount else '$0.00',
+            'SEWING_COST': self._format_contract_amount(sewing_cost) if sewing_cost else '$0.00',
+            'PRE_PRODUCTION_FEE': self._format_contract_amount(pre_production_fee) if pre_production_fee else '$0.00'
         }
         
         # Process replacements
         replacements_made = self._replace_text_in_document(doc, template_config['replacements'], replacement_values)
+        
+        # Insert image after first paragraph for contract documents
+        if uploaded_image and template_type in ['development_contract', 'production_contract']:
+            print(f"🖼️ Processing image: {uploaded_image.name} ({uploaded_image.size} bytes)")
+            self._insert_image_after_first_paragraph(doc, uploaded_image)
         
         # Save the processed document
         doc.save(output_path)
@@ -248,6 +271,126 @@ class DocxTemplateProcessor:
         except (ValueError, TypeError):
             # If formatting fails, return original string with $ prefix
             return f"${amount_str}" if not amount_str.startswith('$') else amount_str
+    
+    def _insert_image_after_first_paragraph(self, doc, uploaded_image):
+        """
+        Insert an image after specific text patterns in contract documents
+        
+        Args:
+            doc: Document object
+            uploaded_image: Streamlit UploadedFile object
+        """
+        try:
+            import io
+            from docx.shared import Inches
+            
+            # Get the image data
+            image_data = uploaded_image.read()
+            
+            # First, remove any existing images in the document
+            self._remove_existing_images(doc)
+            
+            # Define the specific text patterns to look for (using key parts)
+            target_patterns = [
+                "Development Contract, and Terms and Conditions Agreement (Attachment B), and as follows:",
+                "The attached Production Workbook includes all detail as a part of this agreement."
+            ]
+            
+            # Find the paragraph containing the target text
+            target_paragraph = None
+            for paragraph in doc.paragraphs:
+                paragraph_text = paragraph.text.strip()
+                for pattern in target_patterns:
+                    if pattern in paragraph_text:
+                        target_paragraph = paragraph
+                        print(f"📍 Found target paragraph: '{paragraph_text[:100]}...'")
+                        break
+                if target_paragraph:
+                    break
+            
+            # If exact patterns not found, try partial matching
+            if target_paragraph is None:
+                print("⚠️ Exact patterns not found, trying partial matching")
+                partial_patterns = [
+                    ("Development Contract", "Attachment B"),
+                    ("Production Workbook", "includes all detail")
+                ]
+                
+                for paragraph in doc.paragraphs:
+                    paragraph_text = paragraph.text.strip()
+                    for pattern1, pattern2 in partial_patterns:
+                        if pattern1 in paragraph_text and pattern2 in paragraph_text:
+                            target_paragraph = paragraph
+                            print(f"📍 Found partial match: '{paragraph_text[:100]}...'")
+                            break
+                    if target_paragraph:
+                        break
+            
+            # If no target pattern found, fall back to first substantial paragraph
+            if target_paragraph is None:
+                print("⚠️ Target pattern not found, using first substantial paragraph")
+                for paragraph in doc.paragraphs:
+                    text = paragraph.text.strip()
+                    if (len(text) > 50 and 
+                        not text.isupper() and 
+                        not text.endswith(':') and 
+                        '.' in text):
+                        target_paragraph = paragraph
+                        print(f"📍 Fallback to: '{text[:50]}...'")
+                        break
+            
+            if target_paragraph is None:
+                print("⚠️ No suitable paragraph found in document")
+                return
+            
+            # Create a new paragraph for the image
+            new_paragraph = doc.add_paragraph()
+            
+            # Insert the new paragraph after the target paragraph
+            new_paragraph._element.getparent().remove(new_paragraph._element)
+            target_paragraph._element.addnext(new_paragraph._element)
+            
+            # Add the image to the new paragraph
+            run = new_paragraph.add_run()
+            
+            # Add image with reasonable size (max width 6 inches)
+            run.add_picture(io.BytesIO(image_data), width=Inches(6))
+            
+            print(f"✅ Image inserted after target paragraph: {uploaded_image.name}")
+            
+        except Exception as e:
+            print(f"❌ Error inserting image: {str(e)}")
+            # Don't raise the exception to avoid breaking the document processing
+    
+    def _remove_existing_images(self, doc):
+        """
+        Remove all existing images from the document
+        
+        Args:
+            doc: Document object
+        """
+        try:
+            # Remove images from paragraphs
+            for paragraph in doc.paragraphs:
+                for run in paragraph.runs:
+                    # Check if run contains images
+                    if run._element.xpath('.//a:blip'):
+                        # Remove the run that contains the image
+                        run._element.getparent().remove(run._element)
+            
+            # Also check for images in tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            for run in paragraph.runs:
+                                if run._element.xpath('.//a:blip'):
+                                    run._element.getparent().remove(run._element)
+            
+            print("✅ Removed existing images from document")
+            
+        except Exception as e:
+            print(f"⚠️ Error removing existing images: {str(e)}")
     
     def get_template_info(self, template_type):
         """Get information about a template"""
