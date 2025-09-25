@@ -133,13 +133,19 @@ def main():
             help="Description of the services provided"
         )
         
-        due_days = st.number_input(
-            "Payment Terms (Days)",
-            min_value=1,
-            max_value=365,
-            value=30,
-            help="Number of days until payment is due"
+        # Payment terms - default to "Due in Full"
+        payment_terms = st.selectbox(
+            "Payment Terms",
+            options=["Due in Full", "Net 15", "Net 30", "Net 45", "Net 60", "Custom"],
+            index=0,
+            help="Select payment terms for the invoice"
         )
+        
+        # Custom payment terms input
+        if payment_terms == "Custom":
+            custom_terms = st.text_input("Custom Payment Terms", placeholder="e.g., Due upon receipt")
+        else:
+            custom_terms = payment_terms
     
     with col2:
         invoice_date = st.date_input(
@@ -148,11 +154,156 @@ def main():
             help="Date of the invoice"
         )
         
-        # Calculate due date
-        if invoice_date:
-            from datetime import timedelta
-            due_date = invoice_date + timedelta(days=due_days)
-            st.info(f"**Due Date:** {due_date.strftime('%Y-%m-%d')}")
+        # Enable payment link checkbox
+        enable_payment_link = st.checkbox(
+            "Enable Online Payment Link",
+            value=True,
+            help="Allow client to pay online through QuickBooks"
+        )
+    
+    # Credit Card Processing Fee
+    st.subheader("Payment Processing")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        include_cc_fee = st.checkbox(
+            "Include 3% Credit Card Processing Fee",
+            help="Add a 3% processing fee for credit card payments"
+        )
+    
+    with col2:
+        if include_cc_fee and contract_amount:
+            try:
+                amount_str = contract_amount.replace('$', '').replace(',', '')
+                base_amount = float(amount_str)
+                cc_fee_amount = base_amount * 0.03
+                st.info(f"**CC Fee:** ${cc_fee_amount:,.2f}")
+            except ValueError:
+                st.warning("Enter valid contract amount to calculate CC fee")
+    
+    # Additional Line Items
+    st.subheader("Additional Line Items")
+    
+    # Initialize session state for line items if not exists
+    if 'line_items' not in st.session_state:
+        st.session_state['line_items'] = []
+    
+    # Display existing line items
+    if st.session_state['line_items']:
+        st.write("**Current Line Items:**")
+        for i, item in enumerate(st.session_state['line_items']):
+            col1, col2, col3 = st.columns([3, 2, 1])
+            with col1:
+                st.write(f"• {item['type']}")
+            with col2:
+                st.write(f"${item['amount']:,.2f}")
+            with col3:
+                if st.button("🗑️", key=f"remove_{i}", help="Remove this line item"):
+                    st.session_state['line_items'].pop(i)
+                    st.rerun()
+    
+    # Add new line item interface
+    col1, col2, col3 = st.columns([3, 2, 1])
+    
+    with col1:
+        fee_types = [
+            "Adjustments", "Bagging & Tagging", "Consulting", "Costing", "Cutting",
+            "Design", "Development - LA", "Digitizing", "Fabric", "Fitting",
+            "Grading", "Marketing", "Patternmaking", "Pre-production", "Print-outs",
+            "Production COD", "Production Sewing", "Sample Production", "Send Out",
+            "Shipping/Freight", "Sourcing", "Trim"
+        ]
+        
+        # Default values for each fee type (you can modify these later)
+        fee_defaults = {
+            "Adjustments": 50.00,
+            "Bagging & Tagging": 25.00,
+            "Consulting": 150.00,
+            "Costing": 75.00,
+            "Cutting": 100.00,
+            "Design": 200.00,
+            "Development - LA": 300.00,
+            "Digitizing": 125.00,
+            "Fabric": 0.00,  # Will vary by project
+            "Fitting": 80.00,
+            "Grading": 90.00,
+            "Marketing": 175.00,
+            "Patternmaking": 120.00,
+            "Pre-production": 150.00,
+            "Print-outs": 30.00,
+            "Production COD": 200.00,
+            "Production Sewing": 180.00,
+            "Sample Production": 250.00,
+            "Send Out": 40.00,
+            "Shipping/Freight": 0.00,  # Will vary by location
+            "Sourcing": 100.00,
+            "Trim": 0.00  # Will vary by project
+        }
+        
+        new_fee_type = st.selectbox(
+            "Fee Type",
+            options=fee_types,
+            key="new_fee_type",
+            help="Select the type of fee to add"
+        )
+    
+    with col2:
+        # Get default amount for selected fee type
+        default_amount = fee_defaults.get(new_fee_type, 0.00)
+        
+        new_fee_amount = st.number_input(
+            "Amount ($)",
+            min_value=0.00,
+            value=default_amount,
+            step=0.01,
+            format="%.2f",
+            key="new_fee_amount",
+            help=f"Enter the dollar amount for {new_fee_type}"
+        )
+    
+    with col3:
+        st.markdown("<div style='height: 30px'></div>", unsafe_allow_html=True)
+        if st.button("➕ Add", help="Add this line item to the invoice"):
+            if new_fee_amount > 0:
+                st.session_state['line_items'].append({
+                    'type': new_fee_type,
+                    'amount': new_fee_amount
+                })
+                st.rerun()
+            else:
+                st.warning("Please enter an amount greater than $0.00")
+    
+    # Calculate and display total
+    st.subheader("Invoice Summary")
+    
+    if contract_amount:
+        try:
+            amount_str = contract_amount.replace('$', '').replace(',', '')
+            base_amount = float(amount_str)
+            
+            # Calculate totals
+            subtotal = base_amount
+            cc_fee = base_amount * 0.03 if include_cc_fee else 0
+            additional_items_total = sum(item['amount'] for item in st.session_state['line_items'])
+            total_amount = subtotal + cc_fee + additional_items_total
+            
+            # Display breakdown
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Amount Breakdown:**")
+                st.write(f"• Contract Amount: ${subtotal:,.2f}")
+                if include_cc_fee:
+                    st.write(f"• Credit Card Fee (3%): ${cc_fee:,.2f}")
+                for item in st.session_state['line_items']:
+                    st.write(f"• {item['type']}: ${item['amount']:,.2f}")
+            
+            with col2:
+                st.metric("**Amount Due**", f"${total_amount:,.2f}")
+                
+        except ValueError:
+            st.warning("Enter valid contract amount to calculate totals")
     
     # Validation
     if not all([first_name, last_name, email, contract_amount]):
@@ -181,18 +332,58 @@ def main():
     
     if st.button("💰 Create & Send Invoice", type="primary", use_container_width=False):
         with st.spinner("Creating and sending invoice..."):
+            # Prepare line items data
+            line_items_data = []
+            
+            # Add main contract line item
+            try:
+                amount_str = contract_amount.replace('$', '').replace(',', '')
+                base_amount = float(amount_str)
+                line_items_data.append({
+                    'type': 'Contract Services',
+                    'amount': base_amount,
+                    'description': description
+                })
+                
+                # Add credit card fee if selected
+                if include_cc_fee:
+                    cc_fee_amount = base_amount * 0.03
+                    line_items_data.append({
+                        'type': 'Credit Card Processing Fee',
+                        'amount': cc_fee_amount,
+                        'description': '3% Credit Card Processing Fee'
+                    })
+                
+                # Add additional line items
+                for item in st.session_state['line_items']:
+                    line_items_data.append({
+                        'type': item['type'],
+                        'amount': item['amount'],
+                        'description': item['type']
+                    })
+                
+            except ValueError:
+                st.error("❌ Invalid contract amount format")
+                return
+            
             # Create and send invoice
             success, message = quickbooks_api.create_and_send_invoice(
                 first_name=first_name,
                 last_name=last_name,
                 email=email,
                 contract_amount=contract_amount,
-                description=description
+                description=description,
+                line_items=line_items_data,
+                payment_terms=custom_terms,
+                enable_payment_link=enable_payment_link,
+                invoice_date=invoice_date
             )
             
             if success:
                 st.success(f"✅ {message}")
                 st.balloons()
+                # Clear line items after successful creation
+                st.session_state['line_items'] = []
             else:
                 st.error(f"❌ {message}")
 

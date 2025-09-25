@@ -232,7 +232,9 @@ class QuickBooksAPI:
             return None
     
     def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
-                     email: str, contract_amount: str, description: str = "Contract Services") -> Optional[str]:
+                     email: str, contract_amount: str, description: str = "Contract Services",
+                     line_items: list = None, payment_terms: str = "Due in Full",
+                     enable_payment_link: bool = True, invoice_date: str = None) -> Optional[str]:
         """
         Create an invoice in QuickBooks or simulate in sandbox
         
@@ -243,6 +245,10 @@ class QuickBooksAPI:
             email: Customer's email address
             contract_amount: Contract amount (will be converted to float)
             description: Description of the service
+            line_items: List of line items with type, amount, and description
+            payment_terms: Payment terms for the invoice
+            enable_payment_link: Whether to enable online payment link
+            invoice_date: Date of the invoice
             
         Returns:
             str: Invoice ID if successful, None otherwise
@@ -254,30 +260,36 @@ class QuickBooksAPI:
         # In sandbox mode, we can't create invoices, so simulate the process
         if self.sandbox:
             st.info("🔧 Sandbox Mode: Simulating invoice creation")
-            return self._simulate_invoice_creation(customer_id, first_name, last_name, email, contract_amount, description)
+            return self._simulate_invoice_creation(customer_id, first_name, last_name, email, 
+                                                 contract_amount, description, line_items, 
+                                                 payment_terms, enable_payment_link, invoice_date)
         
         try:
-            # Convert contract amount to float
-            amount_str = contract_amount.replace('$', '').replace(',', '')
-            amount = float(amount_str)
-            
-            invoice_url = f"{self.base_url}/v3/company/{self.company_id}/invoice"
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
-            }
-            
-            # Create invoice data using correct format
-            invoice_data = {
-                "CustomerRef": {
-                    "value": customer_id
-                },
-                "TxnDate": datetime.now().strftime("%Y-%m-%d"),
-                "DueDate": datetime.now().strftime("%Y-%m-%d"),
-                "Line": [
+            # Use line items if provided, otherwise use contract amount
+            if line_items:
+                total_amount = sum(item['amount'] for item in line_items)
+                invoice_lines = []
+                
+                for item in line_items:
+                    invoice_lines.append({
+                        "DetailType": "SalesItemLineDetail",
+                        "Amount": item['amount'],
+                        "SalesItemLineDetail": {
+                            "ItemRef": {
+                                "value": "1"  # Default service item - would need to be configured
+                            },
+                            "Qty": 1,
+                            "UnitPrice": item['amount']
+                        },
+                        "Description": item.get('description', item['type'])
+                    })
+            else:
+                # Convert contract amount to float
+                amount_str = contract_amount.replace('$', '').replace(',', '')
+                amount = float(amount_str)
+                total_amount = amount
+                
+                invoice_lines = [
                     {
                         "DetailType": "SalesItemLineDetail",
                         "Amount": amount,
@@ -290,9 +302,42 @@ class QuickBooksAPI:
                         },
                         "Description": description
                     }
-                ],
-                "EmailStatus": "NotSet"
+                ]
+            
+            invoice_url = f"{self.base_url}/v3/company/{self.company_id}/invoice"
+            
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
+            
+            # Set invoice date
+            if invoice_date:
+                txn_date = invoice_date.strftime("%Y-%m-%d") if hasattr(invoice_date, 'strftime') else str(invoice_date)
+            else:
+                txn_date = datetime.now().strftime("%Y-%m-%d")
+            
+            # Create invoice data using correct format
+            invoice_data = {
+                "CustomerRef": {
+                    "value": customer_id
+                },
+                "TxnDate": txn_date,
+                "DueDate": txn_date,  # Due in Full means due immediately
+                "Line": invoice_lines,
+                "EmailStatus": "NotSet",
+                "AllowOnlinePayment": enable_payment_link,
+                "AllowOnlineCreditCardPayment": enable_payment_link,
+                "AllowOnlineACHPayment": enable_payment_link
+            }
+            
+            # Add payment terms if not "Due in Full"
+            if payment_terms != "Due in Full":
+                invoice_data["SalesTermRef"] = {
+                    "value": self._get_payment_term_id(payment_terms)
+                }
             
             # Invoice object should be at root level, not wrapped
             payload = invoice_data
@@ -320,14 +365,20 @@ class QuickBooksAPI:
             return None
     
     def _simulate_invoice_creation(self, customer_id: str, first_name: str, last_name: str, 
-                                 email: str, contract_amount: str, description: str) -> str:
+                                 email: str, contract_amount: str, description: str,
+                                 line_items: list = None, payment_terms: str = "Due in Full",
+                                 enable_payment_link: bool = True, invoice_date: str = None) -> str:
         """
         Simulate invoice creation for sandbox testing
         """
         try:
-            # Convert contract amount to float
-            amount_str = contract_amount.replace('$', '').replace(',', '')
-            amount = float(amount_str)
+            # Calculate total amount
+            if line_items:
+                total_amount = sum(item['amount'] for item in line_items)
+            else:
+                # Convert contract amount to float
+                amount_str = contract_amount.replace('$', '').replace(',', '')
+                total_amount = float(amount_str)
             
             # Generate a simulated invoice ID
             simulated_invoice_id = f"SIM_{customer_id}_{int(datetime.now().timestamp())}"
@@ -336,10 +387,26 @@ class QuickBooksAPI:
             st.info(f"📋 Simulated Invoice Details:")
             st.info(f"   • Customer: {first_name} {last_name}")
             st.info(f"   • Email: {email}")
-            st.info(f"   • Amount: ${amount:,.2f}")
-            st.info(f"   • Description: {description}")
+            st.info(f"   • Payment Terms: {payment_terms}")
+            st.info(f"   • Online Payment: {'Enabled' if enable_payment_link else 'Disabled'}")
+            
+            # Display line items breakdown
+            if line_items:
+                st.info(f"   • Line Items:")
+                for item in line_items:
+                    st.info(f"     - {item['type']}: ${item['amount']:,.2f}")
+            else:
+                st.info(f"   • Amount: ${total_amount:,.2f}")
+                st.info(f"   • Description: {description}")
+            
+            st.info(f"   • **Amount Due: ${total_amount:,.2f}**")
             st.info(f"   • Simulated Invoice ID: {simulated_invoice_id}")
-            st.info(f"   • Date: {datetime.now().strftime('%Y-%m-%d')}")
+            
+            if invoice_date:
+                date_str = invoice_date.strftime('%Y-%m-%d') if hasattr(invoice_date, 'strftime') else str(invoice_date)
+                st.info(f"   • Invoice Date: {date_str}")
+            else:
+                st.info(f"   • Date: {datetime.now().strftime('%Y-%m-%d')}")
             
             st.warning("🔧 Note: This is a sandbox simulation. In production, a real invoice would be created.")
             
@@ -351,6 +418,20 @@ class QuickBooksAPI:
         except Exception as e:
             st.error(f"Error in invoice simulation: {str(e)}")
             return None
+    
+    def _get_payment_term_id(self, payment_terms: str) -> str:
+        """
+        Get payment term ID for QuickBooks API
+        This would need to be configured based on your QuickBooks setup
+        """
+        # This is a placeholder - in production, you'd query QuickBooks for actual term IDs
+        term_mapping = {
+            "Net 15": "1",
+            "Net 30": "2", 
+            "Net 45": "3",
+            "Net 60": "4"
+        }
+        return term_mapping.get(payment_terms, "1")  # Default to Net 30
     
     def send_invoice(self, invoice_id: str, email: str) -> bool:
         """
@@ -400,7 +481,9 @@ class QuickBooksAPI:
             return False
     
     def create_and_send_invoice(self, first_name: str, last_name: str, email: str, 
-                              contract_amount: str, description: str = "Contract Services") -> Tuple[bool, str]:
+                              contract_amount: str, description: str = "Contract Services",
+                              line_items: list = None, payment_terms: str = "Due in Full",
+                              enable_payment_link: bool = True, invoice_date: str = None) -> Tuple[bool, str]:
         """
         Complete workflow: create customer, create invoice, and send it
         
@@ -410,6 +493,10 @@ class QuickBooksAPI:
             email: Customer's email address
             contract_amount: Contract amount
             description: Description of the service
+            line_items: List of line items with type, amount, and description
+            payment_terms: Payment terms for the invoice
+            enable_payment_link: Whether to enable online payment link
+            invoice_date: Date of the invoice
             
         Returns:
             Tuple[bool, str]: (success, message)
@@ -421,7 +508,9 @@ class QuickBooksAPI:
                 return False, "Failed to create or find customer"
             
             # Create invoice
-            invoice_id = self.create_invoice(customer_id, first_name, last_name, email, contract_amount, description)
+            invoice_id = self.create_invoice(customer_id, first_name, last_name, email, 
+                                           contract_amount, description, line_items,
+                                           payment_terms, enable_payment_link, invoice_date)
             if not invoice_id:
                 return False, "Failed to create invoice"
             
