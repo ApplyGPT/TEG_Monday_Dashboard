@@ -8,6 +8,8 @@ import json
 import base64
 from typing import Dict, Optional, Tuple
 import streamlit as st
+import os
+from docx_template_processor import DocxTemplateProcessor
 
 class SignNowAPI:
     """SignNow API client for document creation and sending"""
@@ -34,6 +36,7 @@ class SignNowAPI:
         self.base_url = "https://api.signnow.com"  # Updated to production URL
         self.access_token = None
         self.user_email = None
+        self.docx_processor = DocxTemplateProcessor()
         
     def authenticate(self) -> bool:
         """
@@ -114,19 +117,19 @@ class SignNowAPI:
             st.error(f"Failed to get user email: {str(e)}")
             return False
     
-    def create_document_from_template(self, template_id: str, document_name: str, 
-                                   first_name: str, last_name: str, email: str, 
-                                   contract_amount: str) -> Optional[str]:
+    def create_document_from_template(self, template_type: str, document_name: str, 
+                                   client_name: str, email: str, 
+                                   contract_amount: str = None, contract_date: str = None) -> Optional[str]:
         """
-        Create a new document by uploading a PDF template
+        Create a new document by processing the original .docx template with exact formatting preserved
         
         Args:
-            template_id: Not used (kept for compatibility)
+            template_type: Type of template to use (development_contract, development_terms, terms_conditions, production_contract)
             document_name: Name for the new document
-            first_name: First name value
-            last_name: Last name value
+            client_name: Client name value
             email: Email value
-            contract_amount: Contract amount value
+            contract_amount: Contract amount value (optional)
+            contract_date: Contract date value (optional)
             
         Returns:
             str: Document ID if successful, None otherwise
@@ -136,8 +139,17 @@ class SignNowAPI:
                 return None
         
         try:
-            # Create a simple PDF contract
-            pdf_content = self._create_contract_pdf(first_name, last_name, email, contract_amount)
+            # Process the .docx template with exact formatting preserved
+            processed_docx_path = self.docx_processor.process_document(
+                template_type=template_type,
+                client_name=client_name,
+                email=email,
+                contract_amount=contract_amount,
+                contract_date=contract_date
+            )
+            
+            # Convert .docx to PDF for SignNow upload
+            pdf_content = self._convert_docx_to_pdf(processed_docx_path)
             
             # Upload the PDF to SignNow
             files = {
@@ -168,6 +180,10 @@ class SignNowAPI:
                 st.error("Failed to create document")
                 return None
                 
+            # Clean up temporary file
+            if os.path.exists(processed_docx_path):
+                os.remove(processed_docx_path)
+                
             return document_id
             
         except requests.exceptions.RequestException as e:
@@ -177,158 +193,259 @@ class SignNowAPI:
             st.error(f"Unexpected error creating document: {str(e)}")
             return None
     
-    def _create_contract_pdf(self, first_name: str, last_name: str, email: str, contract_amount: str) -> bytes:
+    def _convert_docx_to_pdf(self, docx_path: str, highlight_values: list | None = None) -> bytes:
         """
-        Create a simple PDF contract with the provided information
+        Convert .docx file to PDF bytes with proper formatting preservation using ReportLab
         
         Args:
-            first_name: First name
-            last_name: Last name
-            email: Email address
-            contract_amount: Contract amount
+            docx_path: Path to the .docx file
             
         Returns:
             bytes: PDF content
         """
-        # Simple PDF content - in production you'd use a proper PDF library like reportlab
-        pdf_content = f"""%PDF-1.4
-1 0 obj
-<<
-/Type /Catalog
-/Pages 2 0 R
->>
-endobj
+        try:
+            from docx import Document
+            from reportlab.lib.pagesizes import letter
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import inch
+            from reportlab.lib import colors
+            from io import BytesIO
+            import html as html_escape
+            
+            doc = Document(docx_path)
+            
+            # Create PDF buffer
+            buffer = BytesIO()
+            pdf_doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=1*inch, bottomMargin=1*inch)
+            
+            # Get styles
+            styles = getSampleStyleSheet()
+            
+            # Create custom styles for better formatting
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=20,
+                spaceAfter=20,
+                alignment=1,  # Center alignment
+                textColor=colors.black,
+                fontName='Helvetica-Bold'
+            )
+            
+            heading_style = ParagraphStyle(
+                'CustomHeading',
+                parent=styles['Heading2'],
+                fontSize=16,
+                spaceAfter=12,
+                fontName='Helvetica-Bold',
+                textColor=colors.black
+            )
+            
+            bold_style = ParagraphStyle(
+                'CustomBold',
+                parent=styles['Normal'],
+                fontSize=12,
+                spaceAfter=8,
+                fontName='Helvetica-Bold'
+            )
+            
+            normal_style = ParagraphStyle(
+                'CustomNormal',
+                parent=styles['Normal'],
+                fontSize=11,
+                spaceAfter=6,
+                fontName='Helvetica'
+            )
+            
+            amount_style = ParagraphStyle(
+                'ContractAmount',
+                parent=styles['Normal'],
+                fontSize=14,
+                spaceAfter=8,
+                fontName='Helvetica-Bold',
+                textColor=colors.green
+            )
+            
+            placeholder_style = ParagraphStyle(
+                'Placeholder',
+                parent=styles['Normal'],
+                fontSize=16,
+                spaceAfter=12,
+                alignment=1,  # Center alignment
+                fontName='Helvetica-Bold',
+                textColor=colors.blue
+            )
+            
+            # Normalize highlight values
+            highlight_values = [v for v in (highlight_values or []) if isinstance(v, str) and v.strip()]
 
-2 0 obj
-<<
-/Type /Pages
-/Kids [3 0 R]
-/Count 1
->>
-endobj
+            # Build PDF content
+            story = []
+            
+            # Check for images/logos first
+            if hasattr(doc, 'inline_shapes') and doc.inline_shapes:
+                story.append(Paragraph("IMAGE/LOGO NOT DISPLAYED IN PREVIEW", placeholder_style))
+                story.append(Spacer(1, 20))
+            
+            # Add document content with exact formatting preservation
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    text = paragraph.text.strip()
+                    
+                    # Check for actual bold formatting in the document
+                    is_bold = paragraph.runs and any(run.bold for run in paragraph.runs)
+                    
+                    # Check for actual font size in the document
+                    font_size = 11  # Default size
+                    if paragraph.runs:
+                        for run in paragraph.runs:
+                            if run.font.size:
+                                font_size = run.font.size.pt
+                                break
+                    
+                    # Map font families to ReportLab supported fonts
+                    def map_font_family(font_name, is_bold=False):
+                        """Map document fonts to ReportLab supported fonts"""
+                        font_name = font_name.lower() if font_name else 'helvetica'
+                        
+                        # Font mapping
+                        font_map = {
+                            'arial': 'Helvetica',
+                            'times': 'Times-Roman',
+                            'times new roman': 'Times-Roman',
+                            'courier': 'Courier',
+                            'helvetica': 'Helvetica',
+                            'calibri': 'Helvetica',  # Map Calibri to Helvetica
+                            'verdana': 'Helvetica',  # Map Verdana to Helvetica
+                        }
+                        
+                        # Get base font
+                        base_font = font_map.get(font_name, 'Helvetica')
+                        
+                        # Add bold suffix if needed
+                        if is_bold:
+                            if base_font == 'Helvetica':
+                                return 'Helvetica-Bold'
+                            elif base_font == 'Times-Roman':
+                                return 'Times-Bold'
+                            elif base_font == 'Courier':
+                                return 'Courier-Bold'
+                            else:
+                                return 'Helvetica-Bold'  # Fallback
+                        else:
+                            return base_font
+                    
+                    # Check for actual font family in the document
+                    font_family = 'Helvetica'  # Default font
+                    if paragraph.runs:
+                        for run in paragraph.runs:
+                            if run.font.name:
+                                font_family = run.font.name
+                                break
+                    
+                    # Force all paragraphs to normal weight; only bold exact variable values inline
+                    style = ParagraphStyle(
+                        'DynamicNormal',
+                        parent=styles['Normal'],
+                        fontSize=font_size,
+                        spaceAfter=4,
+                        fontName=map_font_family(font_family, False),
+                        textColor=colors.black
+                    )
+                    
+                    # Escape text for XML/HTML and bold only highlight values inline
+                    escaped_text = html_escape.escape(text)
+                    if highlight_values:
+                        # Replace longer values first to avoid partial nesting
+                        for val in sorted(highlight_values, key=lambda v: len(v or ''), reverse=True):
+                            if not val:
+                                continue
+                            escaped_val = html_escape.escape(val)
+                            escaped_text = escaped_text.replace(escaped_val, f"<b>{escaped_val}</b>")
 
-3 0 obj
-<<
-/Type /Page
-/Parent 2 0 R
-/MediaBox [0 0 612 792]
-/Contents 4 0 R
-/Resources <<
-/Font <<
-/F1 5 0 R
->>
->>
->>
-endobj
-
-4 0 obj
-<<
-/Length 200
->>
-stream
-BT
-/F1 16 Tf
-100 700 Td
-(CONTRACT AGREEMENT) Tj
-0 -30 Td
-/F1 12 Tf
-(Client: {first_name} {last_name}) Tj
-0 -20 Td
-(Email: {email}) Tj
-0 -20 Td
-(Contract Amount: ${contract_amount}) Tj
-0 -40 Td
-(This contract is generated automatically.) Tj
-0 -20 Td
-(Please review and sign this document.) Tj
-ET
-endstream
-endobj
-
-5 0 obj
-<<
-/Type /Font
-/Subtype /Type1
-/BaseFont /Helvetica
->>
-endobj
-
-xref
-0 6
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000274 00000 n 
-0000000368 00000 n 
-trailer
-<<
-/Size 6
-/Root 1 0 R
->>
-startxref
-590
-%%EOF"""
-        
-        return pdf_content.encode('utf-8')
+                    story.append(Paragraph(escaped_text, style))
+                    
+                    # Add spacing based on paragraph formatting
+                    if paragraph.paragraph_format.space_after:
+                        spacing = paragraph.paragraph_format.space_after.pt
+                        story.append(Spacer(1, spacing))
+                    else:
+                        story.append(Spacer(1, 2))  # Minimal default spacing
+            
+            # Add table placeholders
+            if doc.tables:
+                story.append(Spacer(1, 20))
+                story.append(Paragraph("TABLE NOT DISPLAYED IN PREVIEW", placeholder_style))
+            
+            # Build PDF
+            pdf_doc.build(story)
+            
+            # Get PDF bytes
+            pdf_bytes = buffer.getvalue()
+            buffer.close()
+            
+            return pdf_bytes
+            
+        except Exception as e:
+            st.error(f"Error converting .docx to PDF: {str(e)}")
+            # Fallback to simple PDF
+            return b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n%%EOF"
     
-    def _fill_document_fields(self, document_id: str, first_name: str, last_name: str, 
-                            email: str, contract_amount: str) -> bool:
+    def _docx_to_html(self, doc):
         """
-        Fill in document fields with provided values
+        Convert docx Document to HTML with proper formatting preservation
         
         Args:
-            document_id: ID of the document to fill
-            first_name: First name value
-            last_name: Last name value
-            email: Email value
-            contract_amount: Contract amount value
+            doc: python-docx Document object
             
         Returns:
-            bool: True if successful, False otherwise
+            str: HTML content
         """
-        try:
-            # Get document structure to find field IDs
-            doc_url = f"{self.base_url}/document/{document_id}"
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.get(doc_url, headers=headers)
-            response.raise_for_status()
-            
-            doc_data = response.json()
-            
-            # Prepare field values (this would need to be customized based on actual template)
-            field_values = {
-                "first_name": first_name,
-                "last_name": last_name,
-                "email": email,
-                "contract_amount": contract_amount
-            }
-            
-            # Update document fields
-            update_url = f"{self.base_url}/document/{document_id}/field"
-            
-            for field_name, field_value in field_values.items():
-                field_data = {
-                    "field_name": field_name,
-                    "field_value": field_value
-                }
+        html_parts = []
+        html_parts.append('<html><head><meta charset="UTF-8"></head><body>')
+        
+        # Check for images/logos first
+        if hasattr(doc, 'inline_shapes') and doc.inline_shapes:
+            html_parts.append('<div class="image-placeholder">IMAGE/LOGO NOT DISPLAYED IN PREVIEW</div>')
+        
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                text = paragraph.text.strip()
                 
-                field_response = requests.put(update_url, json=field_data, headers=headers)
-                field_response.raise_for_status()
-            
-            return True
-            
-        except requests.exceptions.RequestException as e:
-            st.error(f"Failed to fill document fields: {str(e)}")
-            return False
-        except Exception as e:
-            st.error(f"Unexpected error filling fields: {str(e)}")
-            return False
+                # Check for actual bold formatting in the document
+                is_bold = paragraph.runs and any(run.bold for run in paragraph.runs)
+                
+                # Determine formatting based on content and actual formatting
+                if any(word in text.upper() for word in ['DEVELOPMENT CONTRACT', 'TERMS AND CONDITIONS', 'PRODUCTION CONTRACT']):
+                    html_parts.append(f'<h1>{text}</h1>')
+                elif any(word in text.upper() for word in ['CONTRACT', 'AGREEMENT', 'TERMS', 'CONDITIONS']):
+                    if len(text) < 100:  # Likely a heading
+                        html_parts.append(f'<h2>{text}</h2>')
+                    elif is_bold:
+                        html_parts.append(f'<p class="bold">{text}</p>')
+                    else:
+                        html_parts.append(f'<p>{text}</p>')
+                elif text.startswith('The following agreement'):
+                    html_parts.append(f'<p class="bold">{text}</p>')
+                elif 'total contract amount' in text.lower():
+                    # Highlight contract amount
+                    text_with_highlight = text.replace('$', '<span class="contract-amount">$').replace(' and is due', '</span> and is due')
+                    html_parts.append(f'<p class="bold">{text_with_highlight}</p>')
+                elif any(word in text.upper() for word in ['SIGNATURE', 'SIGNED', 'DATE', 'VITALINA', 'TEG INTL', 'ON BEHALF']):
+                    html_parts.append(f'<p class="bold">{text}</p>')
+                elif is_bold:
+                    html_parts.append(f'<p class="bold">{text}</p>')
+                else:
+                    html_parts.append(f'<p>{text}</p>')
+        
+        # Add table placeholders
+        if doc.tables:
+            html_parts.append('<div class="table-placeholder">TABLE NOT DISPLAYED IN PREVIEW</div>')
+        
+        html_parts.append('</body></html>')
+        return ''.join(html_parts)
+    
     
     def send_document_for_signing(self, document_id: str, email: str, 
                                 first_name: str, last_name: str) -> bool:
@@ -373,38 +490,39 @@ startxref
             st.error(f"Unexpected error sending document: {str(e)}")
             return False
     
-    def create_and_send_contract(self, first_name: str, last_name: str, email: str, 
-                               contract_amount: str, template_id: str = None) -> Tuple[bool, str]:
+    def create_and_send_contract(self, template_type: str, client_name: str, email: str, 
+                               contract_amount: str = None, contract_date: str = None) -> Tuple[bool, str]:
         """
         Complete workflow: create document from template and send for signing
         
         Args:
-            first_name: First name of the signer
-            last_name: Last name of the signer
+            template_type: Type of template to use (development_contract, development_terms, terms_conditions, production_contract)
+            client_name: Client name
             email: Email address of the signer
-            contract_amount: Contract amount
-            template_id: Template ID to use (optional, will use default if not provided)
+            contract_amount: Contract amount (optional, required for contract types)
+            contract_date: Contract date (optional, defaults to current date)
             
         Returns:
             Tuple[bool, str]: (success, message)
         """
         try:
-            # Use default template if none provided
-            if not template_id:
-                template_id = "default_contract_template"  # This would be replaced with actual template ID
+            # Set default date if not provided
+            if not contract_date:
+                from datetime import datetime
+                contract_date = datetime.now().strftime("%B %d, %Y")
             
-            document_name = f"Contract_{first_name}_{last_name}_{contract_amount}"
+            document_name = f"{template_type}_{client_name.replace(' ', '_')}_{contract_date.replace(' ', '_').replace(',', '')}"
             
             # Create document
             document_id = self.create_document_from_template(
-                template_id, document_name, first_name, last_name, email, contract_amount
+                template_type, document_name, client_name, email, contract_amount, contract_date
             )
             
             if not document_id:
                 return False, "Failed to create document from template"
             
             # Send for signing
-            if self.send_document_for_signing(document_id, email, first_name, last_name):
+            if self.send_document_for_signing(document_id, email, client_name, ""):
                 return True, f"Contract sent successfully to {email}. Document ID: {document_id}"
             else:
                 return False, "Document created but failed to send for signing"
@@ -440,18 +558,3 @@ def load_signnow_credentials() -> Dict[str, str]:
         return {}
 
 
-def create_sample_contract_template() -> str:
-    """
-    Create a sample contract template (this would typically be done through SignNow UI)
-    For now, return a placeholder template ID
-    
-    Returns:
-        str: Template ID
-    """
-    # In a real implementation, you would:
-    # 1. Create a PDF template with form fields
-    # 2. Upload it to SignNow
-    # 3. Get the template ID
-    # 4. Return that ID
-    
-    return "sample_contract_template_id"
