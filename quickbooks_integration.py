@@ -131,6 +131,17 @@ class QuickBooksAPI:
             payload = customer_data
             
             response = requests.post(customer_url, json=payload, headers=headers)
+            
+            # If we get a 401, try to refresh the token and retry
+            if response.status_code == 401:
+                st.info("🔄 Access token expired, refreshing...")
+                if self.authenticate():
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = requests.post(customer_url, json=payload, headers=headers)
+                else:
+                    st.error("Failed to refresh access token")
+                    return None
+            
             response.raise_for_status()
             
             customer_response = response.json()
@@ -170,6 +181,17 @@ class QuickBooksAPI:
             }
             
             response = requests.get(query_url, headers=headers)
+            
+            # If we get a 401, try to refresh the token and retry
+            if response.status_code == 401:
+                st.info("🔄 Access token expired, refreshing...")
+                if self.authenticate():
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = requests.get(query_url, headers=headers)
+                else:
+                    st.error("Failed to refresh access token")
+                    return None
+            
             response.raise_for_status()
             
             customers_data = response.json()
@@ -201,6 +223,11 @@ class QuickBooksAPI:
         Returns:
             str: Customer ID if found, None otherwise
         """
+        # Ensure we have a valid access token
+        if not self.access_token:
+            if not self.authenticate():
+                return None
+        
         try:
             query_url = f"{self.base_url}/v3/company/{self.company_id}/query"
             
@@ -217,6 +244,17 @@ class QuickBooksAPI:
             params = {"query": query}
             
             response = requests.get(query_url, params=params, headers=headers)
+            
+            # If we get a 401, try to refresh the token and retry
+            if response.status_code == 401:
+                st.info("🔄 Access token expired, refreshing...")
+                if self.authenticate():
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = requests.get(query_url, params=params, headers=headers)
+                else:
+                    st.error("Failed to refresh access token")
+                    return None
+            
             response.raise_for_status()
             
             query_response = response.json()
@@ -267,19 +305,23 @@ class QuickBooksAPI:
         try:
             # Use line items if provided, otherwise use contract amount
             if line_items:
-                total_amount = sum(item['amount'] for item in line_items)
+                total_amount = sum(item['amount'] * item.get('quantity', 1) for item in line_items)
                 invoice_lines = []
                 
                 for item in line_items:
+                    quantity = item.get('quantity', 1)
+                    unit_price = item['amount']
+                    line_total = unit_price * quantity
+                    
                     invoice_lines.append({
                         "DetailType": "SalesItemLineDetail",
-                        "Amount": item['amount'],
+                        "Amount": line_total,
                         "SalesItemLineDetail": {
                             "ItemRef": {
                                 "value": "1"  # Default service item - would need to be configured
                             },
-                            "Qty": 1,
-                            "UnitPrice": item['amount']
+                            "Qty": quantity,
+                            "UnitPrice": unit_price
                         },
                         "Description": item.get('description', item['type'])
                     })
@@ -343,6 +385,17 @@ class QuickBooksAPI:
             payload = invoice_data
             
             response = requests.post(invoice_url, json=payload, headers=headers)
+            
+            # If we get a 401, try to refresh the token and retry
+            if response.status_code == 401:
+                st.info("🔄 Access token expired, refreshing...")
+                if self.authenticate():
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = requests.post(invoice_url, json=payload, headers=headers)
+                else:
+                    st.error("Failed to refresh access token")
+                    return None
+            
             response.raise_for_status()
             
             invoice_response = response.json()
@@ -374,7 +427,7 @@ class QuickBooksAPI:
         try:
             # Calculate total amount
             if line_items:
-                total_amount = sum(item['amount'] for item in line_items)
+                total_amount = sum(item['amount'] * item.get('quantity', 1) for item in line_items)
             else:
                 # Convert contract amount to float
                 amount_str = contract_amount.replace('$', '').replace(',', '')
@@ -394,7 +447,13 @@ class QuickBooksAPI:
             if line_items:
                 st.info(f"   • Line Items:")
                 for item in line_items:
-                    st.info(f"     - {item['type']}: ${item['amount']:,.2f}")
+                    quantity = item.get('quantity', 1)
+                    unit_price = item['amount']
+                    line_total = unit_price * quantity
+                    if quantity > 1:
+                        st.info(f"     - {item['type']} (Qty {quantity}): ${line_total:,.2f}")
+                    else:
+                        st.info(f"     - {item['type']}: ${line_total:,.2f}")
             else:
                 st.info(f"   • Amount: ${total_amount:,.2f}")
                 st.info(f"   • Description: {description}")
@@ -469,6 +528,17 @@ class QuickBooksAPI:
             
             # Send empty body as per API documentation
             response = requests.post(send_url, headers=headers)
+            
+            # If we get a 401, try to refresh the token and retry
+            if response.status_code == 401:
+                st.info("🔄 Access token expired, refreshing...")
+                if self.authenticate():
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = requests.post(send_url, headers=headers)
+                else:
+                    st.error("Failed to refresh access token")
+                    return False
+            
             response.raise_for_status()
             
             return True

@@ -191,20 +191,26 @@ def main():
     
     # Display existing line items
     if st.session_state['line_items']:
-        st.write("**Current Line Items:**")
+        st.markdown("**<span style='font-size: 18px'>Current Line Items:</span>**", unsafe_allow_html=True)
         for i, item in enumerate(st.session_state['line_items']):
-            col1, col2, col3 = st.columns([3, 2, 1])
+            col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
             with col1:
-                st.write(f"• {item['type']}")
+                st.markdown(f"<span style='font-size: 16px'>• {item['type']}</span>", unsafe_allow_html=True)
             with col2:
-                st.write(f"${item['amount']:,.2f}")
+                st.markdown(f"<span style='font-size: 16px'>Qty: {item['quantity']}</span>", unsafe_allow_html=True)
             with col3:
+                item_total = item['amount'] * item['quantity']
+                if item['quantity'] > 1:
+                    st.write(f"$ {item['amount']:,.2f} × {item['quantity']} = $ {item_total:,.2f}")
+                else:
+                    st.write(f"$ {item_total:,.2f}")
+            with col4:
                 if st.button("🗑️", key=f"remove_{i}", help="Remove this line item"):
                     st.session_state['line_items'].pop(i)
                     st.rerun()
     
     # Add new line item interface
-    col1, col2, col3 = st.columns([3, 2, 1])
+    col1, col2, col3, col4 = st.columns([2, 1, 2, 1])
     
     with col1:
         fee_types = [
@@ -249,6 +255,16 @@ def main():
         )
     
     with col2:
+        new_fee_quantity = st.number_input(
+            "Quantity",
+            min_value=1,
+            value=1,
+            step=1,
+            key="new_fee_quantity",
+            help="Enter the quantity for this line item"
+        )
+    
+    with col3:
         # Get default amount for selected fee type
         default_amount = fee_defaults.get(new_fee_type, 0.00)
         
@@ -262,12 +278,13 @@ def main():
             help=f"Enter the dollar amount for {new_fee_type}"
         )
     
-    with col3:
+    with col4:
         st.markdown("<div style='height: 30px'></div>", unsafe_allow_html=True)
         if st.button("➕ Add", help="Add this line item to the invoice"):
             if new_fee_amount > 0:
                 st.session_state['line_items'].append({
                     'type': new_fee_type,
+                    'quantity': new_fee_quantity,
                     'amount': new_fee_amount
                 })
                 st.rerun()
@@ -285,22 +302,26 @@ def main():
             # Calculate totals
             subtotal = base_amount
             cc_fee = base_amount * 0.03 if include_cc_fee else 0
-            additional_items_total = sum(item['amount'] for item in st.session_state['line_items'])
+            additional_items_total = sum(item['amount'] * item['quantity'] for item in st.session_state['line_items'])
             total_amount = subtotal + cc_fee + additional_items_total
             
             # Display breakdown
             col1, col2 = st.columns(2)
             
             with col1:
-                st.write("**Amount Breakdown:**")
-                st.write(f"• Contract Amount: ${subtotal:,.2f}")
+                st.markdown("**<span style='font-size: 18px'>Amount Breakdown:</span>**", unsafe_allow_html=True)
+                st.write(f"• Contract Amount: $ {subtotal:,.2f}")
                 if include_cc_fee:
-                    st.write(f"• Credit Card Fee (3%): ${cc_fee:,.2f}")
+                    st.write(f"• Credit Card Fee (3%): $ {cc_fee:,.2f}")
                 for item in st.session_state['line_items']:
-                    st.write(f"• {item['type']}: ${item['amount']:,.2f}")
+                    item_total = item['amount'] * item['quantity']
+                    if item['quantity'] > 1:
+                        st.write(f"• {item['type']}: $ {item['amount']:,.2f} × {item['quantity']} = $ {item_total:,.2f}")
+                    else:
+                        st.write(f"• {item['type']}: $ {item_total:,.2f}")
             
             with col2:
-                st.metric("**Amount Due**", f"${total_amount:,.2f}")
+                st.subheader(f"**Amount Due: $ {total_amount:,.2f}**")
                 
         except ValueError:
             st.warning("Enter valid contract amount to calculate totals")
@@ -359,6 +380,7 @@ def main():
                     line_items_data.append({
                         'type': item['type'],
                         'amount': item['amount'],
+                        'quantity': item['quantity'],
                         'description': item['type']
                     })
                 
