@@ -36,12 +36,11 @@ class DocxTemplateProcessor:
                 'replacements': {
                     'Natalie Barrett': 'CLIENT_NAME',
                     'December 06, 2024': 'CONTRACT_DATE',
-                    # These will be populated with actual values from the form
-                    # Note: These placeholders need to be added to the actual Production Contract.docx file
-                    'DEPOSIT_AMOUNT': 'DEPOSIT_AMOUNT',
-                    'TOTAL_CONTRACT_AMOUNT': 'TOTAL_CONTRACT_AMOUNT',
-                    'SEWING_COST': 'SEWING_COST',
-                    'PRE_PRODUCTION_FEE': 'PRE_PRODUCTION_FEE'
+                    # Replace hardcoded amounts with placeholders (like Development Contract)
+                    '$36,830.00': 'DEPOSIT_AMOUNT',
+                    '$56,918.00': 'TOTAL_CONTRACT_AMOUNT',
+                    '$20,088.00': 'SEWING_COST',
+                    '$16,743.00': 'PRE_PRODUCTION_FEE'
                 }
             },
             'production_terms': {
