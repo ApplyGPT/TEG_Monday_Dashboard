@@ -127,6 +127,13 @@ def main():
             value=email_default,
             help="Enter the client's email address"
         )
+        
+        # TEGMADE, JUST FOR field
+        tegmade_for = st.text_input(
+            "TEGMADE, JUST FOR",
+            value="",
+            help="Enter the name that will replace VITALINA GHINZELLI in the document"
+        )
     
     with col2:
         # Contract amount field (only show for development contracts)
@@ -198,18 +205,23 @@ def main():
         sewing_cost = None
         pre_production_fee = None
     
-    uploaded_image = st.file_uploader(
-        "Upload a screenshot of the spreadsheet to be inserted into the contract document",
-        type=['png', 'jpg', 'jpeg'],
-        help="Upload a screenshot of the spreadsheet that will be inserted after the first paragraph in the contract"
+    uploaded_pdf = st.file_uploader(
+        "Upload a PDF of the spreadsheet to be inserted into the contract document",
+        type=['pdf'],
+        help="Upload a PDF of the spreadsheet that will be inserted after the first paragraph in the contract"
     )
     
-    # Show uploaded image preview
-    if uploaded_image is not None:
-        st.image(uploaded_image, caption="Spreadsheet Screenshot Preview", use_container_width=True)
-        st.success("✅ Image uploaded successfully!")
+    # Show uploaded PDF preview
+    if uploaded_pdf is not None:
+        st.success("✅ PDF uploaded successfully!")
+        # Display PDF preview
+        import base64
+        pdf_bytes = uploaded_pdf.getvalue()
+        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+        pdf_display = f'<iframe src="data:application/pdf;base64,{pdf_base64}" width="100%" height="600" type="application/pdf"></iframe>'
+        st.markdown(pdf_display, unsafe_allow_html=True)
     else:
-        st.warning("⚠️ Please upload a spreadsheet screenshot")
+        st.warning("⚠️ Please upload a spreadsheet PDF")
     
     # Convert date to string format if provided
     contract_date_str = None
@@ -217,7 +229,7 @@ def main():
         contract_date_str = contract_date.strftime("%B %d, %Y")
     
     # Validation
-    required_fields = [client_name, email, uploaded_image]
+    required_fields = [client_name, email, uploaded_pdf]
     if template_type == 'development_pair':
         required_fields.append(contract_amount)
     elif template_type == 'production_pair':
@@ -229,8 +241,8 @@ def main():
             missing_fields.append("Client Name")
         if not email:
             missing_fields.append("Email Address")
-        if not uploaded_image:
-            missing_fields.append("Spreadsheet Screenshot")
+        if not uploaded_pdf:
+            missing_fields.append("Spreadsheet PDF")
         if template_type == 'development_pair' and not contract_amount:
             missing_fields.append("Contract Amount")
         if template_type == 'production_pair':
@@ -297,7 +309,8 @@ def main():
                         email=email,
                         contract_amount=contract_amount,
                         contract_date=contract_date_str,
-                        uploaded_image=uploaded_image
+                        uploaded_pdf=uploaded_pdf,
+                        tegmade_for=tegmade_for
                     )
                     
                     # Process development terms
@@ -306,7 +319,8 @@ def main():
                         client_name=client_name,
                         email=email,
                         contract_amount=None,
-                        contract_date=contract_date_str
+                        contract_date=contract_date_str,
+                        tegmade_for=tegmade_for
                     )
                     
                 elif template_type == 'production_pair':
@@ -321,7 +335,8 @@ def main():
                         total_contract_amount=total_contract_amount,
                         sewing_cost=sewing_cost,
                         pre_production_fee=pre_production_fee,
-                        uploaded_image=uploaded_image
+                        uploaded_pdf=uploaded_pdf,
+                        tegmade_for=tegmade_for
                     )
                     
                     # Process production terms
@@ -330,11 +345,12 @@ def main():
                         client_name=client_name,
                         email=email,
                         contract_amount=None,
-                        contract_date=contract_date_str
+                        contract_date=contract_date_str,
+                        tegmade_for=tegmade_for
                     )
                 
                 # Build highlight values: only our inputs should be bold
-                highlight_values = [v for v in [client_name, email] if v]
+                highlight_values = [v for v in [client_name, email, tegmade_for] if v]
                 
                 if template_type == 'development_pair' and contract_amount:
                     # Include raw and formatted amount for robust matching

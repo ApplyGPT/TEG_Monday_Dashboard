@@ -21,14 +21,16 @@ class DocxTemplateProcessor:
                 'replacements': {
                     'EUGENIA ZHANG': 'CLIENT_NAME',
                     'March 14, 2025': 'CONTRACT_DATE',
-                    '$15,865.00': 'CONTRACT_AMOUNT'
+                    '$15,865.00': 'CONTRACT_AMOUNT',
+                    'VITALINA GHINZELLI': 'TEGMADE_FOR'
                 }
             },
             'development_terms': {
                 'file': 'Development Terms and Conditions .docx',
                 'replacements': {
                     'SHERRY CASSEL': 'CLIENT_NAME',
-                    'JUNE 16, 2025': 'CONTRACT_DATE'
+                    'JUNE 16, 2025': 'CONTRACT_DATE',
+                    'VITALINA GHINZELLI': 'TEGMADE_FOR'
                 }
             },
             'production_contract': {
@@ -40,14 +42,16 @@ class DocxTemplateProcessor:
                     '$36,830.00': 'DEPOSIT_AMOUNT',
                     '$56,918.00': 'TOTAL_CONTRACT_AMOUNT',
                     '$20,088.00': 'SEWING_COST',
-                    '$16,743.00': 'PRE_PRODUCTION_FEE'
+                    '$16,743.00': 'PRE_PRODUCTION_FEE',
+                    'VITALINA GHINZELLI': 'TEGMADE_FOR'
                 }
             },
             'production_terms': {
                 'file': 'Production Terms and Conditions.docx',
                 'replacements': {
                     'Natalie Barrett': 'CLIENT_NAME',
-                    'December 06, 2024': 'CONTRACT_DATE'
+                    'December 06, 2024': 'CONTRACT_DATE',
+                    'VITALINA GHINZELLI': 'TEGMADE_FOR'
                 }
             }
         }
@@ -56,7 +60,7 @@ class DocxTemplateProcessor:
                         contract_amount=None, contract_date=None,
                         deposit_amount=None, total_contract_amount=None,
                         sewing_cost=None, pre_production_fee=None,
-                        uploaded_image=None):
+                        uploaded_pdf=None, tegmade_for=None):
         """
         Process a document template with variable replacement
         
@@ -70,7 +74,8 @@ class DocxTemplateProcessor:
             total_contract_amount: Total contract amount (for production contracts)
             sewing_cost: Sewing cost (for production contracts)
             pre_production_fee: Pre-production fee (for production contracts)
-            uploaded_image: Uploaded image file (Streamlit UploadedFile object)
+            uploaded_pdf: Uploaded PDF file (Streamlit UploadedFile object)
+            tegmade_for: Name to replace VITALINA GHINZELLI (optional)
             
         Returns:
             str: Path to the processed document
@@ -112,16 +117,17 @@ class DocxTemplateProcessor:
             'DEPOSIT_AMOUNT': self._format_contract_amount(deposit_amount) if deposit_amount else '$0.00',
             'TOTAL_CONTRACT_AMOUNT': self._format_contract_amount(total_contract_amount) if total_contract_amount else '$0.00',
             'SEWING_COST': self._format_contract_amount(sewing_cost) if sewing_cost else '$0.00',
-            'PRE_PRODUCTION_FEE': self._format_contract_amount(pre_production_fee) if pre_production_fee else '$0.00'
+            'PRE_PRODUCTION_FEE': self._format_contract_amount(pre_production_fee) if pre_production_fee else '$0.00',
+            'TEGMADE_FOR': tegmade_for if tegmade_for else 'VITALINA GHINZELLI'
         }
         
         # Process replacements
         replacements_made = self._replace_text_in_document(doc, template_config['replacements'], replacement_values)
         
-        # Insert image after first paragraph for contract documents
-        if uploaded_image and template_type in ['development_contract', 'production_contract']:
-            print(f"🖼️ Processing image: {uploaded_image.name} ({uploaded_image.size} bytes)")
-            self._insert_image_after_first_paragraph(doc, uploaded_image)
+        # Insert PDF (converted to image) after first paragraph for contract documents
+        if uploaded_pdf and template_type in ['development_contract', 'production_contract']:
+            print(f"📄 Processing PDF: {uploaded_pdf.name} ({uploaded_pdf.size} bytes)")
+            self._insert_pdf_after_first_paragraph(doc, uploaded_pdf)
         
         # Save the processed document
         doc.save(output_path)
@@ -271,20 +277,20 @@ class DocxTemplateProcessor:
             # If formatting fails, return original string with $ prefix
             return f"${amount_str}" if not amount_str.startswith('$') else amount_str
     
-    def _insert_image_after_first_paragraph(self, doc, uploaded_image):
+    def _insert_pdf_after_first_paragraph(self, doc, uploaded_pdf):
         """
-        Insert an image after specific text patterns in contract documents
+        Insert a PDF (converted to image) after specific text patterns in contract documents
         
         Args:
             doc: Document object
-            uploaded_image: Streamlit UploadedFile object
+            uploaded_pdf: Streamlit UploadedFile object containing PDF data
         """
         try:
             import io
             from docx.shared import Inches
             
-            # Get the image data
-            image_data = uploaded_image.read()
+            # Convert PDF first page to image
+            image_data = self._convert_pdf_to_image(uploaded_pdf)
             
             # First, remove any existing images in the document
             self._remove_existing_images(doc)
@@ -355,11 +361,65 @@ class DocxTemplateProcessor:
             # Add image with reasonable size (max width 6 inches)
             run.add_picture(io.BytesIO(image_data), width=Inches(6))
             
-            print(f"✅ Image inserted after target paragraph: {uploaded_image.name}")
+            print(f"✅ PDF (as image) inserted after target paragraph: {uploaded_pdf.name}")
             
         except Exception as e:
-            print(f"❌ Error inserting image: {str(e)}")
+            print(f"❌ Error inserting PDF: {str(e)}")
             # Don't raise the exception to avoid breaking the document processing
+    
+    def _convert_pdf_to_image(self, uploaded_pdf):
+        """
+        Convert the first page of a PDF to an image using PyMuPDF (no external dependencies needed)
+        
+        Args:
+            uploaded_pdf: Streamlit UploadedFile object containing PDF data
+            
+        Returns:
+            bytes: Image data (PNG format)
+        """
+        try:
+            import fitz  # PyMuPDF
+            import io
+            from PIL import Image
+            
+            # Get PDF bytes
+            pdf_bytes = uploaded_pdf.read()
+            
+            # Reset the file pointer for potential future reads
+            uploaded_pdf.seek(0)
+            
+            # Open PDF from bytes
+            pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
+            
+            if pdf_document.page_count == 0:
+                raise ValueError("PDF has no pages")
+            
+            # Get the first page
+            page = pdf_document[0]
+            
+            # Render page to an image (matrix for scaling - 2.0 = 200 DPI equivalent)
+            mat = fitz.Matrix(2.0, 2.0)
+            pix = page.get_pixmap(matrix=mat)
+            
+            # Convert pixmap to PIL Image
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            # Convert PIL Image to bytes
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='PNG')
+            img_byte_arr.seek(0)
+            
+            # Close the PDF
+            pdf_document.close()
+            
+            print("✅ PDF converted to image successfully using PyMuPDF")
+            return img_byte_arr.getvalue()
+            
+        except ImportError as e:
+            raise ImportError(f"PyMuPDF library is required. Install with: pip install PyMuPDF Pillow. Error: {str(e)}")
+        except Exception as e:
+            print(f"❌ Error converting PDF to image: {str(e)}")
+            raise
     
     def _remove_existing_images(self, doc):
         """
@@ -369,24 +429,35 @@ class DocxTemplateProcessor:
             doc: Document object
         """
         try:
-            # Remove images from paragraphs
+            images_removed = 0
+            
+            # Collect all runs with images first, then remove them
+            runs_to_remove = []
+            
+            # Find images in paragraphs
             for paragraph in doc.paragraphs:
                 for run in paragraph.runs:
                     # Check if run contains images
                     if run._element.xpath('.//a:blip'):
-                        # Remove the run that contains the image
-                        run._element.getparent().remove(run._element)
+                        runs_to_remove.append(run)
             
-            # Also check for images in tables
+            # Find images in tables
             for table in doc.tables:
                 for row in table.rows:
                     for cell in row.cells:
                         for paragraph in cell.paragraphs:
                             for run in paragraph.runs:
                                 if run._element.xpath('.//a:blip'):
-                                    run._element.getparent().remove(run._element)
+                                    runs_to_remove.append(run)
             
-            print("✅ Removed existing images from document")
+            # Now remove all the runs with images
+            for run in runs_to_remove:
+                parent = run._element.getparent()
+                if parent is not None:
+                    parent.remove(run._element)
+                    images_removed += 1
+            
+            print(f"✅ Removed {images_removed} existing image(s) from document")
             
         except Exception as e:
             print(f"⚠️ Error removing existing images: {str(e)}")

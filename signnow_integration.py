@@ -570,7 +570,8 @@ class SignNowAPI:
     def create_and_send_document_pair(self, pair_type, client_name, email, 
                                     contract_amount=None, contract_date=None,
                                     deposit_amount=None, total_contract_amount=None,
-                                    sewing_cost=None, pre_production_fee=None):
+                                    sewing_cost=None, pre_production_fee=None,
+                                    tegmade_for=None):
         """
         Create and send a document pair for signing
         
@@ -584,6 +585,7 @@ class SignNowAPI:
             total_contract_amount: Total contract amount (for production contracts)
             sewing_cost: Sewing cost (for production contracts)
             pre_production_fee: Pre-production fee (for production contracts)
+            tegmade_for: Name to replace VITALINA GHINZELLI (optional)
             
         Returns:
             Tuple[bool, str]: (success, message)
@@ -620,7 +622,8 @@ class SignNowAPI:
                 deposit_amount=deposit_amount,
                 total_contract_amount=total_contract_amount,
                 sewing_cost=sewing_cost,
-                pre_production_fee=pre_production_fee
+                pre_production_fee=pre_production_fee,
+                tegmade_for=tegmade_for
             )
             
             # Process terms document
@@ -629,7 +632,8 @@ class SignNowAPI:
                 client_name=client_name,
                 email=email,
                 contract_amount=None,
-                contract_date=contract_date
+                contract_date=contract_date,
+                tegmade_for=tegmade_for
             )
             
             # Upload both documents to SignNow
