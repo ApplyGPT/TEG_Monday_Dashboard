@@ -127,10 +127,19 @@ def main():
     col1, col2 = st.columns(2)
     
     with col1:
-        description = st.text_area(
-            "Service Description",
+        line_item_name = st.text_input(
+            "Line Item Name",
             value="Contract Services",
-            help="Description of the services provided"
+            help="Name of the service/product (appears on invoice)"
+        )
+        
+        # Add description field for main line item
+        main_line_description = st.text_area(
+            "Description (Optional)",
+            value="",
+            height=80,
+            help="Additional description for the main contract line item",
+            placeholder="E.g., Development services for Spring 2025 collection"
         )
         
         # Payment terms - default to "Due in Full"
@@ -160,6 +169,9 @@ def main():
             value=True,
             help="Allow client to pay online through QuickBooks"
         )
+        
+        if enable_payment_link:
+            st.info("✅ Invoice will include payment link for credit card and ACH payments")
     
     # Credit Card Processing Fee
     st.subheader("Payment Processing")
@@ -182,8 +194,66 @@ def main():
             except ValueError:
                 st.warning("Enter valid contract amount to calculate CC fee")
     
+    # Credits and Discounts Section
+    st.subheader("💳 Credits & Discounts")
+    
+    # Initialize session state for credits if not exists
+    if 'credits' not in st.session_state:
+        st.session_state['credits'] = []
+    
+    # Display existing credits
+    if st.session_state['credits']:
+        st.markdown("**<span style='font-size: 18px'>Applied Credits:</span>**", unsafe_allow_html=True)
+        for i, credit in enumerate(st.session_state['credits']):
+            col1, col2, col3 = st.columns([3, 2, 1])
+            with col1:
+                st.markdown(f"<span style='font-size: 16px; color: green'>• {credit['description']}</span>", unsafe_allow_html=True)
+            with col2:
+                st.markdown(f"<span style='font-size: 16px; color: green'>-$ {credit['amount']:,.2f}</span>", unsafe_allow_html=True)
+            with col3:
+                if st.button("🗑️", key=f"remove_credit_{i}", help="Remove this credit"):
+                    st.session_state['credits'].pop(i)
+                    st.rerun()
+    
+    # Add new credit interface
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        new_credit_description = st.text_input(
+            "Credit Description",
+            value="",
+            placeholder="e.g., Promotional Discount, Account Credit",
+            key="new_credit_description",
+            help="Description for the credit/discount"
+        )
+    
+    with col2:
+        new_credit_amount = st.number_input(
+            "Credit Amount ($)",
+            min_value=0.00,
+            value=0.00,
+            step=0.01,
+            format="%.2f",
+            key="new_credit_amount",
+            help="Enter the credit/discount amount (will be subtracted from total)"
+        )
+    
+    with col3:
+        st.markdown("<div style='height: 30px'></div>", unsafe_allow_html=True)
+        if st.button("➕ Add Credit", help="Add this credit to the invoice"):
+            if new_credit_amount > 0 and new_credit_description:
+                st.session_state['credits'].append({
+                    'description': new_credit_description,
+                    'amount': new_credit_amount
+                })
+                st.rerun()
+            elif not new_credit_description:
+                st.warning("Please enter a credit description")
+            else:
+                st.warning("Please enter a credit amount greater than $0.00")
+    
     # Additional Line Items
-    st.subheader("Additional Line Items")
+    st.subheader("📝 Additional Line Items")
     
     # Initialize session state for line items if not exists
     if 'line_items' not in st.session_state:
@@ -303,7 +373,8 @@ def main():
             subtotal = base_amount
             cc_fee = base_amount * 0.03 if include_cc_fee else 0
             additional_items_total = sum(item['amount'] * item['quantity'] for item in st.session_state['line_items'])
-            total_amount = subtotal + cc_fee + additional_items_total
+            credits_total = sum(credit['amount'] for credit in st.session_state.get('credits', []))
+            total_amount = subtotal + cc_fee + additional_items_total - credits_total
             
             # Display breakdown
             col1, col2 = st.columns(2)
@@ -319,6 +390,10 @@ def main():
                         st.write(f"• {item['type']}: $ {item['amount']:,.2f} × {item['quantity']} = $ {item_total:,.2f}")
                     else:
                         st.write(f"• {item['type']}: $ {item_total:,.2f}")
+                
+                # Display credits
+                for credit in st.session_state.get('credits', []):
+                    st.markdown(f"<span style='color: green'>• {credit['description']}: -$ {credit['amount']:,.2f}</span>", unsafe_allow_html=True)
             
             with col2:
                 st.subheader(f"**Amount Due: $ {total_amount:,.2f}**")
@@ -361,9 +436,10 @@ def main():
                 amount_str = contract_amount.replace('$', '').replace(',', '')
                 base_amount = float(amount_str)
                 line_items_data.append({
-                    'type': 'Contract Services',
+                    'type': line_item_name,
                     'amount': base_amount,
-                    'description': description
+                    'description': line_item_name,
+                    'line_description': main_line_description if main_line_description else ''
                 })
                 
                 # Add credit card fee if selected
@@ -384,6 +460,15 @@ def main():
                         'description': item['type']
                     })
                 
+                # Add credits as negative line items
+                for credit in st.session_state.get('credits', []):
+                    line_items_data.append({
+                        'type': credit['description'],
+                        'amount': -credit['amount'],  # Negative amount for credit
+                        'quantity': 1,
+                        'description': credit['description']
+                    })
+                
             except ValueError:
                 st.error("❌ Invalid contract amount format")
                 return
@@ -394,7 +479,7 @@ def main():
                 last_name=last_name,
                 email=email,
                 contract_amount=contract_amount,
-                description=description,
+                description=line_item_name,
                 line_items=line_items_data,
                 payment_terms=custom_terms,
                 enable_payment_link=enable_payment_link,
@@ -403,9 +488,12 @@ def main():
             
             if success:
                 st.success(f"✅ {message}")
+                if enable_payment_link:
+                    st.success("🔗 Payment link included in invoice - customer can pay online via credit card or ACH")
                 st.balloons()
-                # Clear line items after successful creation
+                # Clear line items and credits after successful creation
                 st.session_state['line_items'] = []
+                st.session_state['credits'] = []
             else:
                 st.error(f"❌ {message}")
 

@@ -37,6 +37,7 @@ class QuickBooksAPI:
             self.base_url = "https://quickbooks.api.intuit.com"
         
         self.access_token = None
+        self.items_cache = None  # Cache for QuickBooks items
     
     def authenticate(self) -> bool:
         """
@@ -62,14 +63,36 @@ class QuickBooksAPI:
             auth = requests.auth.HTTPBasicAuth(self.client_id, self.client_secret)
             
             response = requests.post(auth_url, data=data, headers=headers, auth=auth)
+            
+            # Enhanced error reporting
+            if response.status_code != 200:
+                try:
+                    error_details = response.json()
+                    error_msg = error_details.get('error_description', error_details.get('error', 'Unknown error'))
+                    st.error(f"QuickBooks authentication failed: {error_msg}")
+                    
+                    if response.status_code == 400:
+                        st.warning("⚠️ Refresh token expired or invalid. Run 'quickbooks_refresh_token.py' to get a new one.")
+                    
+                    return False
+                except ValueError:
+                    st.error(f"QuickBooks authentication failed with status code: {response.status_code}")
+                    return False
+            
             response.raise_for_status()
             
             auth_response = response.json()
             self.access_token = auth_response.get("access_token")
+            new_refresh_token = auth_response.get("refresh_token")
             
             if not self.access_token:
                 st.error("Failed to get access token from QuickBooks")
                 return False
+            
+            # Inform about new refresh token
+            if new_refresh_token and new_refresh_token != self.refresh_token:
+                st.info("🔄 QuickBooks provided a new refresh token. Consider updating your secrets.toml file.")
+                st.code(f"refresh_token = \"{new_refresh_token}\"", language="toml")
                 
             return True
             
@@ -102,10 +125,21 @@ class QuickBooksAPI:
             return self._get_or_create_sandbox_customer(first_name, last_name, email)
         
         # First check if customer already exists
-        existing_customer = self._find_customer_by_email(email)
-        if existing_customer:
-            st.info(f"✅ Customer already exists with email: {email}")
-            return existing_customer
+        existing_customer_id = self._find_customer_by_email(email)
+        if existing_customer_id:
+            # Get customer details to show the name
+            existing_customer_info = self._get_customer_info(existing_customer_id)
+            if existing_customer_info:
+                existing_name = existing_customer_info.get('DisplayName', 'Unknown')
+                input_name = f"{first_name} {last_name}"
+                if existing_name != input_name:
+                    st.warning(f"⚠️ Customer with email {email} already exists as '{existing_name}'")
+                    st.info("💡 Invoice will be sent to the existing customer. To use a different name, use a different email or update the customer in QuickBooks.")
+                else:
+                    st.info(f"✅ Customer already exists with email: {email}")
+            else:
+                st.info(f"✅ Customer already exists with email: {email}")
+            return existing_customer_id
         
         try:
             customer_url = f"{self.base_url}/v3/company/{self.company_id}/customer"
@@ -213,6 +247,45 @@ class QuickBooksAPI:
             st.error(f"Failed to get sandbox customer: {str(e)}")
             return None
     
+    def _get_customer_info(self, customer_id: str) -> Optional[Dict]:
+        """
+        Get customer information by ID
+        
+        Args:
+            customer_id: Customer ID
+            
+        Returns:
+            Dict: Customer information if found, None otherwise
+        """
+        if not self.access_token:
+            if not self.authenticate():
+                return None
+        
+        try:
+            customer_url = f"{self.base_url}/v3/company/{self.company_id}/customer/{customer_id}"
+            
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Accept": "application/json",
+                "Accept-Encoding": "identity"
+            }
+            
+            response = requests.get(customer_url, headers=headers)
+            
+            if response.status_code == 401:
+                if self.authenticate():
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = requests.get(customer_url, headers=headers)
+                else:
+                    return None
+            
+            response.raise_for_status()
+            customer_data = response.json()
+            return customer_data.get("Customer")
+            
+        except Exception as e:
+            return None
+    
     def _find_customer_by_email(self, email: str) -> Optional[str]:
         """
         Find existing customer by email address
@@ -269,6 +342,172 @@ class QuickBooksAPI:
             st.error(f"Error finding customer: {str(e)}")
             return None
     
+    def _get_all_items(self) -> list:
+        """
+        Fetch all items (Service and Non-Inventory) from QuickBooks and cache them
+        
+        Returns:
+            list: List of item dictionaries
+        """
+        # Return cached items if available
+        if self.items_cache is not None:
+            return self.items_cache
+        
+        if not self.access_token:
+            if not self.authenticate():
+                return []
+        
+        try:
+            query_url = f"{self.base_url}/v3/company/{self.company_id}/query"
+            
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Accept": "application/json",
+                "Accept-Encoding": "identity"
+            }
+            
+            # Query for all active items (includes Service and NonInventory)
+            query = "SELECT * FROM Item WHERE Active = true"
+            params = {"query": query}
+            
+            response = requests.get(query_url, params=params, headers=headers)
+            
+            if response.status_code == 401:
+                if self.authenticate():
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = requests.get(query_url, params=params, headers=headers)
+                else:
+                    return []
+            
+            response.raise_for_status()
+            data = response.json()
+            items = data.get("QueryResponse", {}).get("Item", [])
+            
+            # Cache the items
+            self.items_cache = items
+            
+            return items
+            
+        except Exception as e:
+            print(f"Error fetching items: {str(e)}")
+            return []
+    
+    def _create_service_item(self, item_name: str, description: str = "") -> str:
+        """
+        Create a new service item in QuickBooks
+        
+        Args:
+            item_name: Name of the item to create
+            description: Optional description for the item
+            
+        Returns:
+            str: Created item ID
+        """
+        if not self.access_token:
+            if not self.authenticate():
+                return "2"  # Fallback to generic item
+        
+        try:
+            url = f"{self.base_url}/v3/company/{self.company_id}/items"
+            
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+            
+            # Create service item
+            item_data = {
+                "Name": item_name,
+                "Type": "Service",
+                "Active": True
+            }
+            
+            if description:
+                item_data["Description"] = description
+            
+            payload = {"Item": item_data}
+            
+            response = requests.post(url, headers=headers, json=payload)
+            
+            if response.status_code == 401:
+                if self.authenticate():
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = requests.post(url, headers=headers, json=payload)
+                else:
+                    return "2"
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            created_item = result.get("Item", {})
+            item_id = created_item.get("Id")
+            
+            if item_id:
+                # Clear cache so new item is included in future queries
+                self.items_cache = None
+                return item_id
+            
+            return "2"
+            
+        except Exception as e:
+            print(f"Error creating item '{item_name}': {str(e)}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"Response status: {e.response.status_code}")
+                print(f"Response text: {e.response.text}")
+            return "2"
+
+    def _find_best_item_match(self, line_item_name: str, show_match_info: bool = False) -> str:
+        """
+        Find the best matching QuickBooks item for a line item name
+        Uses exact match, then partial match, then creates new item if needed
+        
+        Args:
+            line_item_name: Name of the line item to match
+            show_match_info: Whether to show matching info in UI (default: False)
+            
+        Returns:
+            str: QuickBooks item ID
+        """
+        items = self._get_all_items()
+        
+        if not items:
+            # Create the item if we can't fetch existing items
+            item_id = self._create_service_item(line_item_name)
+            if show_match_info:
+                st.info(f"✓ '{line_item_name}' → Created new item")
+            return item_id
+        
+        line_item_lower = line_item_name.lower().strip()
+        
+        # 1. Try exact match (case insensitive)
+        for item in items:
+            if item.get('Active', False):
+                item_name = item.get('Name', '').lower().strip()
+                if item_name == line_item_lower:
+                    if show_match_info:
+                        st.info(f"✓ '{line_item_name}' → Exact match: '{item.get('Name')}'")
+                    return item.get('Id')
+        
+        # 2. Try partial match - check if line item name contains item name or vice versa
+        for item in items:
+            if item.get('Active', False):
+                item_name = item.get('Name', '').lower().strip()
+                # Skip the generic "-" item for partial matching
+                if item_name in ['-', '']:
+                    continue
+                # Check both directions
+                if item_name in line_item_lower or line_item_lower in item_name:
+                    if show_match_info:
+                        st.info(f"✓ '{line_item_name}' → Partial match: '{item.get('Name')}'")
+                    return item.get('Id')
+        
+        # 3. Use generic item but override the display name
+        # (Item creation not supported in this QuickBooks plan)
+        if show_match_info:
+            st.info(f"✓ '{line_item_name}' → Using generic item with custom name")
+        return "2"  # Always return generic item ID
+    
     def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
                      email: str, contract_amount: str, description: str = "Contract Services",
                      line_items: list = None, payment_terms: str = "Due in Full",
@@ -313,17 +552,25 @@ class QuickBooksAPI:
                     unit_price = item['amount']
                     line_total = unit_price * quantity
                     
+                    # Get line item details
+                    line_item_name = item.get('type', item.get('description', 'Service'))
+                    line_description = item.get('line_description', '')  # Additional description if provided
+                    
+                    # Try using a specific item that might allow name override
+                    # Use "Production Sewing - Male Hoodie" (ID: 3) as a test
+                    # This item exists in your QB and might allow name override
+                    
                     invoice_lines.append({
-                        "DetailType": "SalesItemLineDetail",
                         "Amount": line_total,
+                        "DetailType": "SalesItemLineDetail",
+                        "Description": f"{line_item_name}" + (f" - {line_description}" if line_description else ""),  # Put line item name in description
                         "SalesItemLineDetail": {
-                            "ItemRef": {
-                                "value": "1"  # Default service item - would need to be configured
-                            },
                             "Qty": quantity,
-                            "UnitPrice": unit_price
-                        },
-                        "Description": item.get('description', item['type'])
+                            "UnitPrice": unit_price,
+                            "ItemRef": {
+                                "value": "2"  # Use generic "-" item, rely on description for name
+                            }
+                        }
                     })
             else:
                 # Convert contract amount to float
@@ -337,12 +584,12 @@ class QuickBooksAPI:
                         "Amount": amount,
                         "SalesItemLineDetail": {
                             "ItemRef": {
-                                "value": "1"  # Default service item - would need to be configured
+                                "value": "2"  # Use generic "-" item
                             },
                             "Qty": 1,
                             "UnitPrice": amount
                         },
-                        "Description": description
+                        "Description": description  # Put the description in the description field
                     }
                 ]
             
@@ -355,7 +602,7 @@ class QuickBooksAPI:
                 "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
-            # Set invoice date
+            # Set invoice date - this shows in the DATE column for each line
             if invoice_date:
                 txn_date = invoice_date.strftime("%Y-%m-%d") if hasattr(invoice_date, 'strftime') else str(invoice_date)
             else:
@@ -375,8 +622,12 @@ class QuickBooksAPI:
                 "AllowOnlineACHPayment": enable_payment_link
             }
             
-            # Add payment terms if not "Due in Full"
-            if payment_terms != "Due in Full":
+            # Add payment terms - always set them explicitly
+            if payment_terms == "Due in Full":
+                # For "Due in Full", we don't set SalesTermRef (defaults to Due on Receipt)
+                pass
+            else:
+                # For Net terms, set the appropriate term
                 invoice_data["SalesTermRef"] = {
                     "value": self._get_payment_term_id(payment_terms)
                 }
@@ -437,26 +688,59 @@ class QuickBooksAPI:
             simulated_invoice_id = f"SIM_{customer_id}_{int(datetime.now().timestamp())}"
             
             st.success(f"✅ Invoice simulation successful!")
-            st.info(f"📋 Simulated Invoice Details:")
-            st.info(f"   • Customer: {first_name} {last_name}")
-            st.info(f"   • Email: {email}")
-            st.info(f"   • Payment Terms: {payment_terms}")
-            st.info(f"   • Online Payment: {'Enabled' if enable_payment_link else 'Disabled'}")
+            st.info(f"📋 Simulated Invoice Preview (Your Custom Template):")
+            st.info(f"")
+            st.info(f"   BILL TO: {first_name} {last_name}")
+            st.info(f"   EMAIL: {email}")
+            st.info(f"   TERMS: {payment_terms}")
             
-            # Display line items breakdown
+            if invoice_date:
+                date_str = invoice_date.strftime('%m/%d/%Y') if hasattr(invoice_date, 'strftime') else str(invoice_date)
+            else:
+                date_str = datetime.now().strftime('%m/%d/%Y')
+            st.info(f"   DATE: {date_str}")
+            st.info(f"")
+            
+            # Display line items in Standard template format
             if line_items:
-                st.info(f"   • Line Items:")
+                st.info(f"   DATE        ACTIVITY                          QTY    RATE        AMOUNT")
+                st.info(f"   " + "-" * 70)
+                
+                subtotal = 0
                 for item in line_items:
                     quantity = item.get('quantity', 1)
                     unit_price = item['amount']
                     line_total = unit_price * quantity
-                    if quantity > 1:
-                        st.info(f"     - {item['type']} (Qty {quantity}): ${line_total:,.2f}")
+                    subtotal += line_total
+                    
+                    item_name = item.get('type', item.get('description', 'Service'))
+                    line_desc = item.get('line_description', '')
+                    
+                    # Format the display like the Standard template
+                    if unit_price < 0:
+                        # Credit/Discount
+                        st.info(f"   {date_str}  {item_name}")
+                        if line_desc:
+                            st.info(f"              {line_desc}")
+                        st.info(f"   {'':>10} {quantity:>3}  ${abs(unit_price):>8,.2f}  -${abs(line_total):>8,.2f}")
                     else:
-                        st.info(f"     - {item['type']}: ${line_total:,.2f}")
+                        st.info(f"   {date_str}  {item_name}")
+                        if line_desc:
+                            st.info(f"              {line_desc}")
+                        st.info(f"   {'':>10} {quantity:>3}  ${unit_price:>8,.2f}   ${line_total:>8,.2f}")
+                    st.info(f"")
+                
+                st.info(f"   " + "-" * 60)
+                st.info(f"   SUBTOTAL: ${subtotal:>10,.2f}")
             else:
                 st.info(f"   • Amount: ${total_amount:,.2f}")
                 st.info(f"   • Description: {description}")
+            
+            st.info(f"")
+            if enable_payment_link:
+                st.info(f"   🔗 Online Payment: **ENABLED** - Credit Card and ACH")
+            else:
+                st.info(f"   Online Payment: Disabled")
             
             st.info(f"   • **Amount Due: ${total_amount:,.2f}**")
             st.info(f"   • Simulated Invoice ID: {simulated_invoice_id}")
@@ -484,13 +768,14 @@ class QuickBooksAPI:
         This would need to be configured based on your QuickBooks setup
         """
         # This is a placeholder - in production, you'd query QuickBooks for actual term IDs
+        # These IDs match your actual QuickBooks payment terms
         term_mapping = {
-            "Net 15": "1",
-            "Net 30": "2", 
-            "Net 45": "3",
+            "Due on receipt": "1",
+            "Net 15": "2",
+            "Net 30": "3", 
             "Net 60": "4"
         }
-        return term_mapping.get(payment_terms, "1")  # Default to Net 30
+        return term_mapping.get(payment_terms, "2")  # Default to Net 30
     
     def send_invoice(self, invoice_id: str, email: str) -> bool:
         """
