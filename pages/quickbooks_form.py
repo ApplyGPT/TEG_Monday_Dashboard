@@ -142,19 +142,15 @@ def main():
             placeholder="E.g., Development services for Spring 2025 collection"
         )
         
-        # Payment terms - default to "Due in Full"
+        # Payment terms - matching QuickBooks exactly
         payment_terms = st.selectbox(
             "Payment Terms",
-            options=["Due in Full", "Net 15", "Net 30", "Net 45", "Net 60", "Custom"],
+            options=["Due on receipt", "Net 15", "Net 30", "Net 60"],
             index=0,
             help="Select payment terms for the invoice"
         )
         
-        # Custom payment terms input
-        if payment_terms == "Custom":
-            custom_terms = st.text_input("Custom Payment Terms", placeholder="e.g., Due upon receipt")
-        else:
-            custom_terms = payment_terms
+        custom_terms = payment_terms
     
     with col2:
         invoice_date = st.date_input(
