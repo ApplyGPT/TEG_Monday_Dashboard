@@ -85,14 +85,6 @@ def main():
     
     template_type = document_types[selected_document]
     
-    # Show document description
-    document_descriptions = {
-        "Development Contract + Development Terms": "Development services agreement with terms and conditions - includes contract amount field",
-        "Production Contract + Production Terms": "Production services agreement with terms and conditions - includes deposit, total amount, sewing cost, and pre-production fee fields"
-    }
-    
-    st.info(f"📋 **{selected_document}**: {document_descriptions[selected_document]}")
-    
     # Get data from session state (from redirect) or URL parameters
     if 'signnow_data' in st.session_state:
         # Data from redirect page

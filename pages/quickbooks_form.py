@@ -142,14 +142,7 @@ def main():
             placeholder="E.g., Development services for Spring 2025 collection"
         )
         
-        # Payment terms - fixed to "Due on receipt"
-        st.text_input(
-            "Payment Terms",
-            value="Due on receipt",
-            disabled=True,
-            help="Payment terms for the invoice"
-        )
-        
+        # Payment terms - fixed to "Due on receipt" (hidden from UI)
         custom_terms = "Due on receipt"
     
     with col2:
