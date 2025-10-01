@@ -152,6 +152,9 @@ class DocxTemplateProcessor:
             # Apply all replacements to this paragraph at once
             if paragraph_replacements:
                 self._replace_multiple_texts_with_bold(paragraph, paragraph_replacements)
+            elif 'Date' in paragraph.text or 'Date:' in paragraph.text:
+                # No replacements but has Date - still fix it (for TEG Intl lines)
+                self._fix_date_line_without_replacement(paragraph)
         
         # Process tables
         for table in doc.tables:
@@ -178,10 +181,36 @@ class DocxTemplateProcessor:
         # Get the full paragraph text
         full_text = paragraph.text
         
-        # Apply all replacements
+        # Check if this is a signature line with Date
+        has_date = 'Date' in full_text or 'Date:' in full_text
+        
+        # Apply all replacements and track length difference
         new_full_text = full_text
+        length_diff = 0
         for old_text, new_text in replacements:
-            new_full_text = new_full_text.replace(old_text, new_text)
+            if old_text in new_full_text:
+                length_diff += len(new_text) - len(old_text)
+                new_full_text = new_full_text.replace(old_text, new_text)
+        
+        # If it's a signature line with Date, adjust spacing to compensate for name length change
+        if has_date and length_diff != 0:
+            date_marker = 'Date:' if 'Date:' in new_full_text else 'Date'
+            if date_marker in new_full_text:
+                # Split before Date
+                parts = new_full_text.rsplit(date_marker, 1)
+                before_date = parts[0]
+                
+                # Count existing tabs at the end
+                tab_count = len(before_date) - len(before_date.rstrip('\t'))
+                
+                # Adjust tabs: if name got longer (positive diff), reduce tabs; if shorter, add tabs
+                # Each tab is roughly 8 chars, so adjust by length_diff / 8
+                tabs_to_adjust = -(length_diff // 8)
+                new_tab_count = max(1, tab_count + tabs_to_adjust)
+                
+                # Rebuild the line
+                before_date_clean = before_date.rstrip('\t ')
+                new_full_text = before_date_clean + ('\t' * new_tab_count) + date_marker
         
         # Clear all runs and rebuild the paragraph
         paragraph.clear()
@@ -216,6 +245,40 @@ class DocxTemplateProcessor:
                 if remaining_text:
                     paragraph.add_run(remaining_text)
                 break
+    
+    def _fix_date_line_without_replacement(self, paragraph):
+        """Fix Date alignment for lines without replacements (TEG Intl lines)"""
+        text = paragraph.text
+        
+        # Only process if it looks like a signature line (has behalf/Signature/TEG)
+        if not any(word in text for word in ['behalf', 'Signature', 'TEG', 'Intl']):
+            return
+        
+        date_marker = 'Date:' if 'Date:' in text else 'Date'
+        if date_marker not in text:
+            return
+        
+        # Split at Date marker
+        parts = text.rsplit(date_marker, 1)
+        before_date = parts[0]
+        
+        # Keep the original tab structure - just ensure it's clean
+        # Remove any trailing spaces but keep tabs
+        before_date_clean = before_date.rstrip(' ')
+        
+        # If there are no tabs at the end, add them (should have at least some tabs)
+        if not before_date_clean.endswith('\t'):
+            # Count how many tabs should be there based on the line
+            # Most signature lines have 5-6 tabs before Date
+            before_date_clean = before_date.rstrip('\t ')
+            before_date_clean += '\t' * 5
+        
+        # Rebuild
+        new_text = before_date_clean + date_marker
+        
+        # Clear and rebuild paragraph
+        paragraph.clear()
+        paragraph.add_run(new_text)
     
     def _replace_text_with_bold(self, paragraph, old_text, new_text):
         """Replace text in a paragraph and make the new text bold"""
@@ -490,13 +553,13 @@ def test_document_processing():
     processor = DocxTemplateProcessor()
     
     # Test data
-    test_client = "Jennifer Smith"
-    test_email = "jennifer@example.com"
+    test_client = "Estevao Cavalcante"
+    test_email = "estevao@example.com"
     test_amount = "$15,865.00"
-    test_date = "September 25, 2025"
+    test_date = "October 01, 2025"
     
     # Test each template type
-    template_types = ['development_contract', 'development_terms', 'terms_conditions', 'production_contract']
+    template_types = ['development_contract', 'development_terms', 'production_contract', 'production_terms']
     
     for template_type in template_types:
         print(f"\n--- Testing {template_type} ---")
