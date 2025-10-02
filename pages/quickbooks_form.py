@@ -254,9 +254,11 @@ def main():
         for i, item in enumerate(st.session_state['line_items']):
             col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
             with col1:
-                # Use 'type' for backwards compatibility
-                item_name = item.get('type', item.get('type', 'Line Item'))
-                st.markdown(f"<span style='font-size: 16px'>• {item_name}</span>", unsafe_allow_html=True)
+                # Show fee type as main name, optional description if provided
+                item_name = item.get('type', 'Line Item')
+                item_desc = item.get('name', '')
+                display_text = f"{item_name}" + (f" ({item_desc})" if item_desc else "")
+                st.markdown(f"<span style='font-size: 16px'>• {display_text}</span>", unsafe_allow_html=True)
             with col2:
                 st.markdown(f"<span style='font-size: 16px'>Qty: {item['quantity']}</span>", unsafe_allow_html=True)
             with col3:
@@ -300,15 +302,6 @@ def main():
     }
     
     with col1:
-        new_line_name = st.text_input(
-            "Line Item Name",
-            value="",
-            placeholder="e.g., Production Sewing, Adjustments",
-            key="new_line_name",
-            help="Name that will appear on the invoice"
-        )
-    
-    with col2:
         fee_types = [
             "Adjustments", "Bagging & Tagging", "Consulting", "Costing", "Cutting",
             "Design", "Development - LA", "Digitizing", "Fabric", "Fitting",
@@ -321,7 +314,16 @@ def main():
             "Fee Type",
             options=fee_types,
             key="new_fee_type",
-            help="Select the type of fee (for default amount)"
+            help="Select the type of fee (will appear as the line item name on invoice)"
+        )
+    
+    with col2:
+        new_line_description = st.text_input(
+            "Line Item Description",
+            value="",
+            placeholder="e.g., Custom details about this item",
+            key="new_line_description",
+            help="Optional description that will appear below the fee type on invoice"
         )
     
     with col3:
@@ -351,16 +353,14 @@ def main():
     with col5:
         st.markdown("<div style='height: 30px'></div>", unsafe_allow_html=True)
         if st.button("➕ Add", help="Add this line item to the invoice"):
-            if new_fee_amount > 0 and new_line_name:
+            if new_fee_amount > 0:
                 st.session_state['line_items'].append({
-                    'name': new_line_name,
-                    'type': new_fee_type,
+                    'type': new_fee_type,  # Fee type is now the main name
+                    'name': new_line_description,  # Description (optional)
                     'quantity': new_fee_quantity,
                     'amount': new_fee_amount
                 })
                 st.rerun()
-            elif not new_line_name:
-                st.warning("Please enter a line item name")
             else:
                 st.warning("Please enter an amount greater than $0.00")
     
@@ -389,11 +389,13 @@ def main():
                     st.write(f"• Credit Card Fee (3%): $ {cc_fee:,.2f}")
                 for item in st.session_state['line_items']:
                     item_total = item['amount'] * item['quantity']
-                    item_name = item.get('type', item.get('type', 'Line Item'))
+                    item_name = item.get('type', 'Line Item')
+                    item_desc = item.get('name', '')
+                    display_text = f"{item_name}" + (f" ({item_desc})" if item_desc else "")
                     if item['quantity'] > 1:
-                        st.write(f"• {item_name}: $ {item['amount']:,.2f} × {item['quantity']} = $ {item_total:,.2f}")
+                        st.write(f"• {display_text}: $ {item['amount']:,.2f} × {item['quantity']} = $ {item_total:,.2f}")
                     else:
-                        st.write(f"• {item_name}: $ {item_total:,.2f}")
+                        st.write(f"• {display_text}: $ {item_total:,.2f}")
                 
                 # Display credits
                 for credit in st.session_state.get('credits', []):
@@ -457,23 +459,24 @@ def main():
                 
                 # Add additional line items
                 for item in st.session_state['line_items']:
-                    item_type = item.get('type', 'Line Item')  # Fee type (Adjustments, Grading, etc.)
-                    item_custom_name = item.get('name', '')  # Custom name if provided
+                    item_type = item.get('type', 'Line Item')  # Fee type (main name)
+                    item_description = item.get('name', '')  # Optional description
                     line_items_data.append({
-                        'type': item_type,  # Use the fee type as the main name
+                        'type': item_type,  # Fee type as the main item name
                         'amount': item['amount'],
                         'quantity': item['quantity'],
-                        'description': item_type,  # Use fee type
-                        'line_description': item_custom_name  # Custom name goes in additional description
+                        'description': item_type,
+                        'line_description': item_description  # Optional description
                     })
                 
                 # Add credits as negative line items
                 for credit in st.session_state.get('credits', []):
                     line_items_data.append({
-                        'type': credit['description'],
+                        'type': 'Credits & Discounts',  # Item name
                         'amount': -credit['amount'],  # Negative amount for credit
                         'quantity': 1,
-                        'description': credit['description']
+                        'description': credit['description'],  # Credit description
+                        'line_description': credit['description']  # Shows as description on invoice
                     })
                 
             except ValueError:

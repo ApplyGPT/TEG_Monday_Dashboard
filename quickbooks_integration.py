@@ -392,6 +392,66 @@ class QuickBooksAPI:
             print(f"Error fetching items: {str(e)}")
             return []
     
+    def _get_default_income_account(self) -> str:
+        """Get the default income account ID for services"""
+        try:
+            # Query for income accounts - try multiple types
+            queries = [
+                "SELECT * FROM Account WHERE AccountType = 'Income' MAXRESULTS 5",
+                "SELECT * FROM Account WHERE Classification = 'Revenue' MAXRESULTS 5"
+            ]
+            
+            for query in queries:
+                url = f"{self.base_url}/v3/company/{self.company_id}/query?query={query}"
+                headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
+                
+                response = requests.get(url, headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    accounts = data.get("QueryResponse", {}).get("Account", [])
+                    if accounts:
+                        # Try to find "Sales" or "Service" income account
+                        for acc in accounts:
+                            acc_name = acc.get("Name", "").lower()
+                            if "sales" in acc_name or "service" in acc_name or "income" in acc_name:
+                                return acc.get("Id")
+                        # If no match, use first available
+                        return accounts[0].get("Id", "1")
+            return "1"  # Fallback ID
+        except Exception as e:
+            print(f"Error getting income account: {e}")
+            return "1"
+    
+    def _get_default_expense_account(self) -> str:
+        """Get the default expense account ID for services"""
+        try:
+            # Query for expense accounts
+            queries = [
+                "SELECT * FROM Account WHERE AccountType = 'Cost of Goods Sold' MAXRESULTS 5",
+                "SELECT * FROM Account WHERE AccountType = 'Expense' MAXRESULTS 5"
+            ]
+            
+            for query in queries:
+                url = f"{self.base_url}/v3/company/{self.company_id}/query?query={query}"
+                headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
+                
+                response = requests.get(url, headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    accounts = data.get("QueryResponse", {}).get("Account", [])
+                    if accounts:
+                        # Try to find COGS or expense account
+                        for acc in accounts:
+                            acc_name = acc.get("Name", "").lower()
+                            if "cost" in acc_name or "expense" in acc_name or "cogs" in acc_name:
+                                return acc.get("Id")
+                        # If no match, use first available
+                        return accounts[0].get("Id", "1")
+            return "1"  # Fallback ID
+        except Exception as e:
+            print(f"Error getting expense account: {e}")
+            return "1"
+    
     def _create_service_item(self, item_name: str, description: str = "") -> str:
         """
         Create a new service item in QuickBooks
@@ -401,7 +461,7 @@ class QuickBooksAPI:
             description: Optional description for the item
             
         Returns:
-            str: Created item ID
+            str: Created item ID or "2" if creation fails
         """
         if not self.access_token:
             if not self.authenticate():
@@ -416,45 +476,50 @@ class QuickBooksAPI:
                 "Accept": "application/json"
             }
             
-            # Create service item
+            # Create service item following QuickBooks API format
+            # Use account IDs from your QuickBooks company:
+            # ID 1 = Services (Income)
+            # ID 12 = Cost of Goods Sold (Expense)
             item_data = {
                 "Name": item_name,
                 "Type": "Service",
-                "Active": True
+                "Active": True,
+                "IncomeAccountRef": {
+                    "value": "1",  # Services income account
+                    "name": "Services"
+                },
+                "ExpenseAccountRef": {
+                    "value": "12",  # Cost of Goods Sold
+                    "name": "Cost of Goods Sold"
+                }
             }
             
             if description:
                 item_data["Description"] = description
             
-            payload = {"Item": item_data}
-            
-            response = requests.post(url, headers=headers, json=payload)
+            response = requests.post(url, headers=headers, json=item_data)
             
             if response.status_code == 401:
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.post(url, headers=headers, json=payload)
+                    response = requests.post(url, headers=headers, json=item_data)
                 else:
                     return "2"
             
-            response.raise_for_status()
-            result = response.json()
+            if response.status_code == 200 or response.status_code == 201:
+                result = response.json()
+                created_item = result.get("Item", {})
+                item_id = created_item.get("Id")
+                
+                if item_id:
+                    # Clear cache so new item is included in future queries
+                    self.items_cache = None
+                    return item_id
             
-            created_item = result.get("Item", {})
-            item_id = created_item.get("Id")
-            
-            if item_id:
-                # Clear cache so new item is included in future queries
-                self.items_cache = None
-                return item_id
-            
+            # If creation failed, fallback to item "2"
             return "2"
             
         except Exception as e:
-            print(f"Error creating item '{item_name}': {str(e)}")
-            if hasattr(e, 'response') and e.response is not None:
-                print(f"Response status: {e.response.status_code}")
-                print(f"Response text: {e.response.text}")
             return "2"
 
     def _find_best_item_match(self, line_item_name: str, show_match_info: bool = False) -> str:
@@ -502,7 +567,17 @@ class QuickBooksAPI:
                         st.info(f"✓ '{line_item_name}' → Partial match: '{item.get('Name')}'")
                     return item.get('Id')
         
-        # 3. No match found - find and use the "-" generic item (must be Service or NonInventory, not Category)
+        # 3. No match found - try to create the item
+        if show_match_info:
+            st.info(f"📝 No match found for '{line_item_name}', attempting to create...")
+        
+        item_id = self._create_service_item(line_item_name)
+        
+        # If creation was successful, return the new item ID
+        if item_id != "2":
+            return item_id
+        
+        # 4. Creation failed - find and use the "-" generic item as fallback
         for item in items:
             if item.get('Active', False):
                 item_name = item.get('Name', '').strip()
@@ -510,12 +585,12 @@ class QuickBooksAPI:
                 # Only use "-" if it's a Service or NonInventory item, not a Category
                 if item_name == '-' and item_type in ['Service', 'NonInventory']:
                     if show_match_info:
-                        st.info(f"✓ '{line_item_name}' → Using generic '-' item")
+                        st.warning(f"⚠️ '{line_item_name}' → Item creation failed, using generic '-' item")
                     return item.get('Id')
         
-        # 4. Fallback to item ID "2" (Production Sewing) if "-" not found or is a Category
+        # 5. Last resort: Fallback to item ID "2" if "-" not found
         if show_match_info:
-            st.info(f"✓ '{line_item_name}' → Using default item ID 2")
+            st.warning(f"⚠️ '{line_item_name}' → Using default item ID 2")
         return "2"
     
     def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
@@ -564,18 +639,26 @@ class QuickBooksAPI:
                     line_total = unit_price * quantity
                     
                     # Get line item details
-                    line_item_type = item.get('type', item.get('description', 'Service'))  # Fee type (main name)
-                    line_custom_name = item.get('line_description', '')  # Custom description if provided
+                    line_item_type = item.get('type', item.get('description', 'Service'))  # Fee type (main item name)
+                    line_item_description = item.get('line_description', item.get('name', ''))  # Optional description
                     
-                    # Use "-" item and show appropriate description
-                    item_id = self._find_best_item_match("-", show_match_info=False)
-                    
-                    # For main contract line (Contract Services), show only the custom description if provided
-                    # For other fee types, show only the fee type name (ignore custom name)
-                    if line_item_type == "Contract Services" and line_custom_name:
-                        full_description = line_custom_name  # Show "Summer Collection" only
+                    # Determine what to show based on the line item type
+                    if line_item_type == "Contract Services":
+                        # Main contract: Use "Contract Services" as item, show custom description
+                        item_id = self._find_best_item_match(line_item_type, show_match_info=False)
+                        full_description = line_item_description if line_item_description else ""  # "Summer Collection"
+                    elif line_item_type == "Credit Card Processing Fee":
+                        # CC Fee: Use "Credit Card Processing Fee" as item, add description
+                        item_id = self._find_best_item_match(line_item_type, show_match_info=False)
+                        full_description = "3% processing fee for credit card payments"
+                    elif line_item_type == "Credits & Discounts":
+                        # Credits: Use "Credits & Discounts" as item, credit description in description field
+                        item_id = self._find_best_item_match(line_item_type, show_match_info=False)
+                        full_description = line_item_description if line_item_description else item.get('description', '')
                     else:
-                        full_description = line_item_type  # Show fee type only (Bagging & Tagging, Development - LA, etc.)
+                        # Additional line items: Use fee type as item, optional description
+                        item_id = self._find_best_item_match(line_item_type, show_match_info=False)
+                        full_description = line_item_description if line_item_description else ""
                     
                     invoice_lines.append({
                         "Amount": line_total,
@@ -595,8 +678,8 @@ class QuickBooksAPI:
                 amount = float(amount_str)
                 total_amount = amount
                 
-                # Use "-" item and show description
-                item_id = self._find_best_item_match("-", show_match_info=False)
+                # Find or create item for the description (e.g., "Contract Services")
+                item_id = self._find_best_item_match(description, show_match_info=False)
                 
                 invoice_lines = [
                     {
@@ -604,12 +687,12 @@ class QuickBooksAPI:
                         "Amount": amount,
                         "SalesItemLineDetail": {
                             "ItemRef": {
-                                "value": item_id  # Use "-" item
+                                "value": item_id  # Use matched or created item
                             },
                             "Qty": 1,
                             "UnitPrice": amount
                         },
-                        "Description": description  # Show the line item name (e.g., "Contract Services")
+                        "Description": ""  # No additional description needed
                     }
                 ]
             
