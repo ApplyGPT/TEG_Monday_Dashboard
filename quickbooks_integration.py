@@ -408,7 +408,7 @@ class QuickBooksAPI:
                 return "2"  # Fallback to generic item
         
         try:
-            url = f"{self.base_url}/v3/company/{self.company_id}/items"
+            url = f"{self.base_url}/v3/company/{self.company_id}/item"
             
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
@@ -502,11 +502,21 @@ class QuickBooksAPI:
                         st.info(f"✓ '{line_item_name}' → Partial match: '{item.get('Name')}'")
                     return item.get('Id')
         
-        # 3. Use generic item but override the display name
-        # (Item creation not supported in this QuickBooks plan)
+        # 3. No match found - find and use the "-" generic item (must be Service or NonInventory, not Category)
+        for item in items:
+            if item.get('Active', False):
+                item_name = item.get('Name', '').strip()
+                item_type = item.get('Type', '')
+                # Only use "-" if it's a Service or NonInventory item, not a Category
+                if item_name == '-' and item_type in ['Service', 'NonInventory']:
+                    if show_match_info:
+                        st.info(f"✓ '{line_item_name}' → Using generic '-' item")
+                    return item.get('Id')
+        
+        # 4. Fallback to item ID "2" (Production Sewing) if "-" not found or is a Category
         if show_match_info:
-            st.info(f"✓ '{line_item_name}' → Using generic item with custom name")
-        return "2"  # Always return generic item ID
+            st.info(f"✓ '{line_item_name}' → Using default item ID 2")
+        return "2"
     
     def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
                      email: str, contract_amount: str, description: str = "Contract Services",
@@ -530,9 +540,10 @@ class QuickBooksAPI:
         Returns:
             str: Invoice ID if successful, None otherwise
         """
-        if not self.access_token:
-            if not self.authenticate():
-                return None
+        # Always re-authenticate to ensure we have a fresh access token
+        if not self.authenticate():
+            st.error("❌ Failed to authenticate with QuickBooks")
+            return None
         
         # In sandbox mode, we can't create invoices, so simulate the process
         if self.sandbox:
@@ -553,22 +564,28 @@ class QuickBooksAPI:
                     line_total = unit_price * quantity
                     
                     # Get line item details
-                    line_item_name = item.get('type', item.get('description', 'Service'))
-                    line_description = item.get('line_description', '')  # Additional description if provided
+                    line_item_type = item.get('type', item.get('description', 'Service'))  # Fee type (main name)
+                    line_custom_name = item.get('line_description', '')  # Custom description if provided
                     
-                    # Try using a specific item that might allow name override
-                    # Use "Production Sewing - Male Hoodie" (ID: 3) as a test
-                    # This item exists in your QB and might allow name override
+                    # Use "-" item and show appropriate description
+                    item_id = self._find_best_item_match("-", show_match_info=False)
+                    
+                    # For main contract line (Contract Services), show only the custom description if provided
+                    # For other fee types, show only the fee type name (ignore custom name)
+                    if line_item_type == "Contract Services" and line_custom_name:
+                        full_description = line_custom_name  # Show "Summer Collection" only
+                    else:
+                        full_description = line_item_type  # Show fee type only (Bagging & Tagging, Development - LA, etc.)
                     
                     invoice_lines.append({
                         "Amount": line_total,
                         "DetailType": "SalesItemLineDetail",
-                        "Description": f"{line_item_name}" + (f" - {line_description}" if line_description else ""),  # Put line item name in description
+                        "Description": full_description,  # Fee type only
                         "SalesItemLineDetail": {
                             "Qty": quantity,
                             "UnitPrice": unit_price,
                             "ItemRef": {
-                                "value": "2"  # Use generic "-" item, rely on description for name
+                                "value": item_id  # Use "-" item
                             }
                         }
                     })
@@ -578,18 +595,21 @@ class QuickBooksAPI:
                 amount = float(amount_str)
                 total_amount = amount
                 
+                # Use "-" item and show description
+                item_id = self._find_best_item_match("-", show_match_info=False)
+                
                 invoice_lines = [
                     {
                         "DetailType": "SalesItemLineDetail",
                         "Amount": amount,
                         "SalesItemLineDetail": {
                             "ItemRef": {
-                                "value": "2"  # Use generic "-" item
+                                "value": item_id  # Use "-" item
                             },
                             "Qty": 1,
                             "UnitPrice": amount
                         },
-                        "Description": description  # Put the description in the description field
+                        "Description": description  # Show the line item name (e.g., "Contract Services")
                     }
                 ]
             
@@ -647,7 +667,11 @@ class QuickBooksAPI:
                     st.error("Failed to refresh access token")
                     return None
             
-            response.raise_for_status()
+            # Check response status
+            if response.status_code != 200:
+                st.error(f"❌ QuickBooks API Error (Status {response.status_code})")
+                st.error(f"Response: {response.text[:500]}")
+                return None
             
             invoice_response = response.json()
             invoice = invoice_response.get("Invoice")

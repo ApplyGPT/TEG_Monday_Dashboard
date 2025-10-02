@@ -254,7 +254,9 @@ def main():
         for i, item in enumerate(st.session_state['line_items']):
             col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
             with col1:
-                st.markdown(f"<span style='font-size: 16px'>• {item['type']}</span>", unsafe_allow_html=True)
+                # Use 'type' for backwards compatibility
+                item_name = item.get('type', item.get('type', 'Line Item'))
+                st.markdown(f"<span style='font-size: 16px'>• {item_name}</span>", unsafe_allow_html=True)
             with col2:
                 st.markdown(f"<span style='font-size: 16px'>Qty: {item['quantity']}</span>", unsafe_allow_html=True)
             with col3:
@@ -269,9 +271,44 @@ def main():
                     st.rerun()
     
     # Add new line item interface
-    col1, col2, col3, col4 = st.columns([2, 1, 2, 1])
+    col1, col2, col3, col4, col5 = st.columns([2, 2, 1, 2, 1])
+    
+    # Default values for each fee type
+    fee_defaults = {
+        "Adjustments": 50.00,
+        "Bagging & Tagging": 25.00,
+        "Consulting": 150.00,
+        "Costing": 75.00,
+        "Cutting": 100.00,
+        "Design": 200.00,
+        "Development - LA": 300.00,
+        "Digitizing": 125.00,
+        "Fabric": 0.00,
+        "Fitting": 80.00,
+        "Grading": 90.00,
+        "Marketing": 175.00,
+        "Patternmaking": 120.00,
+        "Pre-production": 150.00,
+        "Print-outs": 30.00,
+        "Production COD": 200.00,
+        "Production Sewing": 180.00,
+        "Sample Production": 250.00,
+        "Send Out": 40.00,
+        "Shipping/Freight": 0.00,
+        "Sourcing": 100.00,
+        "Trim": 0.00
+    }
     
     with col1:
+        new_line_name = st.text_input(
+            "Line Item Name",
+            value="",
+            placeholder="e.g., Production Sewing, Adjustments",
+            key="new_line_name",
+            help="Name that will appear on the invoice"
+        )
+    
+    with col2:
         fee_types = [
             "Adjustments", "Bagging & Tagging", "Consulting", "Costing", "Cutting",
             "Design", "Development - LA", "Digitizing", "Fabric", "Fitting",
@@ -280,40 +317,14 @@ def main():
             "Shipping/Freight", "Sourcing", "Trim"
         ]
         
-        # Default values for each fee type (you can modify these later)
-        fee_defaults = {
-            "Adjustments": 50.00,
-            "Bagging & Tagging": 25.00,
-            "Consulting": 150.00,
-            "Costing": 75.00,
-            "Cutting": 100.00,
-            "Design": 200.00,
-            "Development - LA": 300.00,
-            "Digitizing": 125.00,
-            "Fabric": 0.00,  # Will vary by project
-            "Fitting": 80.00,
-            "Grading": 90.00,
-            "Marketing": 175.00,
-            "Patternmaking": 120.00,
-            "Pre-production": 150.00,
-            "Print-outs": 30.00,
-            "Production COD": 200.00,
-            "Production Sewing": 180.00,
-            "Sample Production": 250.00,
-            "Send Out": 40.00,
-            "Shipping/Freight": 0.00,  # Will vary by location
-            "Sourcing": 100.00,
-            "Trim": 0.00  # Will vary by project
-        }
-        
         new_fee_type = st.selectbox(
             "Fee Type",
             options=fee_types,
             key="new_fee_type",
-            help="Select the type of fee to add"
+            help="Select the type of fee (for default amount)"
         )
     
-    with col2:
+    with col3:
         new_fee_quantity = st.number_input(
             "Quantity",
             min_value=1,
@@ -323,7 +334,7 @@ def main():
             help="Enter the quantity for this line item"
         )
     
-    with col3:
+    with col4:
         # Get default amount for selected fee type
         default_amount = fee_defaults.get(new_fee_type, 0.00)
         
@@ -334,19 +345,22 @@ def main():
             step=0.01,
             format="%.2f",
             key="new_fee_amount",
-            help=f"Enter the dollar amount for {new_fee_type}"
+            help=f"Enter the dollar amount"
         )
     
-    with col4:
+    with col5:
         st.markdown("<div style='height: 30px'></div>", unsafe_allow_html=True)
         if st.button("➕ Add", help="Add this line item to the invoice"):
-            if new_fee_amount > 0:
+            if new_fee_amount > 0 and new_line_name:
                 st.session_state['line_items'].append({
+                    'name': new_line_name,
                     'type': new_fee_type,
                     'quantity': new_fee_quantity,
                     'amount': new_fee_amount
                 })
                 st.rerun()
+            elif not new_line_name:
+                st.warning("Please enter a line item name")
             else:
                 st.warning("Please enter an amount greater than $0.00")
     
@@ -375,10 +389,11 @@ def main():
                     st.write(f"• Credit Card Fee (3%): $ {cc_fee:,.2f}")
                 for item in st.session_state['line_items']:
                     item_total = item['amount'] * item['quantity']
+                    item_name = item.get('type', item.get('type', 'Line Item'))
                     if item['quantity'] > 1:
-                        st.write(f"• {item['type']}: $ {item['amount']:,.2f} × {item['quantity']} = $ {item_total:,.2f}")
+                        st.write(f"• {item_name}: $ {item['amount']:,.2f} × {item['quantity']} = $ {item_total:,.2f}")
                     else:
-                        st.write(f"• {item['type']}: $ {item_total:,.2f}")
+                        st.write(f"• {item_name}: $ {item_total:,.2f}")
                 
                 # Display credits
                 for credit in st.session_state.get('credits', []):
@@ -442,11 +457,14 @@ def main():
                 
                 # Add additional line items
                 for item in st.session_state['line_items']:
+                    item_type = item.get('type', 'Line Item')  # Fee type (Adjustments, Grading, etc.)
+                    item_custom_name = item.get('name', '')  # Custom name if provided
                     line_items_data.append({
-                        'type': item['type'],
+                        'type': item_type,  # Use the fee type as the main name
                         'amount': item['amount'],
                         'quantity': item['quantity'],
-                        'description': item['type']
+                        'description': item_type,  # Use fee type
+                        'line_description': item_custom_name  # Custom name goes in additional description
                     })
                 
                 # Add credits as negative line items
