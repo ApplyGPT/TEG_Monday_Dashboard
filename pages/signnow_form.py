@@ -34,6 +34,16 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Custom CSS to hide all pages from sidebar navigation
+st.markdown("""
+<style>
+    /* Hide the entire sidebar navigation */
+    [data-testid="stSidebarNav"] {
+        display: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 def main():
     """Main SignNow form function"""
     st.title("📝 SignNow Contract Form")

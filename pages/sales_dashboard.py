@@ -14,6 +14,17 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Custom CSS to hide QuickBooks and SignNow pages from sidebar
+st.markdown("""
+<style>
+    /* Hide QuickBooks and SignNow pages from sidebar */
+    [data-testid="stSidebarNav"] a[href*="quickbooks_form"],
+    [data-testid="stSidebarNav"] a[href*="signnow_form"] {
+        display: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Helper function to format numbers with K format
 def format_currency(value):
     """Format currency values with K for thousands"""
