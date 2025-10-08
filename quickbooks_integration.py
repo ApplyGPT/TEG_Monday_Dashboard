@@ -5,6 +5,8 @@ Handles invoice creation and sending
 
 import requests
 import json
+import os
+import toml
 from typing import Dict, Optional, Tuple
 import streamlit as st
 from datetime import datetime
@@ -89,10 +91,37 @@ class QuickBooksAPI:
                 st.error("Failed to get access token from QuickBooks")
                 return False
             
-            # Inform about new refresh token
+            # IMPORTANT: Automatically update refresh token if a new one is provided
             if new_refresh_token and new_refresh_token != self.refresh_token:
-                st.info("🔄 QuickBooks provided a new refresh token. Consider updating your secrets.toml file.")
-                st.code(f"refresh_token = \"{new_refresh_token}\"", language="toml")
+                try:
+                    # Update the refresh token in memory
+                    old_refresh_token = self.refresh_token
+                    self.refresh_token = new_refresh_token
+                    
+                    # Update secrets.toml file with new refresh token
+                    secrets_path = os.path.join('.streamlit', 'secrets.toml')
+                    
+                    # Read current secrets
+                    with open(secrets_path, 'r') as f:
+                        secrets_config = toml.load(f)
+                    
+                    # Update the refresh token
+                    if 'quickbooks' in secrets_config:
+                        secrets_config['quickbooks']['refresh_token'] = new_refresh_token
+                        
+                        # Write back to file
+                        with open(secrets_path, 'w') as f:
+                            toml.dump(secrets_config, f)
+                        
+                        st.success("🔄 QuickBooks refresh token automatically updated in secrets.toml")
+                    else:
+                        st.warning("⚠️ New refresh token received but could not update secrets.toml")
+                        st.code(f"refresh_token = \"{new_refresh_token}\"", language="toml")
+                        
+                except Exception as e:
+                    st.warning(f"⚠️ Could not auto-update refresh token: {str(e)}")
+                    st.info("Please manually update secrets.toml with this new refresh token:")
+                    st.code(f"refresh_token = \"{new_refresh_token}\"", language="toml")
                 
             return True
             
