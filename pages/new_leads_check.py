@@ -1,8 +1,9 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import plotly.express as px
+import calendar
 
 # Page configuration
 st.set_page_config(
@@ -329,6 +330,102 @@ def filter_leads_by_date(df, selected_date):
     
     return filtered_df
 
+def create_monthly_calendar(df, selected_date):
+    """Create a monthly calendar view showing lead counts by day"""
+    if df.empty:
+        return None, None
+    
+    # Get the month from the selected date
+    selected_month = selected_date.replace(day=1)
+    
+    # Get the last day of the month
+    if selected_month.month == 12:
+        next_month = selected_month.replace(year=selected_month.year + 1, month=1)
+    else:
+        next_month = selected_month.replace(month=selected_month.month + 1)
+    
+    last_day = (next_month - timedelta(days=1)).day
+    
+    # Create date range for the month
+    month_dates = []
+    for day in range(1, last_day + 1):
+        month_dates.append(selected_month.replace(day=day))
+    
+    # Count leads for each day
+    daily_counts = {}
+    for month_date in month_dates:
+        day_leads = df[df['Effective Date Date'] == month_date]
+        daily_counts[month_date] = len(day_leads)
+    
+    return daily_counts, selected_month
+
+def display_calendar_view(daily_counts, selected_month):
+    """Display the calendar view with lead counts"""
+    if not daily_counts:
+        return
+    
+    month_name = selected_month.strftime('%B %Y')
+    
+    # Create calendar grid
+    cal = calendar.monthcalendar(selected_month.year, selected_month.month)
+      
+    # Create calendar grid with Streamlit columns
+    col_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    
+    # Header row
+    cols = st.columns(7)
+    for i, col_name in enumerate(col_names):
+        with cols[i]:
+            st.markdown(f"**{col_name}**")
+    
+    # Calendar rows
+    for week in cal:
+        cols = st.columns(7)
+        for i, day in enumerate(week):
+            with cols[i]:
+                if day == 0:
+                    st.write("")  # Empty cell for days not in this month
+                else:
+                    current_date = selected_month.replace(day=day)
+                    lead_count = daily_counts.get(current_date, 0)
+                    
+                    if lead_count > 0:
+                        # Color code based on lead count
+                        if lead_count >= 20:
+                            color = "#f0f0f0"  
+                        elif lead_count >= 10:
+                            color = "#f0f0f0"  
+                        else:
+                            color = "#f0f0f0"  
+                        
+                        st.markdown(f"""
+                        <div style="
+                            background-color: {color};
+                            color: 666666;
+                            padding: 8px;
+                            border-radius: 8px;
+                            text-align: center;
+                            margin: 2px;
+                        ">
+                            <strong>{day}</strong><br>
+                            <small>{lead_count} leads</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="
+                            background-color: #f0f0f0;
+                            color: #666666;
+                            padding: 8px;
+                            border-radius: 8px;
+                            text-align: center;
+                            margin: 2px;
+                        ">
+                            <strong>{day}</strong><br>
+                            <small>0 leads</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+
 def main():
     """Main application function"""
     # Header
@@ -343,13 +440,6 @@ def main():
         if st.button("🔄 Refresh Data"):
             st.cache_data.clear()
             st.rerun()
-        
-        # Display board information
-        st.subheader("📋 Boards")
-        for board_name, board_id in BOARDS.items():
-            st.text(f"{board_name}: {board_id}")
-        
-        st.info("📌 Fetching ALL groups from each board, excluding groups that start with 'No', 'Not', or 'Spam'")
     
     # Date selector
     st.subheader("📅 Select Date")
@@ -416,6 +506,12 @@ def main():
         # Show filtered results
         total_leads = len(filtered_df)
         st.metric("Leads Found", total_leads)
+        
+        # Display monthly calendar view below the metric
+        daily_counts, calendar_month = create_monthly_calendar(df, selected_date)
+        if daily_counts:
+            display_calendar_view(daily_counts, calendar_month)
+            st.markdown("---")
         
         # Display the filtered data with date information
         display_columns = ['Item Name', 'Current Board', 'Group']     

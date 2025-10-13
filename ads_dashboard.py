@@ -28,13 +28,18 @@ def load_credentials():
             st.error("API token not found in secrets.toml. Please add your Monday.com API token.")
             st.stop()
             
-        if 'ads_board_id' not in monday_config:
-            st.error("Ads board ID not found in secrets.toml. Please add your ads board ID.")
-            st.stop()
+        required_board_ids = ['ads_board_id', 'sales_board_id']
+        
+        board_ids = {}
+        for board_id_key in required_board_ids:
+            if board_id_key not in monday_config:
+                st.error(f"{board_id_key} not found in secrets.toml. Please add the board ID.")
+                st.stop()
+            board_ids[board_id_key] = int(monday_config[board_id_key])
         
         return {
             'api_token': monday_config['api_token'],
-            'ads_board_id': int(monday_config['ads_board_id'])
+            **board_ids
         }
     except Exception as e:
         st.error(f"Error reading secrets: {str(e)}")
@@ -43,6 +48,7 @@ def load_credentials():
 credentials = load_credentials()
 API_TOKEN = credentials['api_token']
 ADS_BOARD_ID = credentials['ads_board_id']
+SALES_BOARD_ID = credentials['sales_board_id']
 
 # Custom CSS for better embedding and responsive design
 st.markdown("""
@@ -97,8 +103,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_monday_data():
-    """Get all items from Monday.com board with caching"""
+def get_ads_data():
+    """Get all items from Ads board with caching"""
     url = "https://api.monday.com/v2"
     headers = {
         "Authorization": API_TOKEN,
@@ -129,12 +135,8 @@ def get_monday_data():
     try:
         response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
         
-        # Debug information
-        st.write(f"Response Status Code: {response.status_code}")
-        
         if response.status_code == 401:
             st.error("401 Unauthorized: Check your API token and permissions.")
-            st.write("Make sure your API token is valid and has access to the board.")
             return None
         
         response.raise_for_status()
@@ -143,16 +145,63 @@ def get_monday_data():
         st.error("Request timed out. Please try again.")
         return None
     except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching data: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            st.write(f"Response content: {e.response.text}")
+        st.error(f"Error fetching ads data: {str(e)}")
         return None
     except Exception as e:
         st.error(f"Unexpected error: {str(e)}")
         return None
 
-def format_data(data):
-    """Convert Monday.com data to pandas DataFrame"""
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_sales_data():
+    """Get all items from Sales board with caching"""
+    url = "https://api.monday.com/v2"
+    headers = {
+        "Authorization": API_TOKEN,
+        "Content-Type": "application/json",
+    }
+    
+    query = f"""
+    query {{
+        boards(ids: {SALES_BOARD_ID}) {{
+            items_page(limit: 500) {{
+                items {{
+                    id
+                    name
+                    state
+                    created_at
+                    updated_at
+                    column_values {{
+                        id
+                        text
+                        value
+                    }}
+                }}
+            }}
+        }}
+    }}
+    """
+    
+    try:
+        response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
+        
+        if response.status_code == 401:
+            st.error("401 Unauthorized: Check your API token and permissions.")
+            return None
+        
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.Timeout:
+        st.error("Request timed out. Please try again.")
+        return None
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching sales data: {str(e)}")
+        return None
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
+        return None
+
+def format_ads_data(data):
+    """Convert Monday.com ads data to pandas DataFrame"""
     if not data or "data" not in data or "boards" not in data["data"]:
         return pd.DataFrame()
     
@@ -180,7 +229,7 @@ def format_data(data):
         # Add specific columns we want to display
         for col_val in item.get("column_values", []):
             col_id = col_val.get("id", "")
-            text = col_val.get("text", "")
+            text = col_val.get("text") or ""
             value = col_val.get("value", "")
             
             # Map specific column IDs to our desired column names
@@ -209,6 +258,146 @@ def format_data(data):
     
     return df
 
+def format_sales_data(data):
+    """Convert Monday.com sales data to pandas DataFrame with ROAS filtering"""
+    if not data or "data" not in data or "boards" not in data["data"]:
+        st.warning("No sales data found in API response")
+        return pd.DataFrame()
+    
+    boards = data["data"]["boards"]
+    if not boards or not boards[0].get("items_page"):
+        st.warning("No items page found in sales board")
+        return pd.DataFrame()
+    
+    items_page = boards[0]["items_page"]
+    if not items_page or not items_page.get("items"):
+        st.warning("No items found in sales board")
+        return pd.DataFrame()
+    
+    items = items_page["items"]
+    if not items:
+        st.warning("Empty items list in sales board")
+        return pd.DataFrame()
+    
+    # Convert to DataFrame
+    records = []
+    for item in items:
+        try:
+            record = {
+                "Item Name": item.get("name", ""),
+                "Status": "",
+                "Channel": "",
+                "Value": "",
+                "Date Created": item.get("created_at", ""),
+                "Date Closed": ""
+            }
+            
+            # Extract column values
+            for col_val in item.get("column_values", []):
+                try:
+                    col_id = col_val.get("id", "")
+                    text = (col_val.get("text") or "").strip()
+                    value = col_val.get("value", "")
+                    
+                    
+                    # Map specific column IDs based on the actual Monday.com structure
+                    # Status field - using the color column that shows "Sales Qualified"
+                    if col_id == "color_mknxd1j2":
+                        record["Status"] = text
+                    # Channel/Source field
+                    elif col_id == "source":
+                        record["Channel"] = text
+                    # Contract amount (revenue) field
+                    elif col_id == "contract_amt":
+                        record["Value"] = text
+                    # Date closed field - map to the correct column ID
+                    elif col_id == "date_mktq7npm":  # This is likely the closed date column
+                        record["Date Closed"] = text
+                    elif "closed" in col_id.lower() and "date" in col_id.lower():
+                        record["Date Closed"] = text
+                    # Fallback mappings for other possible columns
+                    elif col_id == "status_14__1":  # This shows "OTHER" in your data
+                        if record["Channel"] == "":  # Only use if source is empty
+                            record["Channel"] = text
+                    elif any(word in col_id.lower() for word in ["status", "stage", "state", "phase"]) and record["Status"] == "":
+                        record["Status"] = text
+                    elif any(word in col_id.lower() for word in ["channel", "source", "utm", "traffic", "medium"]) and record["Channel"] == "":
+                        record["Channel"] = text
+                    elif any(word in col_id.lower() for word in ["value", "revenue", "amount", "price", "deal", "contract"]) and record["Value"] == "":
+                        record["Value"] = text
+                except Exception as e:
+                    # Skip problematic column values
+                    continue
+            
+            records.append(record)
+        except Exception as e:
+            # Skip problematic items
+            continue
+    
+    df = pd.DataFrame(records)
+    
+    # Convert date columns
+    df['Date Created'] = pd.to_datetime(df['Date Created'], errors='coerce')
+    df['Date Closed'] = pd.to_datetime(df['Date Closed'], errors='coerce')
+    
+    # Convert Value to numeric (remove $ and commas)
+    df['Value'] = df['Value'].astype(str).str.replace('$', '').str.replace(',', '').str.replace(' ', '')
+    df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
+    
+    # Create Month/Year column based on Date Created
+    df['Month Year'] = df['Date Created'].dt.strftime('%B %Y')
+    df['Year'] = df['Date Created'].dt.year
+    
+    return df
+
+def filter_roas_data(df):
+    """Filter sales data for ROAS calculation"""
+    # Status: Include various forms of closed/won deals
+    closed_statuses = ['closed', 'sales qualified', 'qualified', 'win', 'won', 'complete']
+    
+    # Channel: Include paid search and related channels
+    paid_search_channels = ['paid search', 'search', 'google', 'ppc', 'adwords', 'google ads', 'other']
+    
+    df_roas = df[
+        (df['Status'].str.contains('|'.join(closed_statuses), case=False, na=False)) &
+        (df['Channel'].str.contains('|'.join(paid_search_channels), case=False, na=False))
+    ].copy()
+    
+    return df_roas, closed_statuses, paid_search_channels
+
+def calculate_roas(ads_df, sales_df):
+    """Calculate ROAS (Return on Ad Spend) by month"""
+    if ads_df.empty or sales_df.empty:
+        return pd.DataFrame()
+    
+    # Group ads data by month/year
+    ads_monthly = ads_df.groupby('Month Year')['Google Adspend'].sum().reset_index()
+    
+    # Group sales data by month/year (Date Created)
+    sales_monthly = sales_df.groupby('Month Year')['Value'].sum().reset_index()
+    
+    # Merge the data
+    roas_df = pd.merge(ads_monthly, sales_monthly, on='Month Year', how='outer')
+    
+    # Fill missing values with 0
+    roas_df['Google Adspend'] = roas_df['Google Adspend'].fillna(0)
+    roas_df['Value'] = roas_df['Value'].fillna(0)
+    
+    # Calculate ROAS (Revenue / Ad Spend)
+    roas_df['ROAS'] = roas_df.apply(
+        lambda row: row['Value'] / row['Google Adspend'] if row['Google Adspend'] > 0 else 0,
+        axis=1
+    )
+    
+    # Filter for 2025 only
+    roas_df = roas_df[roas_df['Month Year'].str.contains('2025', na=False)]
+    
+    # Sort by date
+    roas_df['Date'] = pd.to_datetime(roas_df['Month Year'], errors='coerce')
+    roas_df = roas_df.sort_values('Date')
+    
+    return roas_df
+
 def main():
     """Main application function"""
     # Header
@@ -218,6 +407,7 @@ def main():
     with st.sidebar:
         st.header("⚙️ Settings")
         st.info(f"Ads Board ID: {ADS_BOARD_ID}")
+        st.info(f"Sales Board ID: {SALES_BOARD_ID}")
         st.info(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Refresh button
@@ -227,107 +417,185 @@ def main():
     
     # Load data
     with st.spinner("Loading data from Monday.com..."):
-        data = get_monday_data()
-        df = format_data(data)
+        try:
+            ads_data = get_ads_data()
+            sales_data = get_sales_data()
+            ads_df = format_ads_data(ads_data)
+            sales_df_raw = format_sales_data(sales_data)
+            
+            # Filter sales data for ROAS calculation
+            sales_df, closed_statuses, paid_search_channels = filter_roas_data(sales_df_raw)
+        except Exception as e:
+            st.error(f"Error loading data: {str(e)}")
+            st.info("Please check your API token and board IDs in secrets.toml")
+            return
 
-    if df.empty:
-        st.warning("No records found in the board. Add some items to Monday.com to see them here.")
-        st.info("💡 **Tip**: Make sure your Monday.com board has items and your API token has the correct permissions.")
+    # Check if we have data
+    if ads_df.empty and sales_df.empty:
+        st.warning("No records found in either board. Add some items to Monday.com to see them here.")
+        st.info("💡 **Tip**: Make sure your Monday.com boards have items and your API token has the correct permissions.")
     else:
-        # Year filter
-        st.subheader("📅 Filter by Year")
+        # ROAS Section
+        st.subheader("📈 Return on Ad Spend (ROAS) - 2025")
         
-        # Get unique years from the data
-        df_with_dates = df.dropna(subset=['Attribution Date'])
-        if not df_with_dates.empty:
-            df_with_dates['Year'] = df_with_dates['Attribution Date'].dt.year
-            available_years = sorted(df_with_dates['Year'].unique())
-            
-            # Add "All Years" option
-            year_options = ["All Years"] + [str(year) for year in available_years]
-            selected_year = st.selectbox("Select Year:", year_options)
-            
-            # Filter data based on selected year
-            if selected_year == "All Years":
-                df_filtered = df_with_dates
-                year_label = "All Years"
-            else:
-                df_filtered = df_with_dates[df_with_dates['Year'] == int(selected_year)]
-                year_label = selected_year
-        else:
-            df_filtered = df_with_dates
-            year_label = "All Years"
-            selected_year = "All Years"
+        # Calculate ROAS
+        roas_df = calculate_roas(ads_df, sales_df)
         
-        # Total Adspend metric
-        st.subheader("💰 Total Ad Spend")
-        total_adspend = df_filtered['Google Adspend'].sum()
-        st.metric("Total Ad Spend", f"${total_adspend:,.2f}", delta=None)
-        
-        # Create the bar chart
-        st.subheader(f"📊 Adspend by Month - {year_label}")
-        
-        # Filter out rows with missing data for charting
-        df_chart = df_filtered.dropna(subset=['Attribution Date', 'Google Adspend'])
-        
-        if not df_chart.empty:
-            # Create bar chart
-            fig = px.bar(
-                df_chart,
+        if not roas_df.empty:
+            # Create ROAS chart
+            fig_roas = px.line(
+                roas_df,
                 x='Month Year',
-                y='Google Adspend',
-                title=f'Google Adspend by Month - {year_label}',
-                labels={'Google Adspend': 'Adspend ($)', 'Month Year': 'Month'},
-                color_discrete_sequence=['#1f77b4']  # Same blue color for all bars
+                y='ROAS',
+                title='',
+                labels={'ROAS': 'ROAS', 'Month Year': 'Month'},
+                markers=True
             )
             
-            # Update layout
-            fig.update_layout(
+            fig_roas.update_layout(
                 xaxis_title="Month",
-                yaxis_title="Adspend ($)",
+                yaxis_title="ROAS",
                 height=500,
                 showlegend=False
             )
             
-            # Rotate x-axis labels and make them bigger
-            fig.update_xaxes(
-                tickangle=45,
-                tickfont=dict(size=14),  # Bigger x-axis labels
-                title_font=dict(size=16)  # Bigger x-axis title
-            )
+            # Rotate x-axis labels
+            fig_roas.update_xaxes(tickangle=45)
             
-            # Make y-axis labels bigger too
-            fig.update_yaxes(
-                tickfont=dict(size=12),  # Bigger y-axis labels
-                title_font=dict(size=16)  # Bigger y-axis title
-            )
+            st.plotly_chart(fig_roas, use_container_width=True)
             
-            # Display the chart
-            st.plotly_chart(fig, use_container_width=True)
+            # Detailed Sales Table Section
+            st.subheader("🔍 Detailed Sales Analysis")
             
-            # Show data table below chart
-            st.subheader("📋 Data Table")
-            display_columns = ['Item', 'Attribution Date', 'Google Adspend']
-            if 'Year' in df_chart.columns:
-                display_columns = ['Item', 'Attribution Date', 'Year', 'Google Adspend']
+            # Month selector for detailed view
+            if not sales_df.empty:
+                # Sort months chronologically
+                available_months = sorted(sales_df['Month Year'].unique(), 
+                                        key=lambda x: pd.to_datetime(x))
+                if available_months:
+                    selected_month = st.selectbox(
+                        "Select Month to View Detailed Sales:",
+                        available_months
+                    )
+                    
+                    # Filter sales data for selected month (using same criteria as ROAS calculation)
+                    month_sales = sales_df[
+                        (sales_df['Month Year'] == selected_month) &
+                        (sales_df['Status'].str.contains('|'.join(closed_statuses), case=False, na=False)) &
+                        (sales_df['Channel'].str.contains('|'.join(paid_search_channels), case=False, na=False))
+                    ]
+                    
+                    if not month_sales.empty:
+                        # Prepare data for display
+                        display_data = month_sales.copy()
+                        
+                        # Format Date Created to YYYY-MM-DD
+                        display_data['Date Created'] = display_data['Date Created'].dt.strftime('%Y-%m-%d')
+                        
+                        # Format Date Closed to YYYY-MM-DD (handle NaT values)
+                        display_data['Date Closed'] = display_data['Date Closed'].dt.strftime('%Y-%m-%d')
+                        display_data['Date Closed'] = display_data['Date Closed'].fillna('')
+                        
+                        # Format Value with commas for thousands, handle NaN values
+                        display_data['Formatted Value'] = display_data['Value'].apply(
+                            lambda x: f"${x:,.2f}" if pd.notna(x) and x != 0 else " "
+                        )
+                        
+                        display_columns = ['Item Name', 'Formatted Value', 'Date Created', 'Date Closed']
+                        
+                        st.dataframe(
+                            display_data[display_columns],
+                            width='stretch',
+                            hide_index=True,
+                            column_config={
+                                "Formatted Value": "Revenue ($)",
+                                "Date Created": "Date Created",
+                                "Date Closed": "Date Closed"
+                            }
+                        )
+                    else:
+                        st.info(f"No Closed + Paid Search sales found for {selected_month}")
+                else:
+                    st.info("No sales data available for detailed analysis")
+        
+        # Original Ad Spend Section
+        if not ads_df.empty:
+            st.markdown("---")
             
-            st.dataframe(
-                df_chart[display_columns],
-                width='stretch',
-                hide_index=True
-            )
+            # Year filter for ads data
+            st.subheader("📅 Filter by Year")
             
-            # Download button
-            csv = df_chart.to_csv(index=False)
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            st.download_button(
-                label="📥 Download CSV",
-                data=csv,
-                file_name=f"google_adspend_data_{timestamp}.csv",
-                mime="text/csv"
-            )
-        else:
-            st.warning("No data available for charting. Please check your attribution dates and adspend values.")
+            # Get unique years from the ads data
+            ads_with_dates = ads_df.dropna(subset=['Attribution Date'])
+            if not ads_with_dates.empty:
+                ads_with_dates['Year'] = ads_with_dates['Attribution Date'].dt.year
+                available_years = sorted(ads_with_dates['Year'].unique())
+                
+                # Add "All Years" option
+                year_options = ["All Years"] + [str(year) for year in available_years]
+                selected_year = st.selectbox("Select Year:", year_options)
+                
+                # Filter data based on selected year
+                if selected_year == "All Years":
+                    ads_filtered = ads_with_dates
+                    year_label = "All Years"
+                else:
+                    ads_filtered = ads_with_dates[ads_with_dates['Year'] == int(selected_year)]
+                    year_label = selected_year
+            else:
+                ads_filtered = ads_with_dates
+                year_label = "All Years"
+                selected_year = "All Years"
+            
+            # Total Adspend metric
+            st.subheader("💰 Total Ad Spend")
+            total_adspend = ads_filtered['Google Adspend'].sum()
+            st.metric("Total Ad Spend", f"${total_adspend:,.2f}", delta=None)
+            
+            # Create the bar chart
+            st.subheader(f"📊 Adspend by Month - {year_label}")
+            
+            # Filter out rows with missing data for charting
+            ads_chart = ads_filtered.dropna(subset=['Attribution Date', 'Google Adspend'])
+            
+            if not ads_chart.empty:
+                # Create bar chart
+                fig = px.bar(
+                    ads_chart,
+                    x='Month Year',
+                    y='Google Adspend',
+                    title=f'Google Adspend by Month - {year_label}',
+                    labels={'Google Adspend': 'Adspend ($)', 'Month Year': 'Month'},
+                    color_discrete_sequence=['#1f77b4']
+                )
+                
+                # Update layout
+                fig.update_layout(
+                    xaxis_title="Month",
+                    yaxis_title="Adspend ($)",
+                    height=500,
+                    showlegend=False
+                )
+                
+                # Rotate x-axis labels
+                fig.update_xaxes(tickangle=45)
+                
+                # Display the chart
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Show data table below chart
+                st.subheader("📋 Data Table")
+                display_columns = ['Item', 'Attribution Date', 'Google Adspend']
+                if 'Year' in ads_chart.columns:
+                    display_columns = ['Item', 'Attribution Date', 'Year', 'Google Adspend']
+                
+                st.dataframe(
+                    ads_chart[display_columns],
+                    width='stretch',
+                    hide_index=True
+                )
+            else:
+                st.warning("No ad spend data available for charting.")
 
 if __name__ == "__main__":
     main()
