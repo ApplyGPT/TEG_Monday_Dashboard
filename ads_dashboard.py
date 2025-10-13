@@ -443,13 +443,12 @@ def main():
         
         if not roas_df.empty:
             # Create ROAS chart
-            fig_roas = px.line(
+            fig_roas = px.bar(
                 roas_df,
                 x='Month Year',
                 y='ROAS',
                 title='',
-                labels={'ROAS': 'ROAS', 'Month Year': 'Month'},
-                markers=True
+                labels={'ROAS': 'ROAS', 'Month Year': 'Month'}
             )
             
             fig_roas.update_layout(
