@@ -264,6 +264,7 @@ def format_sales_data(data):
         st.warning("No sales data found in API response")
         return pd.DataFrame()
     
+    
     boards = data["data"]["boards"]
     if not boards or not boards[0].get("items_page"):
         st.warning("No items page found in sales board")
@@ -288,7 +289,7 @@ def format_sales_data(data):
                 "Status": "",
                 "Channel": "",
                 "Value": "",
-                "Date Created": item.get("created_at", ""),
+                "Date Created": "",
                 "Date Closed": ""
             }
             
@@ -310,10 +311,11 @@ def format_sales_data(data):
                     # Contract amount (revenue) field
                     elif col_id == "contract_amt":
                         record["Value"] = text
-                    # Date closed field - map to the correct column ID
-                    elif col_id == "date_mktq7npm":  # This is likely the closed date column
-                        record["Date Closed"] = text
-                    elif "closed" in col_id.lower() and "date" in col_id.lower():
+                    # Date Created field - using date7 column (Jan 14 for Ashley Miles)
+                    elif col_id == "date7":
+                        record["Date Created"] = text
+                    # Date Closed field - using date_mktq7npm column (Aug 20 for Ashley Miles)
+                    elif col_id == "date_mktq7npm":
                         record["Date Closed"] = text
                     # Fallback mappings for other possible columns
                     elif col_id == "status_14__1":  # This shows "OTHER" in your data
@@ -468,8 +470,9 @@ def main():
             
             # Month selector for detailed view
             if not sales_df.empty:
-                # Sort months chronologically
-                available_months = sorted(sales_df['Month Year'].unique(), 
+                # Sort months chronologically and remove NaN values
+                available_months = sorted([month for month in sales_df['Month Year'].unique() 
+                                         if pd.notna(month) and month != 'nan'], 
                                         key=lambda x: pd.to_datetime(x))
                 if available_months:
                     selected_month = st.selectbox(

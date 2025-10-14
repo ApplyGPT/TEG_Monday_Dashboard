@@ -669,104 +669,7 @@ def main():
     
     # 5. Comparison of Revenue by Type of Revenue by Month
     st.subheader("Comparison of Revenue by Type of Revenue by Month")
-    
-    # DEBUG: Show available columns and their IDs
-    with st.expander("🔍 Debug: Available Columns", expanded=False):
-        st.write("**Debugging Type of Revenue Column:**")
-        if not df_filtered.empty:
-            st.write("Sample of Type of Revenue values:")
-            st.write(df_filtered['Type of Revenue'].value_counts())
-            st.write("Unique Type of Revenue values:")
-            st.write(df_filtered['Type of Revenue'].unique())
-            
-            # Show items that have non-empty Type of Revenue values
-            non_empty_revenue = df_filtered[df_filtered['Type of Revenue'].notna() & (df_filtered['Type of Revenue'] != '')]
-            if not non_empty_revenue.empty:
-                st.write("**Items with Type of Revenue values:**")
-                st.write(non_empty_revenue[['Item', 'Type of Revenue']].head(10))
-            else:
-                st.write("**No items found with Type of Revenue values**")
-        
-        # Show raw data structure for debugging
-        st.write("**Raw data sample (first 3 items):**")
-        if data and "data" in data and "boards" in data["data"] and data["data"]["boards"]:
-            board = data["data"]["boards"][0]
-            if board.get("items_page") and board["items_page"].get("items"):
-                items = board["items_page"]["items"][:3]  # First 3 items
-                for i, item in enumerate(items):
-                    st.write(f"**Item {i+1}: {item.get('name', 'No name')}**")
-                    for col_val in item.get("column_values", []):
-                        col_id = col_val.get("id", "")
-                        text = col_val.get("text", "")
-                        # Show ALL columns, including empty ones, to find Type of Revenue
-                        if col_id.startswith("status_"):  # Focus on status columns
-                            st.write(f"  Column ID: `{col_id}` | Text: `{text}`")
-        
-        # Show ALL status columns from first item to identify Type of Revenue
-        st.write("**ALL Status Columns (to find Type of Revenue):**")
-        if data and "data" in data and "boards" in data["data"] and data["data"]["boards"]:
-            board = data["data"]["boards"][0]
-            if board.get("items_page") and board["items_page"].get("items"):
-                first_item = board["items_page"]["items"][0]  # First item only
-                status_columns = []
-                for col_val in first_item.get("column_values", []):
-                    col_id = col_val.get("id", "")
-                    text = col_val.get("text", "")
-                    if col_id.startswith("status_"):
-                        status_columns.append((col_id, text))
-                
-                for col_id, text in status_columns:
-                    st.write(f"`{col_id}` = `{text}`")
-        
-        # Search for specific item "Jay Savdas - London varsity jkt/track suit"
-        st.write("**Searching for specific item: 'Jay Savdas - London varsity jkt/track suit':**")
-        if data and "data" in data and "boards" in data["data"] and data["data"]["boards"]:
-            board = data["data"]["boards"][0]
-            if board.get("items_page") and board["items_page"].get("items"):
-                items = board["items_page"]["items"]
-                found_item = None
-                for item in items:
-                    if "Jay Savdas" in item.get("name", ""):
-                        found_item = item
-                        break
-                
-                if found_item:
-                    st.write(f"**Found item: {found_item.get('name', 'No name')}**")
-                    for col_val in found_item.get("column_values", []):
-                        col_id = col_val.get("id", "")
-                        text = col_val.get("text", "")
-                        if text and text != "None":  # Show all columns with values
-                            st.write(f"  Column ID: `{col_id}` | Text: `{text}`")
-                else:
-                    st.write("Item 'Jay Savdas - London varsity jkt/track suit' not found")
-        
-        # Search for all Type of Revenue values
-        st.write("**Searching for all Type of Revenue values in color_mkwp98ks column:**")
-        if data and "data" in data and "boards" in data["data"] and data["data"]["boards"]:
-            board = data["data"]["boards"][0]
-            if board.get("items_page") and board["items_page"].get("items"):
-                items = board["items_page"]["items"]
-                found_revenue_types = {}
-                for item in items:
-                    for col_val in item.get("column_values", []):
-                        col_id = col_val.get("id", "")
-                        text = col_val.get("text", "")
-                        if col_id == "color_mkwp98ks" and text and text != "None":
-                            if text not in found_revenue_types:
-                                found_revenue_types[text] = []
-                            found_revenue_types[text].append(item.get('name', 'No name'))
-                
-                if found_revenue_types:
-                    st.write("Found Type of Revenue values:")
-                    for revenue_type, items_list in found_revenue_types.items():
-                        st.write(f"  **{revenue_type}** ({len(items_list)} items):")
-                        for item_name in items_list[:5]:  # Show first 5 items
-                            st.write(f"    - {item_name}")
-                        if len(items_list) > 5:
-                            st.write(f"    ... and {len(items_list) - 5} more")
-                else:
-                    st.write("No Type of Revenue values found in color_mkwp98ks column")
-    
+       
     # Year selector for type of revenue chart - default to 2025
     available_years_category = sorted([int(year) for year in df_filtered['Year'].unique() if pd.notna(year)])
     default_year_index_category = available_years_category.index(2025) if 2025 in available_years_category else 0
@@ -829,7 +732,7 @@ def main():
             xaxis_title='Month',
             yaxis_title='Revenue ($)',
             height=500,
-            bargap=0.0,
+            bargap=0.15,
             bargroupgap=0.0,
             showlegend=True,
             font=dict(size=14),  # Larger font for all text
