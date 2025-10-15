@@ -312,9 +312,27 @@ def format_sales_data(data):
                         record["Channel"] = text
                     elif col_id == "source":  # Fallback to source column
                         record["Channel"] = text
-                    # Contract amount (revenue) field
-                    elif col_id == "contract_amt":
+                    # Amount Paid or Contract Value field (prioritize numbers3 over contract_amt)
+                    elif col_id == "numbers3":  # This contains the actual amount paid (10550 for Kimberly)
                         record["Value"] = text
+                    elif col_id == "contract_amt":
+                        record["Value"] = text if text else record.get("Value", "")
+                    elif col_id == "formula_mktj2qh2":  # Try first formula column
+                        record["Value"] = text if text else record.get("Value", "")
+                    elif col_id == "formula_mktk2rgx":  # Try second formula column
+                        record["Value"] = text if text else record.get("Value", "")
+                    elif col_id == "formula_mktks5te":  # Try third formula column
+                        record["Value"] = text if text else record.get("Value", "")
+                    elif col_id == "formula_mktknqy9":  # Try fourth formula column
+                        record["Value"] = text if text else record.get("Value", "")
+                    elif col_id == "formula_mktkwnyh":  # Try fifth formula column
+                        record["Value"] = text if text else record.get("Value", "")
+                    elif col_id == "formula_mktq5ahq":  # Try sixth formula column
+                        record["Value"] = text if text else record.get("Value", "")
+                    elif col_id == "formula_mktt5nty":  # Try seventh formula column
+                        record["Value"] = text if text else record.get("Value", "")
+                    elif col_id == "formula_mkv0r139":  # Try eighth formula column
+                        record["Value"] = text if text else record.get("Value", "")
                     # Date Created field - using date7 column (Jan 14 for Ashley Miles)
                     elif col_id == "date7":
                         record["Date Created"] = text
@@ -367,9 +385,10 @@ def filter_roas_data(df, raw_data=None):
     # Channel: ONLY include "Paid Search" channel records
     paid_search_channels = ['paid search']
     
+    # Use exact matching to accept both "Closed" and "Win" statuses
     df_roas = df[
-        (df['Status'].str.contains('|'.join(closed_statuses), case=False, na=False)) &
-        (df['Channel'].str.contains('|'.join(paid_search_channels), case=False, na=False))
+        (df['Status'].str.lower().isin(['closed', 'win'])) &
+        (df['Channel'].str.lower() == 'paid search')
     ].copy()
     
     return df_roas, closed_statuses, paid_search_channels
@@ -535,10 +554,17 @@ def main():
             # Detailed Sales Table Section
             st.subheader("🔍 Detailed Sales Analysis")
             
-            # Month selector for detailed view
+            # Month selector for detailed view - only show months with qualifying sales (Closed + Paid Search)
             if not sales_df.empty:
-                # Sort months chronologically and remove NaN values
-                available_months = sorted([month for month in sales_df['Month Year'].unique() 
+                # Filter sales_df to only include Closed/Win + Paid Search records (same as ROAS)
+                # Use exact matching to accept both "Closed" and "Win" statuses
+                qualifying_sales = sales_df[
+                    (sales_df['Status'].str.lower().isin(['closed', 'win'])) &
+                    (sales_df['Channel'].str.lower() == 'paid search')
+                ]
+                
+                # Sort months chronologically and remove NaN values from qualifying sales only
+                available_months = sorted([month for month in qualifying_sales['Month Year'].unique() 
                                          if pd.notna(month) and month != 'nan'], 
                                         key=lambda x: pd.to_datetime(x))
                 if available_months:
@@ -548,11 +574,8 @@ def main():
                     )
                     
                     # Filter sales data for selected month (using same criteria as ROAS calculation)
-                    month_sales = sales_df[
-                        (sales_df['Month Year'] == selected_month) &
-                        (sales_df['Status'].str.contains('|'.join(closed_statuses), case=False, na=False)) &
-                        (sales_df['Channel'].str.contains('|'.join(paid_search_channels), case=False, na=False))
-                    ]
+                    month_sales = qualifying_sales[qualifying_sales['Month Year'] == selected_month]
+                    
                     
                     # Display total revenue for selected month
                     month_revenue = month_sales['Value'].sum()
