@@ -291,7 +291,8 @@ def format_sales_data(data):
                 "Channel": "",
                 "Value": "",
                 "Date Created": "",
-                "Date Closed": ""
+                "Date Closed": "",
+                "Assigned Person": ""
             }
             
             # Extract column values
@@ -320,6 +321,9 @@ def format_sales_data(data):
                     # Date Closed field - using date_mktq7npm column (Aug 20 for Ashley Miles)
                     elif col_id == "date_mktq7npm":
                         record["Date Closed"] = text
+                    # Assigned Person field
+                    elif col_id == "color_mkvewcwe":
+                        record["Assigned Person"] = text
                     # Fallback mappings for other possible columns
                     elif col_id == "status_14__1":  # This shows "OTHER" in your data
                         if record["Channel"] == "":  # Only use if source is empty
@@ -446,13 +450,9 @@ def main():
         # Calculate ROAS
         roas_df = calculate_roas(ads_df, sales_df)
         
-        # Filter to only show months with actual sales (Value > 0)
+        # Don't filter - show all months for 2025
         if not roas_df.empty:
-            roas_df = roas_df[roas_df['Value'] > 0]
-        
-        
-        if not roas_df.empty:
-            # Create ROAS chart - ensure all months are shown
+            # Create ROAS chart - show all months
             fig_roas = px.bar(
                 roas_df,
                 x='Month Year',
@@ -467,6 +467,18 @@ def main():
                 yaxis_title="ROAS",
                 height=500,
                 showlegend=False
+            )
+            
+            # Add vertical line at ROAS = 1 (break-even point)
+            fig_roas.add_hline(y=1, line_dash="dash", line_color="red", 
+                              annotation_text="Break-even (ROAS = 1)", 
+                              annotation_position="top right")
+            
+            # Add ROAS value labels above each bar (3 decimal places, hide if 0.000)
+            fig_roas.update_traces(
+                text=[f"<b>{y:.3f}</b>" if y != 0.0 else "" for y in roas_df['ROAS']],
+                textposition='outside',
+                textfont=dict(size=14, color='black')
             )
             
             # Rotate x-axis labels
@@ -562,7 +574,11 @@ def main():
                             lambda x: f"${x:,.2f}" if pd.notna(x) and x != 0 else " "
                         )
                         
-                        display_columns = ['Item Name', 'Formatted Value', 'Date Created', 'Date Closed']
+                        # Add Assigned Person column if it exists
+                        if 'Assigned Person' in display_data.columns:
+                            display_columns = ['Item Name', 'Formatted Value', 'Assigned Person', 'Date Created', 'Date Closed']
+                        else:
+                            display_columns = ['Item Name', 'Formatted Value', 'Date Created', 'Date Closed']
                         
                         st.dataframe(
                             display_data[display_columns],
@@ -637,8 +653,15 @@ def main():
                 fig.update_layout(
                     xaxis_title="Month",
                     yaxis_title="Adspend ($)",
-                    height=500,
+                    height=600,
                     showlegend=False
+                )
+                
+                # Add value labels above each bar
+                fig.update_traces(
+                    texttemplate='<b>$%{y:,.0f}</b>',
+                    textposition='outside',
+                    textfont=dict(size=14, color='black')
                 )
                 
                 # Rotate x-axis labels
@@ -647,29 +670,6 @@ def main():
                 # Display the chart
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Show data table below chart
-                st.subheader("📋 Data Table")
-                
-                # Format the data for display
-                display_data = ads_chart.copy()
-                
-                # Format Attribution Date to YYYY-MM-DD
-                display_data['Attribution Date'] = display_data['Attribution Date'].dt.strftime('%Y-%m-%d')
-                
-                # Format Google Adspend to $NN,NNN.NN
-                display_data['Google Adspend'] = display_data['Google Adspend'].apply(
-                    lambda x: f"${x:,.2f}" if pd.notna(x) else ""
-                )
-                
-                display_columns = ['Item', 'Attribution Date', 'Google Adspend']
-                if 'Year' in ads_chart.columns:
-                    display_columns = ['Item', 'Attribution Date', 'Year', 'Google Adspend']
-                
-                st.dataframe(
-                    display_data[display_columns],
-                    width='stretch',
-                    hide_index=True
-                )
             else:
                 st.warning("No ad spend data available for charting.")
 
