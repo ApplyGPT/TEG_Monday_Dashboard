@@ -4,6 +4,7 @@ import pandas as pd
 import os
 from datetime import datetime
 import plotly.express as px
+import plotly.graph_objects as go
 
 # Page configuration
 st.set_page_config(
@@ -305,8 +306,10 @@ def format_sales_data(data):
                     # Status field - using the color column that shows "Sales Qualified"
                     if col_id == "color_mknxd1j2":
                         record["Status"] = text
-                    # Channel/Source field
-                    elif col_id == "source":
+                    # Channel/Source field - using the correct column for paid search data
+                    elif col_id == "text_mkrfer1n":  # This contains "Paid search" data
+                        record["Channel"] = text
+                    elif col_id == "source":  # Fallback to source column
                         record["Channel"] = text
                     # Contract amount (revenue) field
                     elif col_id == "contract_amt":
@@ -352,13 +355,13 @@ def format_sales_data(data):
     
     return df
 
-def filter_roas_data(df):
+def filter_roas_data(df, raw_data=None):
     """Filter sales data for ROAS calculation"""
-    # Status: Include various forms of closed/won deals
-    closed_statuses = ['closed', 'sales qualified', 'qualified', 'win', 'won', 'complete']
+    # Status: ONLY include "Closed" status records
+    closed_statuses = ['closed']
     
-    # Channel: Include paid search and related channels
-    paid_search_channels = ['paid search', 'search', 'google', 'ppc', 'adwords', 'google ads', 'other']
+    # Channel: ONLY include "Paid Search" channel records
+    paid_search_channels = ['paid search']
     
     df_roas = df[
         (df['Status'].str.contains('|'.join(closed_statuses), case=False, na=False)) &
@@ -426,7 +429,7 @@ def main():
             sales_df_raw = format_sales_data(sales_data)
             
             # Filter sales data for ROAS calculation
-            sales_df, closed_statuses, paid_search_channels = filter_roas_data(sales_df_raw)
+            sales_df, closed_statuses, paid_search_channels = filter_roas_data(sales_df_raw, sales_data)
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
             st.info("Please check your API token and board IDs in secrets.toml")
@@ -443,14 +446,20 @@ def main():
         # Calculate ROAS
         roas_df = calculate_roas(ads_df, sales_df)
         
+        # Filter to only show months with actual sales (Value > 0)
         if not roas_df.empty:
-            # Create ROAS chart
+            roas_df = roas_df[roas_df['Value'] > 0]
+        
+        
+        if not roas_df.empty:
+            # Create ROAS chart - ensure all months are shown
             fig_roas = px.bar(
                 roas_df,
                 x='Month Year',
                 y='ROAS',
                 title='',
-                labels={'ROAS': 'ROAS', 'Month Year': 'Month'}
+                labels={'ROAS': 'ROAS', 'Month Year': 'Month'},
+                range_y=[0, None]  # Start y-axis at 0 to show all values
             )
             
             fig_roas.update_layout(
@@ -464,6 +473,52 @@ def main():
             fig_roas.update_xaxes(tickangle=45)
             
             st.plotly_chart(fig_roas, use_container_width=True)
+            
+            # Profit on Ads 2025 Graph (moved here)
+            st.subheader("📈 Profit on Ads 2025")
+            
+            # Create separate ROAS data for profit chart (include ALL months, not just those with sales)
+            roas_df_profit = calculate_roas(ads_df, sales_df)
+            
+            if not roas_df_profit.empty:
+                # Calculate profit (Revenue - Ad Spend) for 2025
+                roas_df_profit['Profit'] = roas_df_profit['Value'] - roas_df_profit['Google Adspend']
+                
+                # Create profit bar chart with solid colors
+                fig_profit = go.Figure()
+                
+                # Add bars with solid red for negative, solid green for positive
+                for _, row in roas_df_profit.iterrows():
+                    color = 'red' if row['Profit'] < 0 else 'green'
+                    fig_profit.add_trace(go.Bar(
+                        x=[row['Month Year']],
+                        y=[row['Profit']],
+                        marker_color=color,
+                        showlegend=False
+                    ))
+                
+                # Update layout
+                fig_profit.update_layout(
+                    xaxis_title="Month",
+                    yaxis_title="Profit ($)",
+                    height=600,
+                    showlegend=False,
+                    coloraxis_showscale=False  # Hide color scale
+                )
+                
+                # Rotate x-axis labels
+                fig_profit.update_xaxes(tickangle=45)
+                
+                # Add value labels on bars
+                fig_profit.update_traces(
+                    texttemplate='<b>$%{y:,.0f}</b>',
+                    textposition='outside',
+                    textfont=dict(size=14, color='black')
+                )
+                
+                st.plotly_chart(fig_profit, use_container_width=True)
+            else:
+                st.info("No profit data available for 2025")
             
             # Detailed Sales Table Section
             st.subheader("🔍 Detailed Sales Analysis")
@@ -486,6 +541,10 @@ def main():
                         (sales_df['Status'].str.contains('|'.join(closed_statuses), case=False, na=False)) &
                         (sales_df['Channel'].str.contains('|'.join(paid_search_channels), case=False, na=False))
                     ]
+                    
+                    # Display total revenue for selected month
+                    month_revenue = month_sales['Value'].sum()
+                    st.metric(f"Total Revenue ({selected_month})", f"${month_revenue:,.2f}")
                     
                     if not month_sales.empty:
                         # Prepare data for display
@@ -520,6 +579,7 @@ def main():
                 else:
                     st.info("No sales data available for detailed analysis")
         
+        
         # Original Ad Spend Section
         if not ads_df.empty:
             st.markdown("---")
@@ -535,7 +595,9 @@ def main():
                 
                 # Add "All Years" option
                 year_options = ["All Years"] + [str(year) for year in available_years]
-                selected_year = st.selectbox("Select Year:", year_options)
+                # Set default to 2025 if available, otherwise "All Years"
+                default_index = year_options.index("2025") if "2025" in year_options else 0
+                selected_year = st.selectbox("Select Year:", year_options, index=default_index)
                 
                 # Filter data based on selected year
                 if selected_year == "All Years":
@@ -587,12 +649,24 @@ def main():
                 
                 # Show data table below chart
                 st.subheader("📋 Data Table")
+                
+                # Format the data for display
+                display_data = ads_chart.copy()
+                
+                # Format Attribution Date to YYYY-MM-DD
+                display_data['Attribution Date'] = display_data['Attribution Date'].dt.strftime('%Y-%m-%d')
+                
+                # Format Google Adspend to $NN,NNN.NN
+                display_data['Google Adspend'] = display_data['Google Adspend'].apply(
+                    lambda x: f"${x:,.2f}" if pd.notna(x) else ""
+                )
+                
                 display_columns = ['Item', 'Attribution Date', 'Google Adspend']
                 if 'Year' in ads_chart.columns:
                     display_columns = ['Item', 'Attribution Date', 'Year', 'Google Adspend']
                 
                 st.dataframe(
-                    ads_chart[display_columns],
+                    display_data[display_columns],
                     width='stretch',
                     hide_index=True
                 )
