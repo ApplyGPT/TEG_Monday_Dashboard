@@ -106,7 +106,10 @@ def load_oauth_credentials():
                         "http://127.0.0.1:8082", 
                         "http://127.0.0.1:8083",
                         "http://127.0.0.1:8084",
-                        "urn:ietf:wg:oauth:2.0:oob"  # For out-of-band flow
+                        "urn:ietf:wg:oauth:2.0:oob",  # For out-of-band flow
+                        "http://104.248.211.227/ads-dashboard/proposal_creator",
+                        "https://blanklabelshop.com/ads-dashboard/proposal_creator",
+                        "http://104.248.211.227:8500/ads-dashboard/proposal_creator"
                     ]
                 }
             },
