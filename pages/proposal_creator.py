@@ -87,61 +87,96 @@ def load_oauth_credentials():
             "https://www.googleapis.com/auth/presentations",
         ]
         
-        # Use desktop app configuration with common redirect URIs
-        flow = InstalledAppFlow.from_client_config(
-            {
-                "installed": {
-                    "client_id": oauth["client_id"],
-                    "client_secret": oauth["client_secret"],
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "redirect_uris": [
-                        "http://localhost:8080",
-                        "http://localhost:8081", 
-                        "http://localhost:8082",
-                        "http://localhost:8083",
-                        "http://localhost:8084",
-                        "http://127.0.0.1:8080",
-                        "http://127.0.0.1:8081",
-                        "http://127.0.0.1:8082", 
-                        "http://127.0.0.1:8083",
-                        "http://127.0.0.1:8084",
-                        "http://localhost",
-                        "http://127.0.0.1",
-                        "urn:ietf:wg:oauth:2.0:oob",  # For out-of-band flow
-                        "http://104.248.211.227/ads-dashboard/proposal_creator",
-                        "https://blanklabelshop.com/ads-dashboard/proposal_creator",
-                        "http://104.248.211.227:8500/ads-dashboard/proposal_creator"
-                    ]
-                }
-            },
-            scopes=scopes,
+        # Check if we're in a deployed environment
+        import os
+        import socket
+        
+        # Detect if we're in a deployed environment
+        is_deployed = (
+            os.environ.get('STREAMLIT_SERVER_HEADLESS') == 'true' or
+            'streamlit.app' in socket.getfqdn() or
+            'blanklabelshop.com' in socket.getfqdn()
         )
         
-        # Try different ports and fallback methods
-        ports_to_try = [8080, 8081, 8082, 8083, 8084]
-        creds = None
-        
-        # First try local server on common ports
-        for port in ports_to_try:
-            try:
-                creds = flow.run_local_server(port=port)
-                break
-            except OSError as e:
-                if "10048" in str(e) or "Address already in use" in str(e):
-                    continue
-                else:
-                    continue
-            except Exception as e:
-                continue
-        
-        # If local server fails, try out-of-band flow
-        if not creds:
+        if is_deployed:
+            # For deployed environments, use out-of-band flow
+            st.info("🔐 Authenticating with Google...")
+            flow = InstalledAppFlow.from_client_config(
+                {
+                    "installed": {
+                        "client_id": oauth["client_id"],
+                        "client_secret": oauth["client_secret"],
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                        "redirect_uris": [
+                            "https://blanklabelshop.com/ads-dashboard/proposal_creator",
+                            "https://blanklabelshop.com/ads-dashboard/",
+                            "https://blanklabelshop.com/",
+                            "urn:ietf:wg:oauth:2.0:oob"
+                        ]
+                    }
+                },
+                scopes=scopes,
+            )
+            
+            # Use console flow for deployed environments
             try:
                 creds = flow.run_console()
+                return creds
             except Exception as e:
-                raise Exception("All OAuth methods failed. Please check your redirect URIs in Google Cloud Console.")
-        return creds
+                st.error(f"OAuth authentication failed: {str(e)}")
+                return None
+        
+        else:
+            # For local development, use local server
+            flow = InstalledAppFlow.from_client_config(
+                {
+                    "installed": {
+                        "client_id": oauth["client_id"],
+                        "client_secret": oauth["client_secret"],
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                        "redirect_uris": [
+                            "http://localhost:8080",
+                            "http://localhost:8081", 
+                            "http://localhost:8082",
+                            "http://localhost:8083",
+                            "http://localhost:8084",
+                            "http://127.0.0.1:8080",
+                            "http://127.0.0.1:8081",
+                            "http://127.0.0.1:8082", 
+                            "http://127.0.0.1:8083",
+                            "http://127.0.0.1:8084",
+                            "http://localhost",
+                            "http://127.0.0.1",
+                            "urn:ietf:wg:oauth:2.0:oob"
+                        ]
+                    }
+                },
+                scopes=scopes,
+            )
+            
+            # Try local server ports
+            ports_to_try = [8080, 8081, 8082, 8083, 8084]
+            creds = None
+            
+            for port in ports_to_try:
+                try:
+                    creds = flow.run_local_server(port=port)
+                    break
+                except OSError as e:
+                    if "10048" in str(e) or "Address already in use" in str(e):
+                        continue
+                    else:
+                        continue
+                except Exception as e:
+                    continue
+            
+            # Fallback to console flow
+            if not creds:
+                creds = flow.run_console()
+            
+            return creds
         
     except Exception as e:
         st.error(f"OAuth authentication failed: {str(e)}")
