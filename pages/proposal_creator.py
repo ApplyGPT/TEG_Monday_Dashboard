@@ -119,6 +119,7 @@ def load_oauth_credentials():
             if auth_key not in st.session_state:
                 st.session_state[auth_key] = {'step': 'start'}
             
+            
             flow = InstalledAppFlow.from_client_config(
                 {
                     "installed": {
@@ -151,9 +152,12 @@ def load_oauth_credentials():
                     st.session_state[auth_key]['step'] = 'waiting_for_code'
                     
                     # Display the URL for user to visit
-                    st.info("🔐 Please visit this URL to authorize the application:")
-                    st.markdown(f"[**Click here to authorize**]({auth_url})")
-                    st.info("After clicking the link above, you'll be redirected to a page with an authorization code. Copy the code and paste it below.")
+                    st.info("🔐 **Step 1:** Please visit this URL to authorize the application:")
+                    st.markdown(f"[**🔗 Click here to authorize**]({auth_url})")
+                    st.info("**Step 2:** After clicking the link above, you'll be redirected to a page with an authorization code. Copy the code and paste it below.")
+                    
+                    # Also display the URL as text for easy copying
+                    st.code(auth_url, language="text")
                     
                     return None
                 
@@ -1134,6 +1138,15 @@ def main():
         
         # Try OAuth first (preferred for quota reasons)
         creds = load_oauth_credentials()
+        
+        # If OAuth is in progress (waiting for user input), don't proceed with Google Slides creation
+        if creds is None:
+            # Check if we're in the middle of an OAuth flow
+            oauth_keys = [key for key in st.session_state.keys() if key.startswith('oauth_auth_')]
+            if oauth_keys:
+                # OAuth flow is in progress, don't try service account
+                st.info("⏳ Please complete the OAuth authentication process above.")
+                return
         
         if not creds:
             # Check if we're in deployed environment and OAuth failed
