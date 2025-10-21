@@ -89,16 +89,36 @@ def load_oauth_credentials():
         ]
         
         # Check if we're in a deployed environment
-        # Detect if we're in a deployed environment
         is_deployed = (
             os.environ.get('STREAMLIT_SERVER_HEADLESS') == 'true' or
             'streamlit.app' in socket.getfqdn() or
             'blanklabelshop.com' in socket.getfqdn()
         )
         
+        # Check if we have stored credentials in session state
+        if 'google_creds' in st.session_state and st.session_state.google_creds:
+            try:
+                # Try to refresh the credentials
+                creds = st.session_state.google_creds
+                if creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                    st.session_state.google_creds = creds
+                return creds
+            except Exception:
+                # If refresh fails, clear the stored credentials
+                st.session_state.google_creds = None
+        
         if is_deployed:
             # For deployed environments, use out-of-band flow
             st.info("🔐 Authenticating with Google...")
+            
+            # Create a unique session key for this authentication attempt
+            auth_key = f"oauth_auth_{hash(str(oauth['client_id']))}"
+            
+            # Check if we're in the middle of an OAuth flow
+            if auth_key not in st.session_state:
+                st.session_state[auth_key] = {'step': 'start'}
+            
             flow = InstalledAppFlow.from_client_config(
                 {
                     "installed": {
@@ -117,34 +137,62 @@ def load_oauth_credentials():
                 scopes=scopes,
             )
             
-            # Use out-of-band flow for deployed environments
             try:
-                # Get the authorization URL
-                auth_url, _ = flow.authorization_url(prompt='consent')
-                
-                # Display the URL for user to visit
-                st.info("🔐 Please visit this URL to authorize the application:")
-                st.markdown(f"[**Click here to authorize**]({auth_url})")
-                
-                # Get authorization code from user
-                auth_code = st.text_input("Enter the authorization code from the URL:", type="password", help="After clicking the link above, copy the 'code' parameter from the URL")
-                
-                if auth_code:
-                    try:
-                        # Exchange code for credentials
-                        flow.fetch_token(code=auth_code)
-                        creds = flow.credentials
-                        st.success("✅ Authentication successful!")
-                        return creds
-                    except Exception as token_error:
-                        st.error(f"Failed to exchange authorization code: {str(token_error)}")
-                        return None
-                else:
-                    st.warning("Please enter the authorization code to continue.")
-                    return None
+                if st.session_state[auth_key]['step'] == 'start':
+                    # Get the authorization URL
+                    auth_url, state = flow.authorization_url(
+                        prompt='consent',
+                        access_type='offline',
+                        include_granted_scopes='true'
+                    )
                     
+                    # Store the flow state
+                    st.session_state[auth_key]['flow_state'] = state
+                    st.session_state[auth_key]['step'] = 'waiting_for_code'
+                    
+                    # Display the URL for user to visit
+                    st.info("🔐 Please visit this URL to authorize the application:")
+                    st.markdown(f"[**Click here to authorize**]({auth_url})")
+                    st.info("After clicking the link above, you'll be redirected to a page with an authorization code. Copy the code and paste it below.")
+                    
+                    return None
+                
+                elif st.session_state[auth_key]['step'] == 'waiting_for_code':
+                    # Get authorization code from user
+                    auth_code = st.text_input(
+                        "Enter the authorization code from the URL:", 
+                        type="password", 
+                        help="After clicking the link above, copy the 'code' parameter from the URL"
+                    )
+                    
+                    if auth_code:
+                        try:
+                            # Exchange code for credentials
+                            flow.fetch_token(code=auth_code)
+                            creds = flow.credentials
+                            
+                            # Store credentials in session state
+                            st.session_state.google_creds = creds
+                            
+                            # Clear the auth flow state
+                            del st.session_state[auth_key]
+                            
+                            st.success("✅ Authentication successful!")
+                            st.rerun()  # Refresh the page to use the new credentials
+                            
+                        except Exception as token_error:
+                            st.error(f"Failed to exchange authorization code: {str(token_error)}")
+                            st.error("Please try again. Make sure you copied the complete authorization code.")
+                            return None
+                    else:
+                        st.warning("Please enter the authorization code to continue.")
+                        return None
+                        
             except Exception as e:
                 st.error(f"OAuth authentication failed: {str(e)}")
+                # Clear the auth flow state on error
+                if auth_key in st.session_state:
+                    del st.session_state[auth_key]
                 return None
         
         else:
@@ -183,6 +231,8 @@ def load_oauth_credentials():
             for port in ports_to_try:
                 try:
                     creds = flow.run_local_server(port=port)
+                    # Store credentials in session state
+                    st.session_state.google_creds = creds
                     break
                 except OSError as e:
                     if "10048" in str(e) or "Address already in use" in str(e):
@@ -196,6 +246,8 @@ def load_oauth_credentials():
             if not creds:
                 try:
                     creds = flow.run_console()
+                    # Store credentials in session state
+                    st.session_state.google_creds = creds
                 except AttributeError:
                     # If run_console doesn't exist, try out-of-band flow
                     st.warning("Using out-of-band OAuth flow...")
@@ -1072,6 +1124,14 @@ def main():
             st.error(f"Failed to generate PowerPoint: {e}")
 
     if push_gslides:
+        # Clear any existing Google authentication to start fresh
+        if 'google_creds' in st.session_state:
+            del st.session_state.google_creds
+        # Clear any OAuth flow states
+        keys_to_remove = [key for key in st.session_state.keys() if key.startswith('oauth_auth_')]
+        for key in keys_to_remove:
+            del st.session_state[key]
+        
         # Try OAuth first (preferred for quota reasons)
         creds = load_oauth_credentials()
         
@@ -1085,6 +1145,13 @@ def main():
             
             if is_deployed:
                 st.error("OAuth authentication failed. Cannot create Google Slides.")
+                st.info("💡 **Troubleshooting Tips:**")
+                st.markdown("""
+                - Make sure you're using the correct Google account with sufficient Drive storage
+                - Try refreshing the page and starting the authentication process again
+                - If you see 'Using out-of-band OAuth flow...', follow the authentication steps carefully
+                - Ensure you copy the complete authorization code from the Google OAuth page
+                """)
                 return
             else:
                 creds = load_service_account_credentials()
@@ -1109,7 +1176,22 @@ def main():
                 st.info(f"View your presentation: https://docs.google.com/presentation/d/{new_id}/edit")
                 
             except Exception as e:
-                st.error(f"Failed to create Google Slides: {e}")
+                error_msg = str(e)
+                if "quota" in error_msg.lower():
+                    st.error("❌ Google Drive quota exceeded. Please try again later or check your Google Drive storage.")
+                    st.info("💡 **Solutions:**")
+                    st.markdown("""
+                    - Free up space in your Google Drive
+                    - Delete old proposal files from Google Drive
+                    - Try using a different Google account with more storage
+                    - Wait a few hours and try again (quotas reset periodically)
+                    """)
+                elif "permission" in error_msg.lower():
+                    st.error("❌ Permission denied. Please check your Google API credentials and permissions.")
+                elif "not found" in error_msg.lower():
+                    st.error("❌ Template file not found. Please ensure the template PPTX file exists in the inputs folder.")
+                else:
+                    st.error(f"❌ Failed to create Google Slides: {error_msg}")
 
 
 if __name__ == "__main__":
