@@ -109,37 +109,67 @@ def load_oauth_credentials():
                 st.session_state.google_creds = None
         
         if is_deployed:
-            # For deployed environments, use out-of-band flow
+            # For deployed environments, use redirect-based OAuth flow
             st.info("🔐 Authenticating with Google...")
             
-            # Create a unique session key for this authentication attempt
-            auth_key = f"oauth_auth_{hash(str(oauth['client_id']))}"
+            # Check for OAuth callback with authorization code
+            query_params = st.query_params
+            if "code" in query_params:
+                try:
+                    # Create flow for token exchange
+                    flow = InstalledAppFlow.from_client_config(
+                        {
+                            "installed": {
+                                "client_id": oauth["client_id"],
+                                "client_secret": oauth["client_secret"],
+                                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                                "token_uri": "https://oauth2.googleapis.com/token",
+                                "redirect_uris": [
+                                    "https://blanklabelshop.com/ads-dashboard/proposal_creator",
+                                    "https://blanklabelshop.com/ads-dashboard/oauth2callback"
+                                ]
+                            }
+                        },
+                        scopes=scopes,
+                    )
+                    
+                    # Exchange code for credentials
+                    flow.fetch_token(code=query_params["code"])
+                    creds = flow.credentials
+                    
+                    # Store credentials in session state
+                    st.session_state.google_creds = creds
+                    
+                    # Clear the query parameters to avoid re-processing
+                    st.query_params.clear()
+                    
+                    st.success("✅ Authentication successful!")
+                    st.rerun()  # Refresh the page to use the new credentials
+                    
+                except Exception as token_error:
+                    st.error(f"Failed to exchange authorization code: {str(token_error)}")
+                    st.error("Please try the authentication process again.")
+                    return None
             
-            # Check if we're in the middle of an OAuth flow
-            if auth_key not in st.session_state:
-                st.session_state[auth_key] = {'step': 'start'}
-            
-            
-            flow = InstalledAppFlow.from_client_config(
-                {
-                    "installed": {
-                        "client_id": oauth["client_id"],
-                        "client_secret": oauth["client_secret"],
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                        "redirect_uris": [
-                            "https://blanklabelshop.com/ads-dashboard/proposal_creator",
-                            "https://blanklabelshop.com/ads-dashboard/",
-                            "https://blanklabelshop.com/",
-                            "urn:ietf:wg:oauth:2.0:oob"
-                        ]
-                    }
-                },
-                scopes=scopes,
-            )
-            
-            try:
-                if st.session_state[auth_key]['step'] == 'start':
+            else:
+                # Start OAuth flow - generate authorization URL
+                flow = InstalledAppFlow.from_client_config(
+                    {
+                        "installed": {
+                            "client_id": oauth["client_id"],
+                            "client_secret": oauth["client_secret"],
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                            "redirect_uris": [
+                                "https://blanklabelshop.com/ads-dashboard/proposal_creator",
+                                "https://blanklabelshop.com/ads-dashboard/oauth2callback"
+                            ]
+                        }
+                    },
+                    scopes=scopes,
+                )
+                
+                try:
                     # Get the authorization URL
                     auth_url, state = flow.authorization_url(
                         prompt='consent',
@@ -147,57 +177,22 @@ def load_oauth_credentials():
                         include_granted_scopes='true'
                     )
                     
-                    # Store the flow state
-                    st.session_state[auth_key]['flow_state'] = state
-                    st.session_state[auth_key]['step'] = 'waiting_for_code'
+                    # Store the flow state for verification
+                    st.session_state['oauth_state'] = state
                     
                     # Display the URL for user to visit
                     st.info("🔐 **Step 1:** Please visit this URL to authorize the application:")
                     st.markdown(f"[**🔗 Click here to authorize**]({auth_url})")
-                    st.info("**Step 2:** After clicking the link above, you'll be redirected to a page with an authorization code. Copy the code and paste it below.")
+                    st.info("**Step 2:** After clicking the link above, you'll be redirected back to this page automatically.")
                     
                     # Also display the URL as text for easy copying
                     st.code(auth_url, language="text")
                     
                     return None
-                
-                elif st.session_state[auth_key]['step'] == 'waiting_for_code':
-                    # Get authorization code from user
-                    auth_code = st.text_input(
-                        "Enter the authorization code from the URL:", 
-                        type="password", 
-                        help="After clicking the link above, copy the 'code' parameter from the URL"
-                    )
                     
-                    if auth_code:
-                        try:
-                            # Exchange code for credentials
-                            flow.fetch_token(code=auth_code)
-                            creds = flow.credentials
-                            
-                            # Store credentials in session state
-                            st.session_state.google_creds = creds
-                            
-                            # Clear the auth flow state
-                            del st.session_state[auth_key]
-                            
-                            st.success("✅ Authentication successful!")
-                            st.rerun()  # Refresh the page to use the new credentials
-                            
-                        except Exception as token_error:
-                            st.error(f"Failed to exchange authorization code: {str(token_error)}")
-                            st.error("Please try again. Make sure you copied the complete authorization code.")
-                            return None
-                    else:
-                        st.warning("Please enter the authorization code to continue.")
-                        return None
-                        
-            except Exception as e:
-                st.error(f"OAuth authentication failed: {str(e)}")
-                # Clear the auth flow state on error
-                if auth_key in st.session_state:
-                    del st.session_state[auth_key]
-                return None
+                except Exception as e:
+                    st.error(f"OAuth authentication failed: {str(e)}")
+                    return None
         
         else:
             # For local development, use local server
@@ -220,8 +215,7 @@ def load_oauth_credentials():
                             "http://127.0.0.1:8083",
                             "http://127.0.0.1:8084",
                             "http://localhost",
-                            "http://127.0.0.1",
-                            "urn:ietf:wg:oauth:2.0:oob"
+                            "http://127.0.0.1"
                         ]
                     }
                 },
@@ -253,9 +247,8 @@ def load_oauth_credentials():
                     # Store credentials in session state
                     st.session_state.google_creds = creds
                 except AttributeError:
-                    # If run_console doesn't exist, try out-of-band flow
-                    st.warning("Using out-of-band OAuth flow...")
-                    # For out-of-band flow, we need to handle it differently
+                    # If run_console doesn't exist, return None
+                    st.warning("Console OAuth flow not available.")
                     return None
             
             return creds
@@ -1132,9 +1125,8 @@ def main():
         if 'google_creds' in st.session_state:
             del st.session_state.google_creds
         # Clear any OAuth flow states
-        keys_to_remove = [key for key in st.session_state.keys() if key.startswith('oauth_auth_')]
-        for key in keys_to_remove:
-            del st.session_state[key]
+        if 'oauth_state' in st.session_state:
+            del st.session_state.oauth_state
         
         # Try OAuth first (preferred for quota reasons)
         creds = load_oauth_credentials()
@@ -1142,8 +1134,7 @@ def main():
         # If OAuth is in progress (waiting for user input), don't proceed with Google Slides creation
         if creds is None:
             # Check if we're in the middle of an OAuth flow
-            oauth_keys = [key for key in st.session_state.keys() if key.startswith('oauth_auth_')]
-            if oauth_keys:
+            if 'oauth_state' in st.session_state:
                 # OAuth flow is in progress, don't try service account
                 st.info("⏳ Please complete the OAuth authentication process above.")
                 return
