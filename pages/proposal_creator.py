@@ -9,6 +9,7 @@ import sys
 from io import BytesIO
 import re
 from datetime import datetime
+import socket
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -88,9 +89,6 @@ def load_oauth_credentials():
         ]
         
         # Check if we're in a deployed environment
-        import os
-        import socket
-        
         # Detect if we're in a deployed environment
         is_deployed = (
             os.environ.get('STREAMLIT_SERVER_HEADLESS') == 'true' or
@@ -129,14 +127,20 @@ def load_oauth_credentials():
                 st.markdown(f"[**Click here to authorize**]({auth_url})")
                 
                 # Get authorization code from user
-                auth_code = st.text_input("Enter the authorization code from the URL:", type="password")
+                auth_code = st.text_input("Enter the authorization code from the URL:", type="password", help="After clicking the link above, copy the 'code' parameter from the URL")
                 
                 if auth_code:
-                    # Exchange code for credentials
-                    flow.fetch_token(code=auth_code)
-                    creds = flow.credentials
-                    return creds
+                    try:
+                        # Exchange code for credentials
+                        flow.fetch_token(code=auth_code)
+                        creds = flow.credentials
+                        st.success("✅ Authentication successful!")
+                        return creds
+                    except Exception as token_error:
+                        st.error(f"Failed to exchange authorization code: {str(token_error)}")
+                        return None
                 else:
+                    st.warning("Please enter the authorization code to continue.")
                     return None
                     
             except Exception as e:
@@ -1072,7 +1076,18 @@ def main():
         creds = load_oauth_credentials()
         
         if not creds:
-            creds = load_service_account_credentials()
+            # Check if we're in deployed environment and OAuth failed
+            is_deployed = (
+                os.environ.get('STREAMLIT_SERVER_HEADLESS') == 'true' or
+                'streamlit.app' in socket.getfqdn() or
+                'blanklabelshop.com' in socket.getfqdn()
+            )
+            
+            if is_deployed:
+                st.error("OAuth authentication failed. Cannot create Google Slides.")
+                return
+            else:
+                creds = load_service_account_credentials()
         
         if not creds:
             st.error("Failed to load any Google credentials")
