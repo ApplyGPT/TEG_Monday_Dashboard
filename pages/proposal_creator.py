@@ -119,10 +119,26 @@ def load_oauth_credentials():
                 scopes=scopes,
             )
             
-            # Use console flow for deployed environments
+            # Use out-of-band flow for deployed environments
             try:
-                creds = flow.run_console()
-                return creds
+                # Get the authorization URL
+                auth_url, _ = flow.authorization_url(prompt='consent')
+                
+                # Display the URL for user to visit
+                st.info("🔐 Please visit this URL to authorize the application:")
+                st.markdown(f"[**Click here to authorize**]({auth_url})")
+                
+                # Get authorization code from user
+                auth_code = st.text_input("Enter the authorization code from the URL:", type="password")
+                
+                if auth_code:
+                    # Exchange code for credentials
+                    flow.fetch_token(code=auth_code)
+                    creds = flow.credentials
+                    return creds
+                else:
+                    return None
+                    
             except Exception as e:
                 st.error(f"OAuth authentication failed: {str(e)}")
                 return None
@@ -174,7 +190,13 @@ def load_oauth_credentials():
             
             # Fallback to console flow
             if not creds:
-                creds = flow.run_console()
+                try:
+                    creds = flow.run_console()
+                except AttributeError:
+                    # If run_console doesn't exist, try out-of-band flow
+                    st.warning("Using out-of-band OAuth flow...")
+                    # For out-of-band flow, we need to handle it differently
+                    return None
             
             return creds
         
