@@ -106,6 +106,8 @@ def load_oauth_credentials():
                         "http://127.0.0.1:8082", 
                         "http://127.0.0.1:8083",
                         "http://127.0.0.1:8084",
+                        "http://localhost",
+                        "http://127.0.0.1",
                         "urn:ietf:wg:oauth:2.0:oob",  # For out-of-band flow
                         "http://104.248.211.227/ads-dashboard/proposal_creator",
                         "https://blanklabelshop.com/ads-dashboard/proposal_creator",
@@ -776,6 +778,27 @@ def create_from_template_pptx(template_path: str,
     return out.getvalue()
 
 
+def cleanup_old_proposals(drive, max_files: int = 10):
+    """Clean up old proposal files to prevent quota issues."""
+    try:
+        # Find all proposal files
+        query = "name contains 'Proposal -' and mimeType='application/vnd.google-apps.presentation'"
+        results = drive.files().list(q=query, orderBy='createdTime desc', fields='files(id,name,createdTime)').execute()
+        files = results.get('files', [])
+        
+        # If we have more than max_files, delete the oldest ones
+        if len(files) > max_files:
+            files_to_delete = files[max_files:]
+            for file in files_to_delete:
+                try:
+                    drive.files().delete(fileId=file['id']).execute()
+                    st.info(f"Cleaned up old proposal: {file['name']}")
+                except Exception as e:
+                    st.warning(f"Could not delete {file['name']}: {e}")
+    except Exception as e:
+        st.warning(f"Could not clean up old files: {e}")
+
+
 def upload_pptx_to_google_slides(name_value: str,
                                   scope_items: list[str],
                                   sourcing_items: list[str],
@@ -788,6 +811,9 @@ def upload_pptx_to_google_slides(name_value: str,
         raise RuntimeError("Google API client not available")
     
     drive = build("drive", "v3", credentials=creds)
+    
+    # Clean up old proposal files to prevent quota issues
+    cleanup_old_proposals(drive)
     
     # Step 1: Generate the perfect PPTX first
     # Get the template path
@@ -985,11 +1011,11 @@ def main():
             st.error(f"Failed to generate PowerPoint: {e}")
 
     if push_gslides:
-        # Try service account first
-        creds = load_service_account_credentials()
+        # Try OAuth first (preferred for quota reasons)
+        creds = load_oauth_credentials()
         
         if not creds:
-            creds = load_oauth_credentials()
+            creds = load_service_account_credentials()
         
         if not creds:
             st.error("Failed to load any Google credentials")
