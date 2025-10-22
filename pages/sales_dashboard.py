@@ -1,10 +1,14 @@
 import streamlit as st
-import requests
 import pandas as pd
 import os
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
+import sys
+
+# Add parent directory to path to import database_utils
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from database_utils import get_sales_data, check_database_exists
 
 # Page configuration
 st.set_page_config(
@@ -72,122 +76,10 @@ def load_credentials():
         st.error(f"Error reading secrets: {str(e)}")
         st.stop()
 
-credentials = load_credentials()
-API_TOKEN = credentials['api_token']
-SALES_BOARD_ID = credentials['sales_board_id']
-
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_sales_data():
-    """Get sales data from Monday.com Sales boards with caching - fetches ALL records using pagination"""
-    url = "https://api.monday.com/v2"
-    headers = {
-        "Authorization": API_TOKEN,
-        "Content-Type": "application/json",
-    }
-    
-    # Based on the Google Sheets data, we only need the main Sales JEET COPY board
-    board_id = SALES_BOARD_ID
-    
-    all_items = []
-    
-    with st.spinner(f"🔄 Fetching ALL sales data from Monday.com Sales JEET COPY board..."):
-        cursor = None
-        limit = 500  # Maximum limit allowed by Monday.com API
-        page_count = 0
-        
-        while True:
-            page_count += 1
-            
-            # GraphQL query to fetch sales data from specific board with pagination
-            if cursor:
-                query = f"""
-                query {{
-                    boards(ids: [{board_id}]) {{
-                        items_page(limit: {limit}, cursor: "{cursor}") {{
-                            cursor
-                            items {{
-                                id
-                                name
-                                column_values {{
-                                    id
-                                    text
-                                    value
-                                    type
-                                }}
-                            }}
-                        }}
-                    }}
-                }}
-                """
-            else:
-                query = f"""
-                query {{
-                    boards(ids: [{board_id}]) {{
-                        items_page(limit: {limit}) {{
-                            cursor
-                            items {{
-                                id
-                                name
-                                column_values {{
-                                    id
-                                    text
-                                    value
-                                    type
-                                }}
-                            }}
-                        }}
-                    }}
-                }}
-                """
-            
-            try:
-                response = requests.post(url, json={"query": query}, headers=headers, timeout=120)  # Increased timeout
-                response.raise_for_status()
-                data = response.json()
-                
-                # Check for API errors
-                if "errors" in data and data["errors"]:
-                    st.error(f"API Error: {data['errors']}")
-                    break
-                
-                if "data" in data and "boards" in data["data"] and data["data"]["boards"]:
-                    board_info = data["data"]["boards"][0]
-                    items_page = board_info.get("items_page", {})
-                    items = items_page.get("items", [])
-                    cursor = items_page.get("cursor")
-                    
-                    all_items.extend(items)
-                    
-                    # Show progress
-                    #st.write(f"📊 Fetched {len(all_items)} records so far...")
-                    
-                    # If no cursor or fewer items than limit, we've reached the end
-                    if not cursor or len(items) < limit:
-                        break
-                else:
-                    st.error("No board data found")
-                    break
-                    
-            except requests.exceptions.Timeout:
-                st.error("Request timed out. Please try again.")
-                return None
-            except requests.exceptions.RequestException as e:
-                st.error(f"Error fetching data: {str(e)}")
-                return None
-            except Exception as e:
-                st.error(f"Unexpected error: {str(e)}")
-                return None
-    
-    # Return the data in the expected format
-    return {
-        "data": {
-            "boards": [{
-                "items_page": {
-                    "items": all_items
-                }
-            }]
-        }
-    }
+def get_sales_data_from_db():
+    """Get sales data from SQLite database"""
+    return get_sales_data()
 
 def process_sales_data(data):
     """Convert Monday.com sales data to pandas DataFrame and process it"""
@@ -323,10 +215,17 @@ def main():
     # Header
     st.title("📈 Sales Dashboard")
     
+    # Check if database exists and has data
+    db_exists, db_message = check_database_exists()
+    
+    if not db_exists:
+        st.error(f"❌ Database not ready: {db_message}")
+        st.info("💡 Please go to the 'Database Refresh' page to initialize the database with Monday.com data.")
+        return
+    
     # Sidebar for configuration
     with st.sidebar:
         st.header("⚙️ Settings")
-        st.info(f"Fetching from: {SALES_BOARD_ID}")
         st.info(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Refresh button
@@ -334,9 +233,9 @@ def main():
             st.cache_data.clear()
             st.rerun()
     
-    # Load and process data
-    with st.spinner("Loading sales data from Monday.com..."):
-        data = get_sales_data()
+    # Load and process data from database
+    with st.spinner("Loading sales data from database..."):
+        data = get_sales_data_from_db()
         
         df_filtered, df_2025 = process_sales_data(data)
     

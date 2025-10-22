@@ -1,10 +1,14 @@
 import streamlit as st
-import requests
 import pandas as pd
 import os
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
+import sys
+
+# Add parent directory to path to import database_utils
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from database_utils import get_ads_data, get_sales_data, check_database_exists
 
 # Page configuration
 st.set_page_config(
@@ -13,43 +17,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
-
-# Monday.com API settings from Streamlit secrets
-def load_credentials():
-    """Load credentials from Streamlit secrets"""
-    try:
-        # Access secrets from Streamlit
-        if 'monday' not in st.secrets:
-            st.error("Monday.com configuration not found in secrets.toml. Please check your configuration.")
-            st.stop()
-        
-        monday_config = st.secrets['monday']
-        
-        if 'api_token' not in monday_config:
-            st.error("API token not found in secrets.toml. Please add your Monday.com API token.")
-            st.stop()
-            
-        required_board_ids = ['ads_board_id', 'sales_board_id']
-        
-        board_ids = {}
-        for board_id_key in required_board_ids:
-            if board_id_key not in monday_config:
-                st.error(f"{board_id_key} not found in secrets.toml. Please add the board ID.")
-                st.stop()
-            board_ids[board_id_key] = int(monday_config[board_id_key])
-        
-        return {
-            'api_token': monday_config['api_token'],
-            **board_ids
-        }
-    except Exception as e:
-        st.error(f"Error reading secrets: {str(e)}")
-        st.stop()
-
-credentials = load_credentials()
-API_TOKEN = credentials['api_token']
-ADS_BOARD_ID = credentials['ads_board_id']
-SALES_BOARD_ID = credentials['sales_board_id']
 
 # Custom CSS for better embedding and responsive design
 st.markdown("""
@@ -104,102 +71,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_ads_data():
-    """Get all items from Ads board with caching"""
-    url = "https://api.monday.com/v2"
-    headers = {
-        "Authorization": API_TOKEN,
-        "Content-Type": "application/json",
-    }
-    
-    query = f"""
-    query {{
-        boards(ids: {ADS_BOARD_ID}) {{
-            items_page(limit: 100) {{
-                items {{
-                    id
-                    name
-                    state
-                    created_at
-                    updated_at
-                    column_values {{
-                        id
-                        text
-                        value
-                    }}
-                }}
-            }}
-        }}
-    }}
-    """
-    
-    try:
-        response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
-        
-        if response.status_code == 401:
-            st.error("401 Unauthorized: Check your API token and permissions.")
-            return None
-        
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.Timeout:
-        st.error("Request timed out. Please try again.")
-        return None
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching ads data: {str(e)}")
-        return None
-    except Exception as e:
-        st.error(f"Unexpected error: {str(e)}")
-        return None
+def get_ads_data_from_db():
+    """Get ads data from SQLite database"""
+    return get_ads_data()
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_sales_data():
-    """Get all items from Sales board with caching"""
-    url = "https://api.monday.com/v2"
-    headers = {
-        "Authorization": API_TOKEN,
-        "Content-Type": "application/json",
-    }
-    
-    query = f"""
-    query {{
-        boards(ids: {SALES_BOARD_ID}) {{
-            items_page(limit: 500) {{
-                items {{
-                    id
-                    name
-                    state
-                    created_at
-                    updated_at
-                    column_values {{
-                        id
-                        text
-                        value
-                    }}
-                }}
-            }}
-        }}
-    }}
-    """
-    
-    try:
-        response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
-        
-        if response.status_code == 401:
-            st.error("401 Unauthorized: Check your API token and permissions.")
-            return None
-        
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.Timeout:
-        st.error("Request timed out. Please try again.")
-        return None
-    except requests.exceptions.RequestException as e:
-        st.error(f"Error fetching sales data: {str(e)}")
-        return None
-    except Exception as e:
-        st.error(f"Unexpected error: {str(e)}")
-        return None
+def get_sales_data_from_db():
+    """Get sales data from SQLite database"""
+    return get_sales_data()
 
 def format_ads_data(data):
     """Convert Monday.com ads data to pandas DataFrame"""
@@ -431,11 +310,17 @@ def main():
     # Header
     st.markdown('<div class="embed-header">📊 GOOGLE ADS ATTRIBUTION DASHBOARD</div>', unsafe_allow_html=True)
     
+    # Check if database exists and has data
+    db_exists, db_message = check_database_exists()
+    
+    if not db_exists:
+        st.error(f"❌ Database not ready: {db_message}")
+        st.info("💡 Please go to the 'Database Refresh' page to initialize the database with Monday.com data.")
+        return
+    
     # Sidebar for configuration
     with st.sidebar:
         st.header("⚙️ Settings")
-        st.info(f"Ads Board ID: {ADS_BOARD_ID}")
-        st.info(f"Sales Board ID: {SALES_BOARD_ID}")
         st.info(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Refresh button
@@ -443,11 +328,11 @@ def main():
             st.cache_data.clear()
             st.rerun()
     
-    # Load data
-    with st.spinner("Loading data from Monday.com..."):
+    # Load data from database
+    with st.spinner("Loading data from database..."):
         try:
-            ads_data = get_ads_data()
-            sales_data = get_sales_data()
+            ads_data = get_ads_data_from_db()
+            sales_data = get_sales_data_from_db()
             ads_df = format_ads_data(ads_data)
             sales_df_raw = format_sales_data(sales_data)
             
@@ -455,7 +340,7 @@ def main():
             sales_df, closed_statuses, paid_search_channels = filter_roas_data(sales_df_raw, sales_data)
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
-            st.info("Please check your API token and board IDs in secrets.toml")
+            st.info("Please refresh the database using the 'Database Refresh' page")
             return
 
     # Check if we have data

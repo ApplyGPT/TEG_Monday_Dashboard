@@ -1,9 +1,14 @@
 import streamlit as st
-import requests
 import pandas as pd
 from datetime import datetime, date, timedelta
 import plotly.express as px
 import calendar
+import sys
+import os
+
+# Add parent directory to path to import database_utils
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from database_utils import get_new_leads_data, check_database_exists
 
 # Page configuration
 st.set_page_config(
@@ -219,20 +224,10 @@ def get_board_data(board_id, board_name, groups):
     
     return all_items
 
-def get_all_leads_data():
-    """Get data from all four boards"""
-    all_leads = []
-    
-    for board_name, board_id in BOARDS.items():
-        with st.spinner(f"Getting groups from {board_name}..."):
-            # First, get all groups and filter out unwanted ones
-            valid_groups = get_board_groups(board_id, board_name)
-            
-            if valid_groups:
-                board_data = get_board_data(board_id, board_name, valid_groups)
-                all_leads.extend(board_data)
-    
-    return all_leads
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_all_leads_data_from_db():
+    """Get leads data from SQLite database"""
+    return get_new_leads_data()
 
 def format_leads_data(leads_data):
     """Convert Monday.com leads data to pandas DataFrame"""
@@ -431,6 +426,14 @@ def main():
     # Header
     st.markdown('<div class="embed-header">🔍 NEW LEADS CHECK</div>', unsafe_allow_html=True)
     
+    # Check if database exists and has data
+    db_exists, db_message = check_database_exists()
+    
+    if not db_exists:
+        st.error(f"❌ Database not ready: {db_message}")
+        st.info("💡 Please go to the 'Database Refresh' page to initialize the database with Monday.com data.")
+        return
+    
     # Sidebar for configuration
     with st.sidebar:
         st.header("⚙️ Settings")
@@ -449,9 +452,9 @@ def main():
         help="Select the date to filter leads by their creation date"
     )
     
-    # Load data
-    with st.spinner("Loading leads data from all Monday.com boards..."):
-        leads_data = get_all_leads_data()
+    # Load data from database
+    with st.spinner("Loading leads data from database..."):
+        leads_data = get_all_leads_data_from_db()
         df = format_leads_data(leads_data)
     
     if df.empty:
