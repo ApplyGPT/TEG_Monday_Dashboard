@@ -185,50 +185,91 @@ def get_discovery_call_dates():
     return all_dates
 
 def get_sales_data():
-    """Get sales data in the format expected by sales dashboard"""
+    """Get sales data in the format expected by sales dashboard with filtering"""
     items = get_board_data_as_items('sales_board')
     
-    if not items:
+    # Filter out items that start with "No", "Not", or "Spam"
+    filtered_items = []
+    for item in items:
+        item_name = item.get("name", "")
+        if not item_name.lower().startswith(('no ', 'not ', 'spam')):
+            filtered_items.append(item)
+    
+    if not filtered_items:
         return {"data": {"boards": [{"items_page": {"items": []}}]}}
     
     return {
         "data": {
             "boards": [{
                 "items_page": {
-                    "items": items
+                    "items": filtered_items
                 }
             }]
         }
     }
 
 def get_ads_data():
-    """Get ads data in the format expected by ads dashboard"""
+    """Get ads data in the format expected by ads dashboard with filtering"""
     items = get_board_data_as_items('ads_board')
     
-    if not items:
+    # Filter out items that start with "No", "Not", or "Spam"
+    filtered_items = []
+    for item in items:
+        item_name = item.get("name", "")
+        if not item_name.lower().startswith(('no ', 'not ', 'spam')):
+            filtered_items.append(item)
+    
+    if not filtered_items:
         return {"data": {"boards": [{"items_page": {"items": []}}]}}
     
     return {
         "data": {
             "boards": [{
                 "items_page": {
-                    "items": items
+                    "items": filtered_items
                 }
             }]
         }
     }
 
 def get_new_leads_data():
-    """Get new leads data"""
-    return get_board_data_as_items('new_leads_board')
+    """Get new leads data with filtering"""
+    items = get_board_data_as_items('new_leads_board')
+    
+    # Filter out items that start with "No", "Not", or "Spam"
+    filtered_items = []
+    for item in items:
+        item_name = item.get("name", "")
+        if not item_name.lower().startswith(('no ', 'not ', 'spam')):
+            filtered_items.append(item)
+    
+    return filtered_items
 
 def get_discovery_call_data():
-    """Get discovery call data"""
-    return get_board_data_as_items('discovery_call_board')
+    """Get discovery call data with filtering"""
+    items = get_board_data_as_items('discovery_call_board')
+    
+    # Filter out items that start with "No", "Not", or "Spam"
+    filtered_items = []
+    for item in items:
+        item_name = item.get("name", "")
+        if not item_name.lower().startswith(('no ', 'not ', 'spam')):
+            filtered_items.append(item)
+    
+    return filtered_items
 
 def get_design_review_data():
-    """Get design review data"""
-    return get_board_data_as_items('design_review_board')
+    """Get design review data with filtering"""
+    items = get_board_data_as_items('design_review_board')
+    
+    # Filter out items that start with "No", "Not", or "Spam"
+    filtered_items = []
+    for item in items:
+        item_name = item.get("name", "")
+        if not item_name.lower().startswith(('no ', 'not ', 'spam')):
+            filtered_items.append(item)
+    
+    return filtered_items
 
 def check_database_exists():
     """Check if database exists and has data"""
