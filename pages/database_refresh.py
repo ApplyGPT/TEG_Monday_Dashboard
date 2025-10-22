@@ -333,37 +333,11 @@ def get_database_status():
 def main():
     """Main application function"""
     st.title("🔄 Database Refresh")
-    st.markdown("### Monday.com Data Management")
     
     # Initialize database
     init_database()
     
-    # Get current database status
-    status = get_database_status()
-    
-    # Display current status
-    st.subheader("📊 Current Database Status")
-    
-    for table, info in status.items():
-        board_name = table.replace('_board', '').replace('_', ' ').title()
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric(f"{board_name} Records", info['count'])
-        
-        with col2:
-            st.metric("Last Updated", info['last_updated'])
-        
-        with col3:
-            if info['count'] > 0:
-                st.success("✅ Data Available")
-            else:
-                st.error("❌ No Data")
-    
-    st.divider()
-    
     # Refresh button
-    st.subheader("🔄 Refresh Database")
     st.markdown("Click the button below to fetch fresh data from Monday.com and update the local database.")
     
     if st.button("🔄 Refresh All Data", type="primary"):
