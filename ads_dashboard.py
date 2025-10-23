@@ -698,7 +698,7 @@ def main():
 
     # UTM Data Section at the bottom
     st.markdown("---")
-    st.subheader("📊 UTM Data (Leads by Channel)")
+    st.subheader("📊 UTM Data (Leads by Channel - 2025)")
     
     # Get all leads data for UTM analysis
     with st.spinner("Loading UTM data..."):
@@ -737,7 +737,7 @@ def main():
             # Create side-by-side bar chart
             fig = px.bar(
                 channel_pivot,
-                title='Leads by Channel - 2025 (Based on Date Created)',
+                title='',
                 labels={'value': 'Number of Leads', 'index': 'Month'},
                 color_discrete_map={
                     'Ads': '#FF6B6B',      # Red for Ads

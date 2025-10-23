@@ -8,7 +8,7 @@ import sys
 
 # Add parent directory to path to import database_utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from database_utils import get_sales_data, check_database_exists
+from database_utils import get_sales_data, check_database_exists, get_new_leads_data, get_discovery_call_data, get_design_review_data
 
 # Page configuration
 st.set_page_config(
@@ -28,6 +28,74 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_all_leads_for_sales_chart():
+    """Get all leads data from all boards for sales chart analysis using correct date fields"""
+    import json
+    
+    all_leads = []
+    
+    # Get data from all boards using database functions
+    boards_data = {
+        'New Leads': get_new_leads_data(),
+        'Discovery Call': get_discovery_call_data(), 
+        'Design Review': get_design_review_data(),
+        'Sales': get_sales_data().get('data', {}).get('boards', [{}])[0].get('items_page', {}).get('items', [])
+    }
+    
+    # Board-specific date column IDs for each stage (based on Monday.com filter results)
+    date_columns = {
+        'New Leads': 'date_mkwgr4gg',           # Date Created (181 vs 182 expected)
+        'Discovery Call': 'date_mktbrpz6',      # Discovery Call Date (144 vs 145 expected)
+        'Design Review': 'date3',                # Design Review Date (221 vs 221 expected - PERFECT MATCH!)
+        'Sales': 'date_mktqx5me'                # Deck Call Date (390 vs 390 expected - PERFECT MATCH!)
+    }
+    
+    # Process each board's data
+    for board_name, items in boards_data.items():
+        target_date_column = date_columns.get(board_name)
+        
+        for item in items:
+            # Parse column_values if it's a string
+            column_values = item.get("column_values", [])
+            if isinstance(column_values, str):
+                try:
+                    column_values = json.loads(column_values)
+                except:
+                    column_values = []
+            
+            # Look for the specific date column for this board/stage
+            stage_date = None
+            for col_val in column_values:
+                col_id = col_val.get("id", "")
+                col_type = col_val.get("type", "")
+                text = (col_val.get("text") or "").strip()
+                
+                if col_type == "date" and text and col_id == target_date_column:
+                    stage_date = text
+                    break
+            
+            # Map board names to chart categories
+            if board_name == 'New Leads':
+                category = 'New Leads'
+            elif board_name == 'Discovery Call':
+                category = 'Discovery Call'
+            elif board_name == 'Design Review':
+                category = 'Design Review Call'
+            elif board_name == 'Sales':
+                category = 'Deck Call'
+            else:
+                category = 'Other'
+            
+            all_leads.append({
+                'name': item.get('name', ''),
+                'board': board_name,
+                'category': category,
+                'stage_date': stage_date  # Changed from 'date_created' to 'stage_date'
+            })
+    
+    return all_leads
 
 # Helper function to format numbers with K format
 def format_currency(value):
@@ -650,6 +718,98 @@ def main():
         st.plotly_chart(fig_category, use_container_width=True)
     else:
         st.info(f"No sales data available for {selected_year_category}.")
+    
+    # Leads by Category Over Time Chart
+    st.markdown("---")
+    st.subheader("Leads by Category Over Time - 2025")
+    
+    # Get leads data for the chart
+    with st.spinner("Loading leads data..."):
+        all_leads = get_all_leads_for_sales_chart()
+    
+    if all_leads:
+        # Convert to DataFrame
+        leads_df = pd.DataFrame(all_leads)
+        
+        # Parse dates and filter for valid dates
+        leads_df['stage_date'] = pd.to_datetime(leads_df['stage_date'], errors='coerce')
+        leads_with_dates = leads_df.dropna(subset=['stage_date'])
+        
+        # Filter for 2025 data only
+        leads_with_dates = leads_with_dates[leads_with_dates['stage_date'].dt.year == 2025]
+        
+        if not leads_with_dates.empty:
+            # Add month-year column for grouping
+            leads_with_dates['Month Year'] = leads_with_dates['stage_date'].dt.to_period('M').astype(str)
+            
+            # Count leads by category and month
+            category_counts = leads_with_dates.groupby(['Month Year', 'category']).size().reset_index(name='count')
+            
+            # Create pivot table for easier charting
+            category_pivot = category_counts.pivot(index='Month Year', columns='category', values='count').fillna(0)
+            
+            # Ensure we have the main categories
+            main_categories = ['New Leads', 'Discovery Call', 'Design Review Call', 'Deck Call']
+            for category in main_categories:
+                if category not in category_pivot.columns:
+                    category_pivot[category] = 0
+            
+            # Reorder columns
+            category_pivot = category_pivot[main_categories]
+            
+            # Create bar chart using go.Figure for better control
+            fig_leads = go.Figure()
+            
+            # Define colors for each category
+            category_colors = {
+                'New Leads': '#FF6B6B',           # Red
+                'Discovery Call': '#4ECDC4',      # Teal
+                'Design Review Call': '#ffcb00',  # Yellow
+                'Deck Call': '#00c875'            # Green
+            }
+            
+            # Add traces for each category
+            for category in main_categories:
+                if category in category_pivot.columns:
+                    # Create text labels, but hide zeros
+                    text_labels = []
+                    for value in category_pivot[category]:
+                        if value == 0:
+                            text_labels.append("")  # Empty string for zero values
+                        else:
+                            text_labels.append(str(int(value)))  # Show actual value for non-zeros
+                    
+                    fig_leads.add_trace(go.Bar(
+                        name=category,  # This will show in legend without "category" prefix
+                        x=category_pivot.index,
+                        y=category_pivot[category],
+                        marker_color=category_colors[category],
+                        text=text_labels,  # Use custom text labels that hide zeros
+                        textposition='outside',
+                        textfont=dict(size=12, color='black')
+                    ))
+            
+            # Update layout
+            fig_leads.update_layout(
+                xaxis_title="Month",
+                yaxis_title="Number of Leads",
+                barmode='group',  # Side-by-side bars
+                height=500,
+                showlegend=True,
+                legend=dict(
+                    orientation="h",   # horizontal
+                    yanchor="top",
+                    y=-0.2,            # below the chart
+                    xanchor="center",
+                    x=0.5
+                )
+            )
+            
+            st.plotly_chart(fig_leads, use_container_width=True)
+        else:
+            st.info("No leads data with valid dates available.")
+    else:
+        st.info("No leads data available.")
 
 if __name__ == "__main__":
     main()

@@ -8,6 +8,17 @@ st.set_page_config(
     layout="wide"
 )
 
+# Custom CSS to hide QuickBooks and SignNow pages from sidebar
+st.markdown("""
+<style>
+    /* Hide QuickBooks and SignNow pages from sidebar */
+    [data-testid="stSidebarNav"] a[href*="quickbooks_form"],
+    [data-testid="stSidebarNav"] a[href*="signnow_form"] {
+        display: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 @st.cache_data
 def load_seo_data():
     """Load SEO tracking data from Excel file"""
