@@ -5,6 +5,7 @@ import plotly.express as px
 import calendar
 import sys
 import os
+import requests
 
 # Add parent directory to path to import database_utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -226,8 +227,40 @@ def get_board_data(board_id, board_name, groups):
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_all_leads_data_from_db():
-    """Get leads data from SQLite database"""
-    return get_new_leads_data()
+    """Get leads data from all boards in SQLite database"""
+    from database_utils import get_new_leads_data, get_discovery_call_data, get_design_review_data, get_sales_data
+    
+    all_leads = []
+    
+    # Get data from all boards
+    boards_data = {
+        'New Leads v2': get_new_leads_data(),
+        'Discovery Call v2': get_discovery_call_data(), 
+        'Design Review v2': get_design_review_data(),
+        'Sales v2': get_sales_data().get('data', {}).get('boards', [{}])[0].get('items_page', {}).get('items', [])
+    }
+    
+    # Add board and group information to each item
+    for board_name, items in boards_data.items():
+        for item in items:
+            # Add board name to each item
+            item['board_name'] = board_name
+            
+            # Try to determine group based on board or set default
+            if board_name == 'New Leads v2':
+                item['group_name'] = 'Active Leads'
+            elif board_name == 'Discovery Call v2':
+                item['group_name'] = 'Scheduled Calls'
+            elif board_name == 'Design Review v2':
+                item['group_name'] = 'Design Reviews'
+            elif board_name == 'Sales v2':
+                item['group_name'] = 'Sales Pipeline'
+            else:
+                item['group_name'] = 'Active'
+            
+            all_leads.append(item)
+    
+    return all_leads
 
 def format_leads_data(leads_data):
     """Convert Monday.com leads data to pandas DataFrame"""
@@ -326,24 +359,19 @@ def filter_leads_by_date(df, selected_date):
     return filtered_df
 
 def create_monthly_calendar(df, selected_date):
-    """Create a monthly calendar view showing lead counts by day"""
+    """Create a monthly calendar view showing lead counts by day up to the selected date"""
     if df.empty:
         return None, None
     
     # Get the month from the selected date
     selected_month = selected_date.replace(day=1)
     
-    # Get the last day of the month
-    if selected_month.month == 12:
-        next_month = selected_month.replace(year=selected_month.year + 1, month=1)
-    else:
-        next_month = selected_month.replace(month=selected_month.month + 1)
+    # Only show days up to the selected date
+    last_day_to_show = selected_date.day
     
-    last_day = (next_month - timedelta(days=1)).day
-    
-    # Create date range for the month
+    # Create date range for the month up to selected date
     month_dates = []
-    for day in range(1, last_day + 1):
+    for day in range(1, last_day_to_show + 1):
         month_dates.append(selected_month.replace(day=day))
     
     # Count leads for each day
@@ -355,13 +383,16 @@ def create_monthly_calendar(df, selected_date):
     return daily_counts, selected_month
 
 def display_calendar_view(daily_counts, selected_month):
-    """Display the calendar view with lead counts"""
+    """Display the calendar view with lead counts up to selected date"""
     if not daily_counts:
         return
     
     month_name = selected_month.strftime('%B %Y')
     
-    # Create calendar grid
+    # Get the last day to show (from daily_counts)
+    last_day = max(date.day for date in daily_counts.keys()) if daily_counts else 1
+    
+    # Create calendar grid for the month up to the last day
     cal = calendar.monthcalendar(selected_month.year, selected_month.month)
       
     # Create calendar grid with Streamlit columns
@@ -380,6 +411,8 @@ def display_calendar_view(daily_counts, selected_month):
             with cols[i]:
                 if day == 0:
                     st.write("")  # Empty cell for days not in this month
+                elif day > last_day:
+                    st.write("")  # Empty cell for days beyond selected date
                 else:
                     current_date = selected_month.replace(day=day)
                     lead_count = daily_counts.get(current_date, 0)
@@ -444,6 +477,15 @@ def main():
             st.cache_data.clear()
             st.rerun()
     
+    # Load data from database first
+    with st.spinner("Loading leads data from database..."):
+        leads_data = get_all_leads_data_from_db()
+        df = format_leads_data(leads_data)
+    
+    if df.empty:
+        st.warning("No leads data found. Please check your board configurations and API permissions.")
+        return
+    
     # Date selector
     st.subheader("📅 Select Date")
     selected_date = st.date_input(
@@ -452,14 +494,12 @@ def main():
         help="Select the date to filter leads by their creation date"
     )
     
-    # Load data from database
-    with st.spinner("Loading leads data from database..."):
-        leads_data = get_all_leads_data_from_db()
-        df = format_leads_data(leads_data)
-    
-    if df.empty:
-        st.warning("No leads data found. Please check your board configurations and API permissions.")
-        return
+    # Display monthly calendar view based on selected date
+    st.subheader("Monthly Calendar View")
+    daily_counts, calendar_month = create_monthly_calendar(df, selected_date)
+    if daily_counts:
+        display_calendar_view(daily_counts, calendar_month)
+        st.markdown("---")
     
     # Filter data by selected date
     filtered_df = filter_leads_by_date(df, selected_date)
@@ -509,12 +549,6 @@ def main():
         # Show filtered results
         total_leads = len(filtered_df)
         st.metric("Leads Found", total_leads)
-        
-        # Display monthly calendar view below the metric
-        daily_counts, calendar_month = create_monthly_calendar(df, selected_date)
-        if daily_counts:
-            display_calendar_view(daily_counts, calendar_month)
-            st.markdown("---")
         
         # Display the filtered data with date information
         display_columns = ['Item Name', 'Current Board', 'Group']     
