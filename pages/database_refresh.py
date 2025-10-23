@@ -52,11 +52,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Database setup
-DB_PATH = "monday_data.db"
+MONDAY_DB_PATH = "monday_data.db"
+CALENDLY_DB_PATH = "calendly_data.db"
 
-def init_database():
-    """Initialize SQLite database with tables for all boards"""
-    conn = sqlite3.connect(DB_PATH)
+def init_monday_database():
+    """Initialize SQLite database with tables for all Monday.com boards"""
+    conn = sqlite3.connect(MONDAY_DB_PATH)
     cursor = conn.cursor()
     
     # Create tables for each board
@@ -83,8 +84,32 @@ def init_database():
     conn.commit()
     conn.close()
 
-def load_credentials():
-    """Load credentials from Streamlit secrets"""
+def init_calendly_database():
+    """Initialize SQLite database for Calendly data"""
+    conn = sqlite3.connect(CALENDLY_DB_PATH)
+    cursor = conn.cursor()
+    
+    # Create table for Calendly events
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS calendly_events (
+            uri TEXT PRIMARY KEY,
+            name TEXT,
+            start_time TEXT,
+            end_time TEXT,
+            status TEXT,
+            event_type TEXT,
+            invitee_name TEXT,
+            invitee_email TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+def load_monday_credentials():
+    """Load Monday.com credentials from Streamlit secrets"""
     try:
         if 'monday' not in st.secrets:
             st.error("Monday.com configuration not found in secrets.toml.")
@@ -116,7 +141,27 @@ def load_credentials():
             **board_ids
         }
     except Exception as e:
-        st.error(f"Error reading secrets: {str(e)}")
+        st.error(f"Error reading Monday secrets: {str(e)}")
+        return None
+
+def load_calendly_credentials():
+    """Load Calendly credentials from Streamlit secrets"""
+    try:
+        if 'calendly' not in st.secrets:
+            st.error("Calendly configuration not found in secrets.toml.")
+            return None
+        
+        calendly_config = st.secrets['calendly']
+        
+        if 'calendly_api_key' not in calendly_config:
+            st.error("Calendly API key not found in secrets.toml.")
+            return None
+            
+        return {
+            'api_key': calendly_config['calendly_api_key']
+        }
+    except Exception as e:
+        st.error(f"Error reading Calendly secrets: {str(e)}")
         return None
 
 def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
@@ -220,9 +265,44 @@ def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
     
     return all_items, None
 
+def save_calendly_data_to_db(events_data):
+    """Save Calendly events data to SQLite database"""
+    conn = sqlite3.connect(CALENDLY_DB_PATH)
+    cursor = conn.cursor()
+    
+    # Clear existing data
+    cursor.execute("DELETE FROM calendly_events")
+    
+    # Insert new data
+    for event in events_data:
+        uri = event.get('uri', '')
+        name = event.get('name', '')
+        start_time = event.get('start_time', '')
+        end_time = event.get('end_time', '')
+        status = event.get('status', '')
+        event_type = event.get('event_type', '')
+        
+        # Get invitee info
+        invitees = event.get('invitees', [])
+        invitee_name = ""
+        invitee_email = ""
+        if invitees:
+            invitee = invitees[0]
+            invitee_name = invitee.get('name', '')
+            invitee_email = invitee.get('email', '')
+        
+        cursor.execute('''
+            INSERT INTO calendly_events 
+            (uri, name, start_time, end_time, status, event_type, invitee_name, invitee_email, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (uri, name, start_time, end_time, status, event_type, invitee_name, invitee_email, datetime.now()))
+    
+    conn.commit()
+    conn.close()
+
 def save_board_data_to_db(board_data, table_name, board_type):
     """Save board data to SQLite database"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(MONDAY_DB_PATH)
     cursor = conn.cursor()
     
     # Clear existing data for this board
@@ -242,9 +322,9 @@ def save_board_data_to_db(board_data, table_name, board_type):
     conn.commit()
     conn.close()
 
-def refresh_database():
+def refresh_monday_database():
     """Refresh all board data from Monday.com"""
-    credentials = load_credentials()
+    credentials = load_monday_credentials()
     if not credentials:
         return False, "Failed to load credentials"
     
@@ -301,85 +381,252 @@ def refresh_database():
     
     return success_count, errors, detailed_results
 
-def get_database_status():
-    """Get status of database tables"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+def refresh_calendly_database():
+    """Refresh Calendly data from API"""
+    credentials = load_calendly_credentials()
+    if not credentials:
+        return False, "Failed to load Calendly credentials"
     
-    tables = ['sales_board', 'new_leads_board', 'discovery_call_board', 'design_review_board', 'ads_board']
+    api_key = credentials['api_key']
+    
+    try:
+        # Get user info
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+        
+        # Get user info
+        user_response = requests.get('https://api.calendly.com/users/me', headers=headers)
+        if user_response.status_code != 200:
+            return False, f"Failed to get user info: {user_response.status_code}"
+        
+        user_data = user_response.json()
+        user_uri = user_data['resource']['uri']
+        
+        # Get event types
+        event_types_response = requests.get(f'https://api.calendly.com/event_types?user={user_uri}', headers=headers)
+        if event_types_response.status_code != 200:
+            return False, f"Failed to get event types: {event_types_response.status_code}"
+        
+        event_types_data = event_types_response.json()
+        event_types = event_types_data.get('collection', [])
+        
+        # Find TEG-related event types
+        teg_event_types = []
+        for event_type in event_types:
+            name = event_type.get('name', '').lower()
+            if any(keyword in name for keyword in ['teg', 'intro', 'call']):
+                teg_event_types.append(event_type)
+        
+        if not teg_event_types:
+            return False, "No TEG-related event types found"
+        
+        # Use the first TEG event type
+        selected_event_type = teg_event_types[0]
+        event_type_uri = selected_event_type['uri']
+        event_type_uuid = event_type_uri.split('/')[-1]
+        event_name = selected_event_type['name']
+        
+        # Fetch scheduled events with pagination
+        all_events = []
+        page_count = 0
+        next_page_token = None
+        
+        # Date range for 2025
+        min_start_time = "2025-01-01T00:00:00.000000Z"
+        max_start_time = "2025-10-23T23:59:59.999999Z"
+        
+        while page_count < 50:  # Safety limit
+            page_count += 1
+            
+            params = {
+                'user': user_uri,
+                'event_type': event_type_uuid,
+                'min_start_time': min_start_time,
+                'max_start_time': max_start_time,
+                'count': 100
+            }
+            
+            if next_page_token:
+                params['page_token'] = next_page_token
+            
+            events_response = requests.get('https://api.calendly.com/scheduled_events', 
+                                        headers=headers, params=params)
+            
+            if events_response.status_code != 200:
+                return False, f"Failed to get scheduled events: {events_response.status_code}"
+            
+            events_data = events_response.json()
+            events = events_data.get('collection', [])
+            
+            if not events:
+                break
+            
+            all_events.extend(events)
+            
+            pagination = events_data.get('pagination', {})
+            next_page_token = pagination.get('next_page_token')
+            
+            if not next_page_token:
+                break
+        
+        # Save to database
+        save_calendly_data_to_db(all_events)
+        
+        return True, f"Successfully saved {len(all_events)} Calendly events for '{event_name}'"
+        
+    except Exception as e:
+        return False, f"Error refreshing Calendly data: {str(e)}"
+
+def get_database_status():
+    """Get status of both Monday and Calendly database tables"""
     status = {}
     
-    for table in tables:
+    # Monday database status
+    try:
+        conn = sqlite3.connect(MONDAY_DB_PATH)
+        cursor = conn.cursor()
+        
+        tables = ['sales_board', 'new_leads_board', 'discovery_call_board', 'design_review_board', 'ads_board']
+        
+        for table in tables:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                count = cursor.fetchone()[0]
+                
+                cursor.execute(f"SELECT MAX(updated_at) FROM {table}")
+                last_updated = cursor.fetchone()[0]
+                
+                status[f"monday_{table}"] = {
+                    'count': count,
+                    'last_updated': last_updated
+                }
+            except:
+                status[f"monday_{table}"] = {
+                    'count': 0,
+                    'last_updated': 'Never'
+                }
+        
+        conn.close()
+    except:
+        pass
+    
+    # Calendly database status
+    try:
+        conn = sqlite3.connect(CALENDLY_DB_PATH)
+        cursor = conn.cursor()
+        
         try:
-            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            cursor.execute("SELECT COUNT(*) FROM calendly_events")
             count = cursor.fetchone()[0]
             
-            cursor.execute(f"SELECT MAX(updated_at) FROM {table}")
+            cursor.execute("SELECT MAX(updated_at) FROM calendly_events")
             last_updated = cursor.fetchone()[0]
             
-            status[table] = {
+            status['calendly_events'] = {
                 'count': count,
                 'last_updated': last_updated
             }
         except:
-            status[table] = {
+            status['calendly_events'] = {
                 'count': 0,
                 'last_updated': 'Never'
             }
+        
+        conn.close()
+    except:
+        pass
     
-    conn.close()
     return status
 
 def main():
     """Main application function"""
     st.title("🔄 Database Refresh")
     
-    # Initialize database
-    init_database()
+    # Initialize both databases
+    init_monday_database()
+    init_calendly_database()
     
-    # Refresh button
-    st.markdown("Click the button below to fetch fresh data from Monday.com and update the local database.")
+    # Two separate refresh buttons
+    col1, col2 = st.columns(2)
     
-    if st.button("🔄 Refresh All Data", type="primary"):
-        with st.spinner("Refreshing database from Monday.com..."):
-            success_count, errors, detailed_results = refresh_database()
+    with col1:
+        st.markdown("### 📊 Monday.com Data")
+        st.markdown("Refresh all Monday.com board data (Sales, Leads, Discovery Calls, etc.)")
         
-        if success_count > 0:
-            st.markdown(f"""
-            <div class="status-success">
-                <h4>✅ Refresh Complete!</h4>
-                <p>Successfully updated {success_count} out of 5 boards.</p>
-                <p>Database has been refreshed with latest data from Monday.com.</p>
-            </div>
-            """, unsafe_allow_html=True)
+        if st.button("🔄 Refresh All Monday Data", type="primary", use_container_width=True):
+            with st.spinner("Refreshing Monday.com database..."):
+                success_count, errors, detailed_results = refresh_monday_database()
+            
+            if success_count > 0:
+                st.markdown(f"""
+                <div class="status-success">
+                    <h4>✅ Monday Refresh Complete!</h4>
+                    <p>Successfully updated {success_count} out of 5 boards.</p>
+                    <p>Monday.com database has been refreshed with latest data.</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Show detailed results
+            st.subheader("📋 Monday.com Results")
+            for result in detailed_results:
+                if "SUCCESS" in result:
+                    st.success(f"✅ {result}")
+                elif "ERROR" in result or "EXCEPTION" in result:
+                    st.error(f"❌ {result}")
+                elif "WARNING" in result:
+                    st.warning(f"⚠️ {result}")
+            
+            if errors:
+                st.markdown(f"""
+                <div class="status-error">
+                    <h4>⚠️ Some Errors Occurred:</h4>
+                    <ul>
+                        {''.join([f'<li>{error}</li>' for error in errors])}
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.rerun()
+    
+    with col2:
+        st.markdown("### 📅 Calendly Data")
+        st.markdown("Refresh Calendly events data for TEG calls")
         
-        # Show detailed results
-        st.subheader("📋 Detailed Results")
-        for result in detailed_results:
-            if "SUCCESS" in result:
-                st.success(f"✅ {result}")
-            elif "ERROR" in result or "EXCEPTION" in result:
-                st.error(f"❌ {result}")
-            elif "WARNING" in result:
-                st.warning(f"⚠️ {result}")
-        
-        if errors:
-            st.markdown(f"""
-            <div class="status-error">
-                <h4>⚠️ Some Errors Occurred:</h4>
-                <ul>
-                    {''.join([f'<li>{error}</li>' for error in errors])}
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Refresh the page to show updated status
-        st.rerun() 
+        if st.button("🔄 Refresh All Calendly Data", type="primary", use_container_width=True):
+            with st.spinner("Refreshing Calendly database..."):
+                success, message = refresh_calendly_database()
+            
+            if success:
+                st.markdown(f"""
+                <div class="status-success">
+                    <h4>✅ Calendly Refresh Complete!</h4>
+                    <p>{message}</p>
+                    <p>Calendly database has been refreshed with latest data.</p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="status-error">
+                    <h4>❌ Calendly Refresh Failed:</h4>
+                    <p>{message}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.rerun()
     
     # Database file info
-    if os.path.exists(DB_PATH):
-        file_size = os.path.getsize(DB_PATH)
-        st.info(f"📁 Database file: `{DB_PATH}` ({file_size:,} bytes)")
+    st.markdown("---")
+    st.subheader("📁 Database Files")
+    
+    if os.path.exists(MONDAY_DB_PATH):
+        file_size = os.path.getsize(MONDAY_DB_PATH)
+        st.info(f"📊 Monday Database: `{MONDAY_DB_PATH}` ({file_size:,} bytes)")
+    
+    if os.path.exists(CALENDLY_DB_PATH):
+        file_size = os.path.getsize(CALENDLY_DB_PATH)
+        st.info(f"📅 Calendly Database: `{CALENDLY_DB_PATH}` ({file_size:,} bytes)")
 
 if __name__ == "__main__":
     main()

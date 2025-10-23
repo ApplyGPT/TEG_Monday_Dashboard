@@ -705,14 +705,19 @@ def main():
         leads_with_dates = leads_with_dates[leads_with_dates['date_created'].dt.year == 2025]
         
         if not leads_with_dates.empty:
-            # Add month-year column for grouping
-            leads_with_dates['Month Year'] = leads_with_dates['date_created'].dt.to_period('M').astype(str)
+            # Add month-year column for grouping with proper formatting
+            leads_with_dates['Month Year'] = leads_with_dates['date_created'].dt.strftime('%B %Y')
             
             # Count leads by raw channel and month (use channel instead of categorized channel)
             channel_counts = leads_with_dates.groupby(['Month Year', 'channel']).size().reset_index(name='count')
             
             # Create pivot table for easier charting
             channel_pivot = channel_counts.pivot(index='Month Year', columns='channel', values='count').fillna(0)
+            
+            # Sort the pivot table by month chronologically
+            channel_pivot.index = pd.to_datetime(channel_pivot.index)
+            channel_pivot = channel_pivot.sort_index()
+            channel_pivot.index = channel_pivot.index.strftime('%B %Y')
             
             # Create side-by-side bar chart with dynamic colors
             fig = px.bar(
