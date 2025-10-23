@@ -412,69 +412,90 @@ def refresh_calendly_database():
         event_types_data = event_types_response.json()
         event_types = event_types_data.get('collection', [])
         
-        # Find TEG-related event types
+        # Find only "TEG - Let's Chat" event type
         teg_event_types = []
         for event_type in event_types:
-            name = event_type.get('name', '').lower()
-            if any(keyword in name for keyword in ['teg', 'intro', 'call']):
+            name = event_type.get('name', '')
+            if name == "TEG - Let's Chat":
                 teg_event_types.append(event_type)
         
         if not teg_event_types:
-            return False, "No TEG-related event types found"
+            return False, "No 'TEG - Let's Chat' event type found"
         
-        # Use the first TEG event type
-        selected_event_type = teg_event_types[0]
-        event_type_uri = selected_event_type['uri']
-        event_type_uuid = event_type_uri.split('/')[-1]
-        event_name = selected_event_type['name']
-        
-        # Fetch scheduled events with pagination
+        # Fetch events for "TEG - Let's Chat" only
         all_events = []
-        page_count = 0
-        next_page_token = None
+        event_names = []
         
-        # Date range for 2025
-        min_start_time = "2025-01-01T00:00:00.000000Z"
-        max_start_time = "2025-10-23T23:59:59.999999Z"
+        # Add progress tracking
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        while page_count < 50:  # Safety limit
-            page_count += 1
+        total_event_types = len(teg_event_types)
+        
+        for i, event_type in enumerate(teg_event_types):
+            event_type_uri = event_type['uri']
+            event_type_uuid = event_type_uri.split('/')[-1]
+            event_name = event_type['name']
+            event_names.append(event_name)
             
-            params = {
-                'user': user_uri,
-                'event_type': event_type_uuid,
-                'min_start_time': min_start_time,
-                'max_start_time': max_start_time,
-                'count': 100
-            }
+            # Update progress
+            progress = i / total_event_types
+            progress_bar.progress(progress)
+            status_text.text(f"Fetching events for: {event_name}")
             
-            if next_page_token:
-                params['page_token'] = next_page_token
+            # Fetch scheduled events with pagination for this event type
+            page_count = 0
+            next_page_token = None
             
-            events_response = requests.get('https://api.calendly.com/scheduled_events', 
-                                        headers=headers, params=params)
+            # Date range for 2025
+            min_start_time = "2025-01-01T00:00:00.000000Z"
+            max_start_time = "2025-10-23T23:59:59.999999Z"
             
-            if events_response.status_code != 200:
-                return False, f"Failed to get scheduled events: {events_response.status_code}"
-            
-            events_data = events_response.json()
-            events = events_data.get('collection', [])
-            
-            if not events:
-                break
-            
-            all_events.extend(events)
-            
-            pagination = events_data.get('pagination', {})
-            next_page_token = pagination.get('next_page_token')
-            
-            if not next_page_token:
-                break
+            while page_count < 100:  # Increased to fetch more events (up to 10,000 events)
+                page_count += 1
+                
+                params = {
+                    'user': user_uri,
+                    'event_type': event_type_uuid,
+                    'min_start_time': min_start_time,
+                    'max_start_time': max_start_time,
+                    'count': 100
+                }
+                
+                if next_page_token:
+                    params['page_token'] = next_page_token
+                
+                events_response = requests.get('https://api.calendly.com/scheduled_events', 
+                                            headers=headers, params=params)
+                
+                if events_response.status_code != 200:
+                    error_msg = f"Failed to get events for {event_name}: {events_response.status_code}"
+                    if events_response.status_code == 404:
+                        error_msg += f" - Response: {events_response.text}"
+                    return False, error_msg
+                
+                events_data = events_response.json()
+                events = events_data.get('collection', [])
+                
+                if not events:
+                    break
+                
+                all_events.extend(events)
+                
+                pagination = events_data.get('pagination', {})
+                next_page_token = pagination.get('next_page_token')
+                
+                if not next_page_token:
+                    break
+        
+        # Clear progress indicators
+        progress_bar.empty()
+        status_text.empty()
         
         # Save to database
         save_calendly_data_to_db(all_events)
         
-        return True, f"Successfully saved {len(all_events)} Calendly events for '{event_name}'"
+        return True, f"Successfully saved {len(all_events)} Calendly events for: {', '.join(event_names)}"
         
     except Exception as e:
         return False, f"Error refreshing Calendly data: {str(e)}"
