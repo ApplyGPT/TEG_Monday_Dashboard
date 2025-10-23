@@ -8,7 +8,45 @@ import sys
 
 # Add parent directory to path to import database_utils
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from database_utils import get_ads_data, get_sales_data, check_database_exists
+from database_utils import get_ads_data, get_sales_data, check_database_exists, get_new_leads_data, get_discovery_call_data, get_design_review_data
+
+# Monday.com API settings from Streamlit secrets
+def load_credentials():
+    """Load credentials from Streamlit secrets"""
+    try:
+        # Access secrets from Streamlit
+        if 'monday' not in st.secrets:
+            st.error("Monday.com configuration not found in secrets.toml. Please check your configuration.")
+            st.stop()
+        
+        monday_config = st.secrets['monday']
+        
+        if 'api_token' not in monday_config:
+            st.error("API token not found in secrets.toml. Please add your Monday.com API token.")
+            st.stop()
+            
+        required_board_ids = [
+            'new_leads_board_id', 'discovery_call_board_id', 
+            'design_review_board_id', 'sales_board_id'
+        ]
+        
+        board_ids = {}
+        for board_id_key in required_board_ids:
+            if board_id_key not in monday_config:
+                st.error(f"{board_id_key} not found in secrets.toml. Please add the board ID.")
+                st.stop()
+            board_ids[board_id_key] = int(monday_config[board_id_key])
+        
+        return {
+            'api_token': monday_config['api_token'],
+            **board_ids
+        }
+    except Exception as e:
+        st.error(f"Error reading secrets: {str(e)}")
+        st.stop()
+
+credentials = load_credentials()
+API_TOKEN = credentials['api_token']
 
 # Page configuration
 st.set_page_config(
@@ -79,6 +117,83 @@ def get_ads_data_from_db():
 def get_sales_data_from_db():
     """Get sales data from SQLite database"""
     return get_sales_data()
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_all_leads_for_utm():
+    """Get all leads data from all boards using database only for speed"""
+    import json
+    
+    all_leads = []
+    
+    # Get data from all boards using database functions
+    boards_data = {
+        'New Leads v2': get_new_leads_data(),
+        'Discovery Call v2': get_discovery_call_data(), 
+        'Design Review v2': get_design_review_data(),
+        'Sales v2': get_sales_data().get('data', {}).get('boards', [{}])[0].get('items_page', {}).get('items', [])
+    }
+    
+    # Board-specific channel column IDs
+    channel_columns = {
+        'Sales v2': 'text_mkrfer1n',
+        'Design Review v2': 'text_mkrkkpx0',
+        'Discovery Call v2': 'text_mkrk2tj8',
+        'New Leads v2': 'text_mkref4p0'
+    }
+    
+    # Process each board's data
+    for board_name, items in boards_data.items():
+        for item in items:
+            # Extract channel information
+            channel = "Unknown"
+            date_created = None
+            
+            target_channel_column = channel_columns.get(board_name)
+            
+            # Parse column_values if it's a string
+            column_values = item.get("column_values", [])
+            if isinstance(column_values, str):
+                try:
+                    column_values = json.loads(column_values)
+                except:
+                    column_values = []
+            
+            for col_val in column_values:
+                col_id = col_val.get("id", "")
+                text = (col_val.get("text") or "").strip()
+                col_type = col_val.get("type", "")
+                
+                # Look for the specific channel column for this board
+                if col_id == target_channel_column and text:
+                    channel = text
+                
+                # Look for date created
+                if col_type == "date" and text and ("created" in col_id or "date" in col_id):
+                    date_created = text
+                    break
+            
+            # Categorize into 3 main groups
+            channel_lower = channel.lower()
+            
+            # Ads category - all paid channels
+            if any(word in channel_lower for word in ["paid search", "paid social", "other campaigns"]):
+                categorized_channel = "Ads"
+            # Organic category - organic search and social
+            elif any(word in channel_lower for word in ["organic search", "organic social"]):
+                categorized_channel = "Organic"
+            # Direct category - everything else
+            else:
+                categorized_channel = "Direct"
+            
+            all_leads.append({
+                'name': item.get('name', ''),
+                'board': board_name,
+                'channel': categorized_channel,
+                'date_created': date_created,
+                'raw_channel': channel
+            })
+    
+    return all_leads
 
 def format_ads_data(data):
     """Convert Monday.com ads data to pandas DataFrame"""
@@ -580,6 +695,82 @@ def main():
                 
             else:
                 st.warning("No ad spend data available for charting.")
+
+    # UTM Data Section at the bottom
+    st.markdown("---")
+    st.subheader("📊 UTM Data (Leads by Channel)")
+    
+    # Get all leads data for UTM analysis
+    with st.spinner("Loading UTM data..."):
+        all_leads = get_all_leads_for_utm()
+    
+    if all_leads:
+        # Convert to DataFrame
+        leads_df = pd.DataFrame(all_leads)
+        
+        # Parse dates and filter for valid dates
+        leads_df['date_created'] = pd.to_datetime(leads_df['date_created'], errors='coerce')
+        leads_with_dates = leads_df.dropna(subset=['date_created'])
+        
+        # Filter for 2025 data only
+        leads_with_dates = leads_with_dates[leads_with_dates['date_created'].dt.year == 2025]
+        
+        if not leads_with_dates.empty:
+            # Add month-year column for grouping
+            leads_with_dates['Month Year'] = leads_with_dates['date_created'].dt.to_period('M').astype(str)
+            
+            # Count leads by channel and month
+            channel_counts = leads_with_dates.groupby(['Month Year', 'channel']).size().reset_index(name='count')
+            
+            # Create pivot table for easier charting
+            channel_pivot = channel_counts.pivot(index='Month Year', columns='channel', values='count').fillna(0)
+            
+            # Ensure we have the 3 main categories
+            main_categories = ['Ads', 'Organic', 'Direct']
+            for category in main_categories:
+                if category not in channel_pivot.columns:
+                    channel_pivot[category] = 0
+            
+            # Reorder columns
+            channel_pivot = channel_pivot[main_categories]
+            
+            # Create side-by-side bar chart
+            fig = px.bar(
+                channel_pivot,
+                title='Leads by Channel - 2025 (Based on Date Created)',
+                labels={'value': 'Number of Leads', 'index': 'Month'},
+                color_discrete_map={
+                    'Ads': '#FF6B6B',      # Red for Ads
+                    'Organic': '#808080',  # Gray for Organic  
+                    'Direct': '#45B7D1'    # Blue for Direct
+                }
+            )
+            
+            # Update layout
+            fig.update_layout(
+                xaxis_title="Month",
+                yaxis_title="Number of Leads",
+                height=500,
+                barmode='group',  # Side-by-side bars instead of stacked
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
+            )
+            
+            # Rotate x-axis labels
+            fig.update_xaxes(tickangle=45)
+            
+            # Display the chart
+            st.plotly_chart(fig, use_container_width=True)
+            
+        else:
+            st.warning("No leads with valid creation dates found for 2025 UTM analysis.")
+    else:
+        st.warning("No leads data found for UTM analysis.")
 
 if __name__ == "__main__":
     main()
