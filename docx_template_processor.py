@@ -19,47 +19,55 @@ class DocxTemplateProcessor:
             'development_contract': {
                 'file': 'Development Contract.docx',
                 'replacements': {
-                    'EUGENIA ZHANG': 'CLIENT_NAME',
                     'March 14, 2025': 'CONTRACT_DATE',
                     '$15,865.00': 'CONTRACT_AMOUNT',
                     'VITALINA GHINZELLI': 'TEGMADE_FOR'
+                },
+                'multiple_replacements': {
+                    'EUGENIA ZHANG': ['CLIENT_NAME', 'TEGMADE_FOR']  # First occurrence -> CLIENT_NAME, Second occurrence -> TEGMADE_FOR
                 }
             },
             'development_terms': {
                 'file': 'Development Terms and Conditions .docx',
                 'replacements': {
-                    'SHERRY CASSEL': 'CLIENT_NAME',
                     'JUNE 16, 2025': 'CONTRACT_DATE',
                     'VITALINA GHINZELLI': 'TEGMADE_FOR'
+                },
+                'multiple_replacements': {
+                    'SHERRY CASSEL': ['CLIENT_NAME', 'TEGMADE_FOR']  # First occurrence -> CLIENT_NAME, Second occurrence -> TEGMADE_FOR
                 }
             },
             'production_contract': {
                 'file': 'Production Contract.docx',
                 'replacements': {
-                    'Natalie Barrett': 'CLIENT_NAME',
                     'December 06, 2024': 'CONTRACT_DATE',
                     # Replace hardcoded amounts with placeholders (like Development Contract)
-                    '$36,830.00': 'DEPOSIT_AMOUNT',
                     '$56,918.00': 'TOTAL_CONTRACT_AMOUNT',
                     '$20,088.00': 'SEWING_COST',
                     '$16,743.00': 'PRE_PRODUCTION_FEE',
+                    '$36,830.00': 'TOTAL_DUE_AT_SIGNING',
                     'VITALINA GHINZELLI': 'TEGMADE_FOR'
+                },
+                'multiple_replacements': {
+                    'Natalie Barrett': ['CLIENT_NAME', 'TEGMADE_FOR']  # First occurrence -> CLIENT_NAME, Second occurrence -> TEGMADE_FOR
                 }
             },
             'production_terms': {
                 'file': 'Production Terms and Conditions.docx',
                 'replacements': {
-                    'Natalie Barrett': 'CLIENT_NAME',
                     'December 06, 2024': 'CONTRACT_DATE',
                     'VITALINA GHINZELLI': 'TEGMADE_FOR'
+                },
+                'multiple_replacements': {
+                    'Natalie Barrett': ['CLIENT_NAME', 'TEGMADE_FOR']  # First occurrence -> CLIENT_NAME, Second occurrence -> TEGMADE_FOR
                 }
             }
         }
     
     def process_document(self, template_type, client_name, email, 
                         contract_amount=None, contract_date=None,
-                        deposit_amount=None, total_contract_amount=None,
-                        sewing_cost=None, pre_production_fee=None,
+                        total_contract_amount=None, sewing_cost=None,
+                        pre_production_fee=None, total_due_at_signing=None,
                         uploaded_pdf=None, tegmade_for=None):
         """
         Process a document template with variable replacement
@@ -70,10 +78,10 @@ class DocxTemplateProcessor:
             email: Client email (for reference)
             contract_amount: Contract amount (if applicable)
             contract_date: Contract date (if not provided, uses current date)
-            deposit_amount: Deposit amount (for production contracts)
             total_contract_amount: Total contract amount (for production contracts)
             sewing_cost: Sewing cost (for production contracts)
             pre_production_fee: Pre-production fee (for production contracts)
+            total_due_at_signing: Total amount due at signing (for production contracts)
             uploaded_pdf: Uploaded PDF file (Streamlit UploadedFile object)
             tegmade_for: Name to replace VITALINA GHINZELLI (optional)
             
@@ -114,15 +122,15 @@ class DocxTemplateProcessor:
             'CLIENT_NAME': client_name,
             'CONTRACT_DATE': contract_date,
             'CONTRACT_AMOUNT': self._format_contract_amount(contract_amount) if contract_amount else '$0.00',
-            'DEPOSIT_AMOUNT': self._format_contract_amount(deposit_amount) if deposit_amount else '$0.00',
             'TOTAL_CONTRACT_AMOUNT': self._format_contract_amount(total_contract_amount) if total_contract_amount else '$0.00',
             'SEWING_COST': self._format_contract_amount(sewing_cost) if sewing_cost else '$0.00',
             'PRE_PRODUCTION_FEE': self._format_contract_amount(pre_production_fee) if pre_production_fee else '$0.00',
+            'TOTAL_DUE_AT_SIGNING': self._format_contract_amount(total_due_at_signing) if total_due_at_signing else '$0.00',
             'TEGMADE_FOR': tegmade_for if tegmade_for else 'VITALINA GHINZELLI'
         }
         
         # Process replacements
-        replacements_made = self._replace_text_in_document(doc, template_config['replacements'], replacement_values)
+        replacements_made = self._replace_text_in_document(doc, template_config['replacements'], replacement_values, template_config.get('multiple_replacements', {}))
         
         # Insert PDF (converted to image) after first paragraph for contract documents
         if uploaded_pdf and template_type in ['development_contract', 'production_contract']:
@@ -137,15 +145,52 @@ class DocxTemplateProcessor:
         
         return output_path
     
-    def _replace_text_in_document(self, doc, replacement_map, values):
+    def _replace_text_in_document(self, doc, replacement_map, values, multiple_replacements=None):
         """Replace text in document while preserving formatting and making replacements bold"""
         replacements_made = []
         
-        # Process paragraphs - do all replacements in one pass to avoid conflicts
+        if multiple_replacements is None:
+            multiple_replacements = {}
+        
+        # Track occurrences across the entire document for multiple replacements
+        occurrence_counters = {}
+        for text_to_replace in multiple_replacements.keys():
+            occurrence_counters[text_to_replace] = 0
+        
+        # Process paragraphs - handle multiple replacements first
         for paragraph in doc.paragraphs:
             paragraph_replacements = []
+            
+            # Handle multiple replacements (same text, different values for each occurrence)
+            for text_to_replace, replacement_vars in multiple_replacements.items():
+                if text_to_replace in paragraph.text:
+                    # Count occurrences in this paragraph
+                    paragraph_occurrences = paragraph.text.count(text_to_replace)
+                    
+                    # Process each occurrence in this paragraph
+                    current_text = paragraph.text
+                    for i in range(paragraph_occurrences):
+                        occurrence_counters[text_to_replace] += 1
+                        occurrence_index = occurrence_counters[text_to_replace]
+                        
+                        # Determine which value to use based on occurrence index
+                        if occurrence_index == 1:
+                            # First occurrence across document
+                            replacement_value = values[replacement_vars[0]]
+                        else:
+                            # Second occurrence across document
+                            replacement_value = values[replacement_vars[1]]
+                        
+                        # Replace the first occurrence of this text in current paragraph
+                        current_text = current_text.replace(text_to_replace, replacement_value, 1)
+                    
+                    if current_text != paragraph.text:
+                        paragraph_replacements.append((paragraph.text, current_text))
+                        replacements_made.append(f"{text_to_replace} -> {replacement_value} (occurrence {occurrence_counters[text_to_replace]})")
+            
+            # Handle regular single replacements
             for old_text, variable in replacement_map.items():
-                if old_text in paragraph.text:
+                if old_text in paragraph.text and old_text not in multiple_replacements:
                     paragraph_replacements.append((old_text, values[variable]))
                     replacements_made.append(f"{old_text} -> {values[variable]}")
             
@@ -153,7 +198,7 @@ class DocxTemplateProcessor:
             if paragraph_replacements:
                 self._replace_multiple_texts_with_bold(paragraph, paragraph_replacements)
             elif 'Date' in paragraph.text or 'Date:' in paragraph.text:
-                # No replacements but has Date - still fix it (for TEG Intl lines)
+                # No replacements but has Date - still fix it (for TEG lines)
                 self._fix_date_line_without_replacement(paragraph)
         
         # Process tables
@@ -162,8 +207,37 @@ class DocxTemplateProcessor:
                 for cell in row.cells:
                     for paragraph in cell.paragraphs:
                         paragraph_replacements = []
+                        
+                        # Handle multiple replacements in tables
+                        for text_to_replace, replacement_vars in multiple_replacements.items():
+                            if text_to_replace in paragraph.text:
+                                # Count occurrences in this paragraph
+                                paragraph_occurrences = paragraph.text.count(text_to_replace)
+                                
+                                # Process each occurrence in this paragraph
+                                current_text = paragraph.text
+                                for i in range(paragraph_occurrences):
+                                    occurrence_counters[text_to_replace] += 1
+                                    occurrence_index = occurrence_counters[text_to_replace]
+                                    
+                                    # Determine which value to use based on occurrence index
+                                    if occurrence_index == 1:
+                                        # First occurrence across document
+                                        replacement_value = values[replacement_vars[0]]
+                                    else:
+                                        # Second occurrence across document
+                                        replacement_value = values[replacement_vars[1]]
+                                    
+                                    # Replace the first occurrence of this text in current paragraph
+                                    current_text = current_text.replace(text_to_replace, replacement_value, 1)
+                                
+                                if current_text != paragraph.text:
+                                    paragraph_replacements.append((paragraph.text, current_text))
+                                    replacements_made.append(f"{text_to_replace} -> {replacement_value} (occurrence {occurrence_counters[text_to_replace]})")
+                        
+                        # Handle regular single replacements in tables
                         for old_text, variable in replacement_map.items():
-                            if old_text in paragraph.text:
+                            if old_text in paragraph.text and old_text not in multiple_replacements:
                                 paragraph_replacements.append((old_text, values[variable]))
                                 replacements_made.append(f"{old_text} -> {values[variable]}")
                         
@@ -247,7 +321,7 @@ class DocxTemplateProcessor:
                 break
     
     def _fix_date_line_without_replacement(self, paragraph):
-        """Fix Date alignment for lines without replacements (TEG Intl lines)"""
+        """Fix Date alignment for lines without replacements (TEG lines)"""
         text = paragraph.text
         
         # Only process if it looks like a signature line (has behalf/Signature/TEG)

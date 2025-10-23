@@ -130,9 +130,9 @@ def main():
             help="Enter the client's email address"
         )
         
-        # TEGMADE, JUST FOR field
+        # Signature Name field
         tegmade_for = st.text_input(
-            "TEGMADE, JUST FOR",
+            "Signature Name (Company or Person Name)",
             value="",
             help="Enter the name that will replace VITALINA GHINZELLI in the document"
         )
@@ -161,51 +161,51 @@ def main():
         # Get production parameters from URL or session state
         if 'signnow_data' in st.session_state:
             data = st.session_state['signnow_data']
-            deposit_amount_default = data.get('deposit_amount', '')
             total_contract_amount_default = data.get('total_contract_amount', '')
-            sewing_cost_default = data.get('sewing_cost', '')
             pre_production_fee_default = data.get('pre_production_fee', '')
+            sewing_cost_default = data.get('sewing_cost', '')
+            total_due_at_signing_default = data.get('total_due_at_signing', '')
         else:
             # Fallback to URL parameters
             query_params = get_decoded_query_params()
-            deposit_amount_default = query_params.get('deposit_amount', '')
             total_contract_amount_default = query_params.get('total_contract_amount', '')
-            sewing_cost_default = query_params.get('sewing_cost', '')
             pre_production_fee_default = query_params.get('pre_production_fee', '')
+            sewing_cost_default = query_params.get('sewing_cost', '')
+            total_due_at_signing_default = query_params.get('total_due_at_signing', '')
         
         col3, col4 = st.columns(2)
         
         with col3:
-            deposit_amount = st.text_input(
-                "Deposit Amount",
-                value=deposit_amount_default,
-                help="Enter the deposit amount (e.g., $5,000)"
-            )
-            
             total_contract_amount = st.text_input(
                 "Total Contract Amount", 
                 value=total_contract_amount_default,
                 help="Enter the total contract amount (e.g., $25,000)"
             )
-        
-        with col4:
+            
             sewing_cost = st.text_input(
                 "Sewing Cost",
                 value=sewing_cost_default,
                 help="Enter the sewing cost (e.g., $2,500)"
             )
-            
+        
+        with col4:
             pre_production_fee = st.text_input(
                 "Pre-production Fee",
                 value=pre_production_fee_default,
                 help="Enter the pre-production fee (e.g., $1,000)"
             )
+            
+            total_due_at_signing = st.text_input(
+                "Total Due at Signing",
+                value=total_due_at_signing_default,
+                help="Enter the total amount due at signing (e.g., $5,000)"
+            )
     else:
         # Set production fields to None for non-production contracts
-        deposit_amount = None
         total_contract_amount = None
-        sewing_cost = None
         pre_production_fee = None
+        sewing_cost = None
+        total_due_at_signing = None
     
     uploaded_pdf = st.file_uploader(
         "Upload a PDF of the spreadsheet to be inserted into the contract document",
@@ -235,7 +235,7 @@ def main():
     if template_type == 'development_pair':
         required_fields.append(contract_amount)
     elif template_type == 'production_pair':
-        required_fields.extend([deposit_amount, total_contract_amount, sewing_cost, pre_production_fee])
+        required_fields.extend([total_contract_amount, pre_production_fee, sewing_cost, total_due_at_signing])
     
     if not all(required_fields):
         missing_fields = []
@@ -248,14 +248,14 @@ def main():
         if template_type == 'development_pair' and not contract_amount:
             missing_fields.append("Contract Amount")
         if template_type == 'production_pair':
-            if not deposit_amount:
-                missing_fields.append("Deposit Amount")
             if not total_contract_amount:
                 missing_fields.append("Total Contract Amount")
             if not sewing_cost:
                 missing_fields.append("Sewing Cost")
             if not pre_production_fee:
                 missing_fields.append("Pre-production Fee")
+            if not total_due_at_signing:
+                missing_fields.append("Total Due at Signing")
         
         st.warning(f"⚠️ Please fill in all required fields: {', '.join(missing_fields)}")
         return
@@ -277,9 +277,9 @@ def main():
     
     # Production contract amount validation
     if template_type == 'production_pair':
-        production_amounts = [deposit_amount, total_contract_amount, sewing_cost, pre_production_fee]
+        production_amounts = [total_contract_amount, sewing_cost, pre_production_fee, total_due_at_signing]
         for amount_field, field_name in zip(production_amounts, 
-                                          ['Deposit Amount', 'Total Contract Amount', 'Sewing Cost', 'Pre-production Fee']):
+                                          ['Total Contract Amount', 'Sewing Cost', 'Pre-production Fee', 'Total Due at Signing']):
             try:
                 # Remove $ and commas for validation
                 amount_str = amount_field.replace('$', '').replace(',', '')
@@ -333,10 +333,10 @@ def main():
                         email=email,
                         contract_amount=None,  # Not used for production
                         contract_date=contract_date_str,
-                        deposit_amount=deposit_amount,
                         total_contract_amount=total_contract_amount,
                         sewing_cost=sewing_cost,
                         pre_production_fee=pre_production_fee,
+                        total_due_at_signing=total_due_at_signing,
                         uploaded_pdf=uploaded_pdf,
                         tegmade_for=tegmade_for
                     )
@@ -366,7 +366,7 @@ def main():
                 
                 elif template_type == 'production_pair':
                     # Add all production contract amounts
-                    production_amounts = [deposit_amount, total_contract_amount, sewing_cost, pre_production_fee]
+                    production_amounts = [total_contract_amount, sewing_cost, pre_production_fee, total_due_at_signing]
                     for amount in production_amounts:
                         if amount:
                             amt_clean = amount.replace('$', '').replace(',', '')

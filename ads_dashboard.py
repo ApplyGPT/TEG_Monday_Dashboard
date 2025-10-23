@@ -145,7 +145,7 @@ def get_all_leads_for_utm():
     for board_name, items in boards_data.items():
         for item in items:
             # Extract channel information
-            channel = "Unknown"
+            channel = ""
             date_created = None
             
             target_channel_column = channel_columns.get(board_name)
@@ -172,26 +172,15 @@ def get_all_leads_for_utm():
                     date_created = text
                     break
             
-            # Categorize into 3 main groups
-            channel_lower = channel.lower()
-            
-            # Ads category - all paid channels
-            if any(word in channel_lower for word in ["paid search", "paid social", "other campaigns"]):
-                categorized_channel = "Ads"
-            # Organic category - organic search and social
-            elif any(word in channel_lower for word in ["organic search", "organic social"]):
-                categorized_channel = "Organic"
-            # Direct category - everything else
-            else:
-                categorized_channel = "Direct"
-            
-            all_leads.append({
-                'name': item.get('name', ''),
-                'board': board_name,
-                'channel': categorized_channel,
-                'date_created': date_created,
-                'raw_channel': channel
-            })
+            # Only include items with valid channels (not empty and not placeholder)
+            if channel and channel.strip() and channel != "[channel]":
+                all_leads.append({
+                    'name': item.get('name', ''),
+                    'board': board_name,
+                    'channel': channel,
+                    'date_created': date_created,
+                    'channel': channel
+                })
     
     return all_leads
 
@@ -719,31 +708,17 @@ def main():
             # Add month-year column for grouping
             leads_with_dates['Month Year'] = leads_with_dates['date_created'].dt.to_period('M').astype(str)
             
-            # Count leads by channel and month
+            # Count leads by raw channel and month (use channel instead of categorized channel)
             channel_counts = leads_with_dates.groupby(['Month Year', 'channel']).size().reset_index(name='count')
             
             # Create pivot table for easier charting
             channel_pivot = channel_counts.pivot(index='Month Year', columns='channel', values='count').fillna(0)
             
-            # Ensure we have the 3 main categories
-            main_categories = ['Ads', 'Organic', 'Direct']
-            for category in main_categories:
-                if category not in channel_pivot.columns:
-                    channel_pivot[category] = 0
-            
-            # Reorder columns
-            channel_pivot = channel_pivot[main_categories]
-            
-            # Create side-by-side bar chart
+            # Create side-by-side bar chart with dynamic colors
             fig = px.bar(
                 channel_pivot,
                 title='',
-                labels={'value': 'Number of Leads', 'index': 'Month'},
-                color_discrete_map={
-                    'Ads': '#FF6B6B',      # Red for Ads
-                    'Organic': '#808080',  # Gray for Organic  
-                    'Direct': '#45B7D1'    # Blue for Direct
-                }
+                labels={'value': 'Number of Leads', 'index': 'Month'}
             )
             
             # Update layout
@@ -754,12 +729,19 @@ def main():
                 barmode='group',  # Side-by-side bars instead of stacked
                 legend=dict(
                     orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
+                    yanchor="top",
+                    y=-0.2,
+                    xanchor="center",
+                    x=0.5,
+                    title_text=""  # Remove legend title
                 )
             )
+            
+            # Remove "channel" prefix from legend entries
+            for trace in fig.data:
+                if hasattr(trace, 'name') and trace.name:
+                    # Remove any "channel" prefix from the trace name
+                    trace.name = trace.name.replace('channel', '').strip()
             
             # Rotate x-axis labels
             fig.update_xaxes(tickangle=45)
