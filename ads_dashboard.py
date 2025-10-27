@@ -765,11 +765,28 @@ def main():
     
     @st.cache_data(ttl=300)
     def get_lead_qualification_data():
-        """Extract and process leads for qualification analysis"""
+        """Extract and process leads for qualification analysis from ALL boards"""
         import json
         
+        # Get data from all 4 boards
         new_leads_items = get_new_leads_data()
-        print(f"Got {len(new_leads_items)} items from database")
+        discovery_call_items = get_discovery_call_data()
+        design_review_items = get_design_review_data()
+        sales_items = get_sales_data().get('data', {}).get('boards', [{}])[0].get('items_page', {}).get('items', [])
+        
+        print(f"Got {len(new_leads_items)} items from New Leads")
+        print(f"Got {len(discovery_call_items)} items from Discovery Call")
+        print(f"Got {len(design_review_items)} items from Design Review")
+        print(f"Got {len(sales_items)} items from Sales")
+        
+        # Combine all items from all boards
+        all_items = []
+        all_items.extend(new_leads_items)
+        all_items.extend(discovery_call_items)
+        all_items.extend(design_review_items)
+        all_items.extend(sales_items)
+        
+        print(f"Total items from all boards: {len(all_items)}")
         
         # Qualification statuses (from user's spec)
         qualified_statuses = [
@@ -779,7 +796,7 @@ def main():
         
         all_lead_data = []
         
-        for item in new_leads_items:
+        for item in all_items:
             lead_status = ""
             lead_data = {}
             
@@ -841,23 +858,27 @@ def main():
         # st.write(f"Available column IDs ({len(col_ids)}): {col_ids[:10]}...")
         
         # Use explicit column ID mappings based on actual database
+        # Each field can have different column IDs on different boards
         field_column_mapping = {
-            'CLIENT TYPE?': 'status_1__1',
-            'WHAT IS YOUR TIMELINE FOR STARTING?': 'text_mkwf56ca',
-            'WHAT IS YOUR STATUS?': 'text_mkwf2541',
-            'HOW MANY STYLES DO YOU WANT TO DEVELOP?': 'text_mkwfxk8t',
-            'WHAT KINDS OF CLOTHING DO YOU WANT TO MAKE?': 'text_mkwfva26',
-            'BUDGET FOR DEVELOPMENT (PATTERNS AND SAMPLES)': 'text_mkwfkqex'
+            'CLIENT TYPE?': ['status_1__1', 'status_14__1'],  # status_1__1 for New Leads, status_14__1 for other boards
+            'WHAT IS YOUR TIMELINE FOR STARTING?': ['text_mkwf56ca', 'text3__1'],  # text_mkwf56ca for New Leads, text3__1 for other boards
+            'WHAT IS YOUR STATUS?': ['text_mkwf2541', 'text_mkwf8r57'],  # text_mkwf2541 for New Leads, text_mkwf8r57 for Discovery/Design
+            'HOW MANY STYLES DO YOU WANT TO DEVELOP?': ['text_mkwfxk8t', 'text_mkwfs99f'],  # text_mkwfxk8t for New Leads, text_mkwfs99f for other boards
+            'WHAT KINDS OF CLOTHING DO YOU WANT TO MAKE?': ['text_mkwfva26', 'text_mkwf8n18'],  # text_mkwfva26 for New Leads, text_mkwf8n18 for other boards
+            'BUDGET FOR DEVELOPMENT (PATTERNS AND SAMPLES)': ['text_mkwfkqex', 'text_mkwf9e6c']  # text_mkwfkqex for New Leads, text_mkwf9e6c for other boards
         }
         
-        # Only keep fields where the column exists in DataFrame
+        # All fields now use lists of possible column IDs
         identified_fields = {}
-        for field_name, col_id in field_column_mapping.items():
-            if col_id in df.columns:
-                identified_fields[field_name] = col_id
-                print(f"Mapped '{field_name}' to column '{col_id}'")
+        for field_name, col_id_list in field_column_mapping.items():
+            # Check if any of the columns exist in the DataFrame
+            found_cols = [cid for cid in col_id_list if cid in df.columns]
+            if found_cols:
+                # Store the list of available columns for this field
+                identified_fields[field_name] = found_cols[0]  # Use first as primary
+                print(f"Mapped '{field_name}' to columns {found_cols} (from {col_id_list})")
             else:
-                print(f"WARNING: Column '{col_id}' not found in DataFrame for field '{field_name}'")
+                print(f"WARNING: No columns found for field '{field_name}' (tried {col_id_list})")
         
         if not identified_fields:
             st.error("Could not identify form field columns. Data structure may be different than expected.")
@@ -868,12 +889,34 @@ def main():
             if col_id not in df.columns:
                 continue
             
-            # Get unique values for this column
-            unique_values = list(df[df[col_id].notna() & (df[col_id] != "")][col_id].unique())
+            # Get the list of column IDs for this field
+            col_ids_for_field = field_column_mapping.get(field_name, [col_id])
+            if not isinstance(col_ids_for_field, list):
+                col_ids_for_field = [col_ids_for_field]
+            
+            # Aggregate values from all possible column IDs for this field
+            all_values = []
+            available_cols = []
+            for col_id_option in col_ids_for_field:
+                if col_id_option in df.columns:
+                    available_cols.append(col_id_option)
+                    valid_data = df[df[col_id_option].notna() & (df[col_id_option] != "")]
+                    if not valid_data.empty:
+                        all_values.extend(valid_data[col_id_option].tolist())
+            
+            unique_values = list(set(all_values)) if all_values else []
+            
+            # Use the first available column ID as primary for filtering
+            if available_cols:
+                col_id = available_cols[0]
             
             # Filter out invalid values for specific fields
             if 'HOW MANY STYLES' in field_name.upper():
                 unique_values = [v for v in unique_values if v not in ['2']]  # Filter out "2"
+            elif 'TIMELINE' in field_name.upper():
+                # Only show valid timeline values
+                valid_timelines = ['I JUST WANT TO LEARN THE PROCESS', 'READY TO GET STARTED', 'WITHIN THE NEXT 90 DAYS']
+                unique_values = [v for v in unique_values if v.upper() in [t.upper() for t in valid_timelines]]
             elif 'BUDGET' in field_name.upper():
                 # Budget values can have commas in the number format (< $5,000), 
                 # so only filter out values that look like multi-select (comma-separated with multiple dollar amounts)
@@ -909,20 +952,25 @@ def main():
             
             if has_commas and is_clothing_field:
                 # Split comma-separated values ONLY for CLOTHING field
+                # Check all possible column IDs for this field
                 multi_select_data = []
                 for _, row in df.iterrows():
-                    if pd.notna(row[col_id]) and row[col_id] != "":
-                        items = [x.strip() for x in str(row[col_id]).split(',')]
-                        for item in items:
-                            if item:  # Only if not empty after strip
-                                multi_select_data.append({
-                                    col_id: item,
-                                    'is_qualified': row['is_qualified']
-                                })
+                    # Check all column IDs for this field
+                    for col_id_option in col_ids_for_field:
+                        if col_id_option in df.columns and pd.notna(row[col_id_option]) and row[col_id_option] != "":
+                            items = [x.strip() for x in str(row[col_id_option]).split(',')]
+                            for item in items:
+                                if item:  # Only if not empty after strip
+                                    multi_select_data.append({
+                                        col_id_option: item,
+                                        'is_qualified': row['is_qualified']
+                                    })
+                            break  # Only process first available column per row
                 
                 if multi_select_data:
                     multi_select_df = pd.DataFrame(multi_select_data)
-                    unique_values = list(multi_select_df[col_id].unique())
+                    # Get unique values from the primary column
+                    unique_values = list(multi_select_df[col_id].unique()) if col_id in multi_select_df.columns else []
                 else:
                     unique_values = []
             else:
@@ -934,6 +982,10 @@ def main():
             # Filter out invalid values again after multi-select processing
             if 'HOW MANY STYLES' in field_name.upper():
                 unique_values = [v for v in unique_values if v not in ['2']]
+            elif 'TIMELINE' in field_name.upper():
+                # Only show valid timeline values
+                valid_timelines = ['I JUST WANT TO LEARN THE PROCESS', 'READY TO GET STARTED', 'WITHIN THE NEXT 90 DAYS']
+                unique_values = [v for v in unique_values if v.upper() in [t.upper() for t in valid_timelines]]
             
             # Create pie charts for each unique value
             num_values = len(unique_values)
@@ -950,7 +1002,12 @@ def main():
                     if has_commas and is_clothing_field:
                         filtered_data = multi_select_df[multi_select_df[col_id] == unique_value]
                     else:
-                        filtered_data = df[df[col_id] == unique_value]
+                        # Check all possible column IDs for this field
+                        mask = pd.Series([False] * len(df))
+                        for col_id_option in col_ids_for_field:
+                            if col_id_option in df.columns:
+                                mask = mask | (df[col_id_option] == unique_value)
+                        filtered_data = df[mask]
                     
                     # Count qualified vs unqualified
                     qualified_count = filtered_data['is_qualified'].sum()
