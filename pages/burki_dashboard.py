@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import json
 import os
 import sqlite3
+import calendar
 
 # Page configuration
 st.set_page_config(
@@ -393,6 +394,87 @@ def create_monthly_chart(df):
     
     return fig
 
+def create_monthly_calendar_view(df, selected_month):
+    """Create a monthly calendar view showing call counts by day"""
+    if df.empty:
+        return None
+    
+    # Filter data for the selected month
+    df_filtered = df[
+        (df['start_time'].dt.year == selected_month.year) & 
+        (df['start_time'].dt.month == selected_month.month)
+    ].copy()
+    
+    if df_filtered.empty:
+        return None
+    
+    # Count calls for each day
+    daily_counts = df_filtered.groupby(df_filtered['start_time'].dt.date).size().to_dict()
+    
+    return daily_counts
+
+def display_calendar_grid(daily_counts, selected_month):
+    """Display the calendar grid with call counts"""
+    if not daily_counts:
+        st.info("No calls scheduled for this month.")
+        return
+    
+    month_name = selected_month.strftime('%B %Y')
+    
+    # Create calendar grid
+    cal = calendar.monthcalendar(selected_month.year, selected_month.month)
+    col_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    
+    # Header row
+    cols = st.columns(7)
+    for i, col_name in enumerate(col_names):
+        with cols[i]:
+            st.markdown(f"**{col_name}**")
+    
+    # Calendar rows
+    for week in cal:
+        cols = st.columns(7)
+        for i, day in enumerate(week):
+            with cols[i]:
+                if day == 0:
+                    st.write("")  # Empty cell for days not in this month
+                else:
+                    current_date = selected_month.replace(day=day)
+                    call_count = daily_counts.get(current_date.date(), 0)
+                    
+                    if call_count > 0:
+                        bg_color = "#2E8B57"  # Sea Green
+                        text_color = "#FFFFFF"
+                        
+                        st.markdown(f"""
+                        <div style="
+                            background-color: {bg_color};
+                            color: {text_color};
+                            padding: 8px;
+                            border-radius: 8px;
+                            text-align: center;
+                            margin: 2px;
+                            font-weight: bold;
+                        ">
+                            <strong>{day}</strong><br>
+                            <small>{call_count} call{'s' if call_count != 1 else ''}</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="
+                            background-color: #f0f0f0;
+                            color: #666666;
+                            padding: 8px;
+                            border-radius: 8px;
+                            text-align: center;
+                            margin: 2px;
+                        ">
+                            <strong>{day}</strong><br>
+                            <small>0 calls</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+
 def main():
     """Main application function"""
     # Header
@@ -438,6 +520,36 @@ def main():
             tab1, tab2, tab3 = st.tabs(["📅 Daily View", "📊 Weekly View", "📈 Monthly View"])
             
             with tab1:
+                # Add month selector for the calendar view
+                st.subheader("📅 Calendar View")
+                
+                # Get available months from data
+                if not df_2025.empty:
+                    available_months = df_2025['start_time'].dt.to_period('M').unique()
+                    month_strings = [str(month) for month in sorted(available_months)]
+                    
+                    # Create month selector
+                    selected_month_str = st.selectbox(
+                        "Select Month:",
+                        options=month_strings,
+                        index=len(month_strings) - 1 if month_strings else 0,  # Default to most recent month
+                        help="Select a month to view calls in calendar format"
+                    )
+                    
+                    # Parse selected month
+                    if selected_month_str:
+                        selected_month = pd.to_datetime(selected_month_str).to_pydatetime().replace(day=1)
+                        
+                        # Create and display calendar view
+                        daily_counts = create_monthly_calendar_view(df_2025, selected_month)
+                        if daily_counts:
+                            display_calendar_grid(daily_counts, selected_month)
+                        else:
+                            st.info(f"No calls scheduled for {selected_month.strftime('%B %Y')}")
+                        
+                        st.markdown("---")
+                
+                # Show the daily chart
                 daily_fig = create_daily_chart(df_2025)
                 if daily_fig:
                     st.plotly_chart(daily_fig, use_container_width=True)
