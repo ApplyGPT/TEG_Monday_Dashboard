@@ -517,11 +517,10 @@ def main():
             st.markdown("---")
             
             # Create tabs for different views
-            tab1, tab2, tab3 = st.tabs(["📅 Daily View", "📊 Weekly View", "📈 Monthly View"])
+            tab1, tab2, tab3 = st.tabs(["📅 Daily View", "📊 Weekly View", "📊 Monthly View"])
             
             with tab1:
                 # Add month selector for the calendar view
-                st.subheader("📅 Calendar View")
                 
                 # Get available months from data
                 if not df_2025.empty:
@@ -546,15 +545,6 @@ def main():
                             display_calendar_grid(daily_counts, selected_month)
                         else:
                             st.info(f"No calls scheduled for {selected_month.strftime('%B %Y')}")
-                        
-                        st.markdown("---")
-                
-                # Show the daily chart
-                daily_fig = create_daily_chart(df_2025)
-                if daily_fig:
-                    st.plotly_chart(daily_fig, use_container_width=True)
-                else:
-                    st.info("No daily data available")
             
             with tab2:
                 weekly_fig = create_weekly_chart(df_2025)

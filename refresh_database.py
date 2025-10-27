@@ -336,11 +336,15 @@ def refresh_calendly_database(config):
         event_types_data = event_types_response.json()
         event_types = event_types_data.get('collection', [])
         
-        # Find "TEG - Let's Chat" event type
+        # Find ONLY "TEG - Let's Chat" event type (filter out "Intro call with Teg")
         teg_event_types = []
         for event_type in event_types:
-            if event_type.get('name') == "TEG - Let's Chat":
+            event_name = event_type.get('name', '')
+            # Only include "TEG - Let's Chat", explicitly exclude "Intro call with Teg"
+            if event_name == "TEG - Let's Chat":
                 teg_event_types.append(event_type)
+            elif 'teg' in event_name.lower():
+                print(f"⚠️  Found other TEG event type: {event_name} (skipping)")
         
         if not teg_event_types:
             print("❌ No 'TEG - Let's Chat' event type found")
@@ -357,7 +361,10 @@ def refresh_calendly_database(config):
             next_page_token = None
             
             min_start_time = "2025-01-01T00:00:00.000000Z"
-            max_start_time = "2025-10-23T23:59:59.999999Z"
+            # Use current date plus 30 days to include future events
+            from datetime import datetime, timedelta
+            max_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%dT23:59:59.999999Z')
+            max_start_time = max_date
             
             while page_count < 100:
                 page_count += 1
@@ -399,7 +406,10 @@ def refresh_calendly_database(config):
         
         cursor.execute("DELETE FROM calendly_events")
         
+        # Save ALL events regardless of status for accurate counting
+        saved_count = 0
         for event in all_events:
+            
             uri = event.get('uri', '')
             name = event.get('name', '')
             start_time = event.get('start_time', '')
@@ -420,11 +430,12 @@ def refresh_calendly_database(config):
                 (uri, name, start_time, end_time, status, event_type, invitee_name, invitee_email, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (uri, name, start_time, end_time, status, event_type, invitee_name, invitee_email, datetime.now()))
+            saved_count += 1
         
         conn.commit()
         conn.close()
         
-        print(f"✅ Calendly refresh complete: {len(all_events)} events saved")
+        print(f"✅ Calendly refresh complete: {saved_count} events saved (out of {len(all_events)} total)")
         return True
         
     except Exception as e:

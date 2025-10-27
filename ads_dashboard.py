@@ -759,5 +759,241 @@ def main():
     else:
         st.warning("No leads data found for UTM analysis.")
 
+    # NEW: Qualified vs Unqualified Breakdown Section
+    st.markdown("---")
+    st.subheader("🎯 Qualified vs. Unqualified Breakdown by Form Field")
+    
+    @st.cache_data(ttl=300)
+    def get_lead_qualification_data():
+        """Extract and process leads for qualification analysis"""
+        import json
+        
+        new_leads_items = get_new_leads_data()
+        print(f"Got {len(new_leads_items)} items from database")
+        
+        # Qualification statuses (from user's spec)
+        qualified_statuses = [
+            "New", "Assigned", "Discovery Call Booked", 
+            "Design Review", "Sales Qualified", "Win", "Closed"
+        ]
+        
+        all_lead_data = []
+        
+        for item in new_leads_items:
+            lead_status = ""
+            lead_data = {}
+            
+            column_values = item.get("column_values", [])
+            if isinstance(column_values, str):
+                try:
+                    column_values = json.loads(column_values)
+                except:
+                    column_values = []
+            
+            # Extract ALL column data from the item
+            for col_val in column_values:
+                col_id = col_val.get("id", "")
+                text = (col_val.get("text") or "").strip()
+                
+                if text:  # Only process columns with values
+                    # Get ALL column values - we'll identify form fields by pattern matching values
+                    lead_data[col_id] = text
+                    
+                    # Find Lead Status (should be a "status" column, try common ones)
+                    if col_id in ["status", "status_14", "status_7_1"] and not lead_status:
+                        lead_status = text
+            
+            # Determine qualification
+            if not lead_status:
+                # Look for any status-like column
+                for col_val in column_values:
+                    col_id = col_val.get("id", "")
+                    text = (col_val.get("text") or "").strip()
+                    if "status" in col_id.lower() and text:
+                        lead_status = text
+                        break
+            
+            is_qualified = lead_status in qualified_statuses
+            
+            all_lead_data.append({
+                'lead_status': lead_status,
+                'is_qualified': is_qualified,
+                **lead_data
+            })
+        
+        # Debug: Print column IDs we found
+        if all_lead_data:
+            print(f"Sample lead data keys: {list(all_lead_data[0].keys())[:20]}")
+            qualified_count = sum(1 for item in all_lead_data if item['is_qualified'])
+            print(f"Qualified: {qualified_count}/{len(all_lead_data)}")
+        
+        return all_lead_data
+    
+    # Get qualification data
+    with st.spinner("Loading lead qualification data..."):
+        qualification_data = get_lead_qualification_data()
+    
+    if qualification_data:
+        df = pd.DataFrame(qualification_data)
+        
+        # Show available columns for debugging (commented out for production)
+        # col_ids = [c for c in df.columns if c not in ['lead_status', 'is_qualified']]
+        # st.write(f"Available column IDs ({len(col_ids)}): {col_ids[:10]}...")
+        
+        # Use explicit column ID mappings based on actual database
+        field_column_mapping = {
+            'CLIENT TYPE?': 'status_1__1',
+            'WHAT IS YOUR TIMELINE FOR STARTING?': 'text_mkwf56ca',
+            'WHAT IS YOUR STATUS?': 'text_mkwf2541',
+            'HOW MANY STYLES DO YOU WANT TO DEVELOP?': 'text_mkwfxk8t',
+            'WHAT KINDS OF CLOTHING DO YOU WANT TO MAKE?': 'text_mkwfva26',
+            'BUDGET FOR DEVELOPMENT (PATTERNS AND SAMPLES)': 'text_mkwfkqex'
+        }
+        
+        # Only keep fields where the column exists in DataFrame
+        identified_fields = {}
+        for field_name, col_id in field_column_mapping.items():
+            if col_id in df.columns:
+                identified_fields[field_name] = col_id
+                print(f"Mapped '{field_name}' to column '{col_id}'")
+            else:
+                print(f"WARNING: Column '{col_id}' not found in DataFrame for field '{field_name}'")
+        
+        if not identified_fields:
+            st.error("Could not identify form field columns. Data structure may be different than expected.")
+            return
+        
+        # Create visualizations for each identified field
+        for field_name, col_id in identified_fields.items():
+            if col_id not in df.columns:
+                continue
+            
+            # Get unique values for this column
+            unique_values = list(df[df[col_id].notna() & (df[col_id] != "")][col_id].unique())
+            
+            # Filter out invalid values for specific fields
+            if 'HOW MANY STYLES' in field_name.upper():
+                unique_values = [v for v in unique_values if v not in ['2']]  # Filter out "2"
+            elif 'BUDGET' in field_name.upper():
+                # Budget values can have commas in the number format (< $5,000), 
+                # so only filter out values that look like multi-select (comma-separated with multiple dollar amounts)
+                # A proper multi-select would look like: "< $5,000, $5,000 - $10,000"
+                # Single values have commas in the number itself, not as separators
+                filtered = []
+                for v in unique_values:
+                    val_str = str(v)
+                    # Look for patterns like "$X,XXX or $Y" which would indicate comma-separated list
+                    # NOT values like "$X,XXX" which are just thousands
+                    # A multi-select has space-comma-space pattern between values: ", "
+                    if ', ' in val_str and val_str.count('$') > 1:
+                        # This looks like a comma-separated list of budget values
+                        # Count how many distinct budget amounts there are
+                        # Multi-select would have pattern like: "< $5,000, $5,000 - $10,000"
+                        # vs single values like: "$5,000 - $10,000" (no comma-space before the dash)
+                        if val_str.count('$') >= 3:  # At least 3 dollar signs means likely multi-select
+                            continue
+                    filtered.append(v)
+                unique_values = filtered
+            
+            if len(unique_values) == 0:
+                continue
+            
+            # Use the field name as the title
+            st.markdown(f"### {field_name}")
+            
+            # Check if this looks like a multi-select field (comma-separated values)
+            # CLOTHING is always multi-select, BUDGET is NOT multi-select
+            is_clothing_field = 'CLOTHING' in field_name.upper()
+            is_budget_field = 'BUDGET' in field_name.upper()
+            has_commas = any(',' in str(val) for val in unique_values[:10])
+            
+            if has_commas and is_clothing_field:
+                # Split comma-separated values ONLY for CLOTHING field
+                multi_select_data = []
+                for _, row in df.iterrows():
+                    if pd.notna(row[col_id]) and row[col_id] != "":
+                        items = [x.strip() for x in str(row[col_id]).split(',')]
+                        for item in items:
+                            if item:  # Only if not empty after strip
+                                multi_select_data.append({
+                                    col_id: item,
+                                    'is_qualified': row['is_qualified']
+                                })
+                
+                if multi_select_data:
+                    multi_select_df = pd.DataFrame(multi_select_data)
+                    unique_values = list(multi_select_df[col_id].unique())
+                else:
+                    unique_values = []
+            else:
+                multi_select_df = df
+            
+            # Ensure unique_values is a list
+            unique_values = list(unique_values) if not isinstance(unique_values, list) else unique_values
+            
+            # Filter out invalid values again after multi-select processing
+            if 'HOW MANY STYLES' in field_name.upper():
+                unique_values = [v for v in unique_values if v not in ['2']]
+            
+            # Create pie charts for each unique value
+            num_values = len(unique_values)
+            
+            if num_values > 0:
+                # Create a grid layout (2 columns)
+                cols = st.columns(2)
+                
+                for idx, unique_value in enumerate(unique_values):
+                    # Determine which column to use
+                    col_idx = idx % 2
+                    
+                    # Filter data for this value
+                    if has_commas and is_clothing_field:
+                        filtered_data = multi_select_df[multi_select_df[col_id] == unique_value]
+                    else:
+                        filtered_data = df[df[col_id] == unique_value]
+                    
+                    # Count qualified vs unqualified
+                    qualified_count = filtered_data['is_qualified'].sum()
+                    unqualified_count = (~filtered_data['is_qualified']).sum()
+                    
+                    total = qualified_count + unqualified_count
+                    
+                    if total > 0:
+                        with cols[col_idx]:
+                            # Create pie chart
+                            fig = go.Figure(data=[
+                                go.Pie(
+                                    labels=['Qualified', 'Unqualified'],
+                                    values=[qualified_count, unqualified_count],
+                                    marker_colors=['#2ecc71', '#e74c3c'],  # Green for qualified, Red for unqualified
+                                    textinfo='label+percent+value',
+                                    textfont=dict(size=14, color='white'),
+                                    hole=0.3
+                                )
+                            ])
+                            
+                            fig.update_layout(
+                                title=f"{unique_value}<br>({total} total)",
+                                height=500,
+                                showlegend=True,
+                                legend=dict(
+                                    orientation="h",
+                                    yanchor="top",
+                                    y=-0.15,  # Move legend below the chart
+                                    xanchor="center",
+                                    x=0.5,
+                                    font=dict(size=12)
+                                ),
+                                margin=dict(b=50, t=80)  # Add bottom margin for legend
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True, key=f"{field_name}_{unique_value}_{idx}")
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+    
+    else:
+        st.warning("No lead qualification data available.")
+        st.info("The dataset may be empty or column extraction failed. Check console logs for debug output.")
+
 if __name__ == "__main__":
     main()

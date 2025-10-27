@@ -412,11 +412,12 @@ def refresh_calendly_database():
         event_types_data = event_types_response.json()
         event_types = event_types_data.get('collection', [])
         
-        # Find only "TEG - Let's Chat" event type
+        # Find ONLY "TEG - Let's Chat" event type (filter out "Intro call with Teg")
         teg_event_types = []
         for event_type in event_types:
-            name = event_type.get('name', '')
-            if name == "TEG - Let's Chat":
+            event_name = event_type.get('name', '')
+            # Only include "TEG - Let's Chat", explicitly exclude "Intro call with Teg"
+            if event_name == "TEG - Let's Chat":
                 teg_event_types.append(event_type)
         
         if not teg_event_types:
@@ -449,7 +450,10 @@ def refresh_calendly_database():
             
             # Date range for 2025
             min_start_time = "2025-01-01T00:00:00.000000Z"
-            max_start_time = "2025-10-23T23:59:59.999999Z"
+            # Use current date plus 30 days to include future events
+            from datetime import datetime, timedelta
+            max_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%dT23:59:59.999999Z')
+            max_start_time = max_date
             
             while page_count < 100:  # Increased to fetch more events (up to 10,000 events)
                 page_count += 1
