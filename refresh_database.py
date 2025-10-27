@@ -67,14 +67,26 @@ def init_databases():
 
 def load_config():
     """Load configuration from secrets.toml"""
-    secrets_path = os.path.join('.streamlit', 'secrets.toml')
+    # Get absolute path to ensure we're reading the right file
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    secrets_path = os.path.join(script_dir, '.streamlit', 'secrets.toml')
+    
+    print(f"🔍 Looking for secrets.toml at: {secrets_path}")
+    print(f"🔍 Current working directory: {os.getcwd()}")
     
     if not os.path.exists(secrets_path):
-        print(f"ERROR: secrets.toml not found at {secrets_path}")
+        print(f"❌ ERROR: secrets.toml not found at {secrets_path}")
+        print(f"   File exists: {os.path.exists(secrets_path)}")
+        print(f"   Absolute path: {os.path.abspath(secrets_path)}")
         sys.exit(1)
     
+    print(f"✅ Found secrets.toml")
+    
     with open(secrets_path, 'r') as f:
-        return toml.load(f)
+        config = toml.load(f)
+    
+    print(f"✅ Loaded configuration with sections: {list(config.keys())}")
+    return config
 
 def update_quickbooks_refresh_token(config):
     """Update QuickBooks refresh token if a new one is available"""
@@ -274,12 +286,26 @@ def refresh_monday_database(config):
 def refresh_calendly_database(config):
     """Refresh Calendly database"""
     try:
+        # Debug: Print config structure
+        print(f"🔍 Config keys: {list(config.keys())}")
+        
         if 'calendly' not in config:
             print("❌ No Calendly configuration found")
+            print(f"   Available sections: {list(config.keys())}")
             return False
         
         calendly_config = config['calendly']
-        api_key = calendly_config['calendly_api_key']
+        print(f"🔍 Calendly config keys: {list(calendly_config.keys())}")
+        
+        # Try different possible key names
+        api_key = calendly_config.get('calendly_api_key') or calendly_config.get('api_key')
+        
+        if not api_key:
+            print("❌ No Calendly API key found in configuration")
+            print(f"   Available keys: {list(calendly_config.keys())}")
+            return False
+        
+        print(f"🔑 Using Calendly API key: {api_key[:30]}...")
         
         headers = {
             'Authorization': f'Bearer {api_key}',
@@ -290,6 +316,12 @@ def refresh_calendly_database(config):
         user_response = requests.get('https://api.calendly.com/users/me', headers=headers)
         if user_response.status_code != 200:
             print(f"❌ Failed to get Calendly user info: {user_response.status_code}")
+            print(f"   Response: {user_response.text[:200]}")
+            print(f"   API Key length: {len(api_key)}")
+            print(f"   This usually means:")
+            print(f"   1. API key is expired or invalid")
+            print(f"   2. API key doesn't have the right permissions")
+            print(f"   3. Need to generate a new Personal Access Token from Calendly")
             return False
         
         user_data = user_response.json()
