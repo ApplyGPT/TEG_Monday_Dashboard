@@ -89,12 +89,16 @@ def load_oauth_credentials():
         ]
         
         # Check if we're in a deployed environment
+        is_production_flag = oauth.get('is_production', False) or st.secrets.get('is_production', False)
         is_deployed = (
             os.environ.get('STREAMLIT_SERVER_HEADLESS') == 'true' or
-            st.secrets.get('is_production', False) or
+            is_production_flag or
             'streamlit.app' in socket.getfqdn() or
             'blanklabelshop.com' in socket.getfqdn()
         )
+        
+        # Debug environment detection
+        st.write(f"🔧 **Debug Environment:** STREAMLIT_SERVER_HEADLESS={os.environ.get('STREAMLIT_SERVER_HEADLESS')}, is_production={is_production_flag}, hostname={socket.getfqdn()}, is_deployed={is_deployed}")
         
         # Check if we have stored credentials in session state
         if 'google_creds' in st.session_state and st.session_state.google_creds:
@@ -111,7 +115,7 @@ def load_oauth_credentials():
         
         if is_deployed:
             # For deployed environments, use web-based OAuth flow
-            redirect_uri = "https://blanklabelshop.com/ads-dashboard/oauth2callback"
+            redirect_uri = oauth.get("redirect_uri", "https://blanklabelshop.com/ads-dashboard/oauth2callback")
             
             flow = Flow.from_client_config(
                 {
@@ -121,13 +125,16 @@ def load_oauth_credentials():
                         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                         "token_uri": "https://oauth2.googleapis.com/token",
                         "redirect_uris": [
-                            "https://blanklabelshop.com/ads-dashboard/oauth2callback"
+                            redirect_uri
                         ]
                     }
                 },
                 scopes=scopes,
             )
             flow.redirect_uri = redirect_uri
+            
+            # Debug: Show that we're using production flow
+            st.info(f"🔧 **Debug:** Using production OAuth flow with redirect_uri: {redirect_uri}")
             
             # Check for OAuth callback with authorization code
             query_params = st.query_params
@@ -196,6 +203,7 @@ def load_oauth_credentials():
         
         else:
             # For local development, use InstalledAppFlow with local server
+            st.info(f"🔧 **Debug:** Using LOCAL OAuth flow (is_deployed = False)")
             if InstalledAppFlow:
                 flow = InstalledAppFlow.from_client_config(
                     {
