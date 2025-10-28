@@ -132,7 +132,7 @@ class QuickBooksAPI:
             st.error(f"Unexpected error during QuickBooks authentication: {str(e)}")
             return False
     
-    def create_customer(self, first_name: str, last_name: str, email: str) -> Optional[str]:
+    def create_customer(self, first_name: str, last_name: str, email: str, company_name: str = None) -> Optional[str]:
         """
         Create a customer in QuickBooks or use existing customer in sandbox
         
@@ -140,6 +140,7 @@ class QuickBooksAPI:
             first_name: Customer's first name
             last_name: Customer's last name
             email: Customer's email address
+            company_name: Customer's company name (optional)
             
         Returns:
             str: Customer ID if successful, None otherwise
@@ -151,7 +152,7 @@ class QuickBooksAPI:
         # In sandbox mode, we can't create customers, so use existing ones
         if self.sandbox:
             st.info("🔧 Sandbox Mode: Using existing customer for testing")
-            return self._get_or_create_sandbox_customer(first_name, last_name, email)
+            return self._get_or_create_sandbox_customer(first_name, last_name, email, company_name)
         
         # First check if customer already exists
         existing_customer_id = self._find_customer_by_email(email)
@@ -190,6 +191,10 @@ class QuickBooksAPI:
                 }
             }
             
+            # Add company name if provided
+            if company_name:
+                customer_data["CompanyName"] = company_name
+            
             # Customer object should be at root level, not wrapped
             payload = customer_data
             
@@ -223,7 +228,7 @@ class QuickBooksAPI:
             st.error(f"Unexpected error creating customer: {str(e)}")
             return None
     
-    def _get_or_create_sandbox_customer(self, first_name: str, last_name: str, email: str) -> Optional[str]:
+    def _get_or_create_sandbox_customer(self, first_name: str, last_name: str, email: str, company_name: str = None) -> Optional[str]:
         """
         Get or create a customer for sandbox testing
         Since sandbox doesn't allow customer creation, we'll use existing customers
@@ -623,8 +628,9 @@ class QuickBooksAPI:
         return "2"
     
     def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
-                     email: str, contract_amount: str, description: str = "Contract Services",
-                     line_items: list = None, payment_terms: str = "Due in Full",
+                     email: str, company_name: str = None, client_address: str = None,
+                     contract_amount: str = "0", description: str = "Contract Services", 
+                     line_items: list = None, payment_terms: str = "Due in Full", 
                      enable_payment_link: bool = True, invoice_date: str = None) -> Optional[str]:
         """
         Create an invoice in QuickBooks or simulate in sandbox
@@ -634,6 +640,8 @@ class QuickBooksAPI:
             first_name: Customer's first name
             last_name: Customer's last name
             email: Customer's email address
+            company_name: Customer's company name (optional)
+            client_address: Customer's billing address (optional)
             contract_amount: Contract amount (will be converted to float)
             description: Description of the service
             line_items: List of line items with type, amount, and description
@@ -652,7 +660,7 @@ class QuickBooksAPI:
         # In sandbox mode, we can't create invoices, so simulate the process
         if self.sandbox:
             st.info("🔧 Sandbox Mode: Simulating invoice creation")
-            return self._simulate_invoice_creation(customer_id, first_name, last_name, email, 
+            return self._simulate_invoice_creation(customer_id, first_name, last_name, email, company_name, client_address,
                                                  contract_amount, description, line_items, 
                                                  payment_terms, enable_payment_link, invoice_date)
         
@@ -754,6 +762,16 @@ class QuickBooksAPI:
                 "AllowOnlineACHPayment": enable_payment_link
             }
             
+            # Add company name and address to BillToAddr so it appears between person's name and address on invoice
+            if company_name or client_address:
+                bill_to = {}
+                if company_name:
+                    bill_to["CompanyName"] = company_name
+                if client_address:
+                    # Parse the address - assume single line format
+                    bill_to["Line1"] = client_address
+                invoice_data["BillToAddr"] = bill_to
+            
             # Add payment terms - always set them explicitly
             if payment_terms == "Due in Full":
                 # For "Due in Full", we don't set SalesTermRef (defaults to Due on Receipt)
@@ -805,8 +823,9 @@ class QuickBooksAPI:
             return None
     
     def _simulate_invoice_creation(self, customer_id: str, first_name: str, last_name: str, 
-                                 email: str, contract_amount: str, description: str,
-                                 line_items: list = None, payment_terms: str = "Due in Full",
+                                 email: str, company_name: str = None, client_address: str = None,
+                                 contract_amount: str = "0", description: str = "Contract Services", 
+                                 line_items: list = None, payment_terms: str = "Due in Full", 
                                  enable_payment_link: bool = True, invoice_date: str = None) -> str:
         """
         Simulate invoice creation for sandbox testing
@@ -827,6 +846,10 @@ class QuickBooksAPI:
             st.info(f"📋 Simulated Invoice Preview (Your Custom Template):")
             st.info(f"")
             st.info(f"   BILL TO: {first_name} {last_name}")
+            if company_name:
+                st.info(f"   COMPANY: {company_name}")
+            if client_address:
+                st.info(f"   ADDRESS: {client_address}")
             st.info(f"   EMAIL: {email}")
             st.info(f"   TERMS: {payment_terms}")
             
@@ -971,8 +994,8 @@ class QuickBooksAPI:
             st.error(f"Unexpected error sending invoice: {str(e)}")
             return False
     
-    def create_and_send_invoice(self, first_name: str, last_name: str, email: str, 
-                              contract_amount: str, description: str = "Contract Services",
+    def create_and_send_invoice(self, first_name: str, last_name: str, email: str, company_name: str = None,
+                              client_address: str = None, contract_amount: str = "0", description: str = "Contract Services",
                               line_items: list = None, payment_terms: str = "Due in Full",
                               enable_payment_link: bool = True, invoice_date: str = None) -> Tuple[bool, str]:
         """
@@ -982,6 +1005,8 @@ class QuickBooksAPI:
             first_name: Customer's first name
             last_name: Customer's last name
             email: Customer's email address
+            company_name: Customer's company name (optional)
+            client_address: Customer's billing address (optional)
             contract_amount: Contract amount
             description: Description of the service
             line_items: List of line items with type, amount, and description
@@ -994,12 +1019,12 @@ class QuickBooksAPI:
         """
         try:
             # Create or find customer
-            customer_id = self.create_customer(first_name, last_name, email)
+            customer_id = self.create_customer(first_name, last_name, email, company_name)
             if not customer_id:
                 return False, "Failed to create or find customer"
             
             # Create invoice
-            invoice_id = self.create_invoice(customer_id, first_name, last_name, email, 
+            invoice_id = self.create_invoice(customer_id, first_name, last_name, email, company_name, client_address,
                                            contract_amount, description, line_items,
                                            payment_terms, enable_payment_link, invoice_date)
             if not invoice_id:

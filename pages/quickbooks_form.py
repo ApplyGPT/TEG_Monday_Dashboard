@@ -128,6 +128,12 @@ def main():
             help="Enter the client's email address"
         )
         
+        company_name = st.text_input(
+            "Company Name",
+            value="",
+            help="Enter the client's company name (optional)"
+        )
+        
         # Credit Card Processing Fee checkbox
         include_cc_fee = st.checkbox(
             "Include 3% Credit Card Processing Fee",
@@ -464,6 +470,8 @@ def main():
                 first_name=first_name,
                 last_name=last_name,
                 email=email,
+                company_name=company_name if company_name else None,
+                client_address=client_address if client_address else None,
                 contract_amount="0",  # No base contract amount
                 description="Invoice",
                 line_items=line_items_data,

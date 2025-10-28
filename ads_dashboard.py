@@ -167,10 +167,13 @@ def get_all_leads_for_utm():
                 if col_id == target_channel_column and text:
                     channel = text
                 
-                # Look for date created
-                if col_type == "date" and text and ("created" in col_id or "date" in col_id):
+                # Look for date created - use board-specific date columns
+                # Sales board uses date7, other boards use generic date columns
+                if board_name == 'Sales v2' and col_id == "date7":
                     date_created = text
-                    break
+                elif col_type == "date" and text and ("created" in col_id or "date" in col_id):
+                    if not date_created:  # Only use if we haven't found a date yet
+                        date_created = text
             
             # Only include items with valid channels (not empty and not placeholder)
             if channel and channel.strip() and channel != "[channel]":
@@ -183,6 +186,61 @@ def get_all_leads_for_utm():
                 })
     
     return all_leads
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_sales_leads_for_utm():
+    """Get leads data from Sales board only for UTM analysis"""
+    import json
+    
+    sales_leads = []
+    
+    # Get data from Sales board only
+    sales_items = get_sales_data().get('data', {}).get('boards', [{}])[0].get('items_page', {}).get('items', [])
+    
+    # Sales board channel column ID - this is the UTM channel column with "Paid search", "Organic search", etc.
+    sales_channel_column = 'text_mkrfer1n'
+    
+    # Process Sales board data
+    for item in sales_items:
+        # Extract channel information
+        channel = ""
+        date_created = None
+        
+        # Parse column_values if it's a string
+        column_values = item.get("column_values", [])
+        if isinstance(column_values, str):
+            try:
+                column_values = json.loads(column_values)
+            except:
+                column_values = []
+        
+        for col_val in column_values:
+            col_id = col_val.get("id", "")
+            text = (col_val.get("text") or "").strip()
+            col_type = col_val.get("type", "")
+            
+            # Look for the channel column (UTM channel column)
+            if col_id == sales_channel_column and text:
+                channel = text
+            
+            # Look for date created - use date7 column specifically
+            if col_id == "date7":
+                date_created = text
+            
+            # Fallback: look for any date column
+            if col_type == "date" and text and not date_created:
+                date_created = text
+        
+        # Only include items with valid channels (not empty)
+        if channel and channel.strip():
+            sales_leads.append({
+                'name': item.get('name', ''),
+                'board': 'Sales v2',
+                'channel': channel,
+                'date_created': date_created
+            })
+    
+    return sales_leads
 
 def format_ads_data(data):
     """Convert Monday.com ads data to pandas DataFrame"""
@@ -758,6 +816,80 @@ def main():
             st.warning("No leads with valid creation dates found for 2025 UTM analysis.")
     else:
         st.warning("No leads data found for UTM analysis.")
+
+    # UTM Data - Sales Board Section
+    st.markdown("---")
+    st.subheader("📊 UTM Data - Sales Board (Leads by Channel - 2025)")
+    
+    # Get sales board leads data for UTM analysis
+    with st.spinner("Loading Sales Board UTM data..."):
+        sales_leads = get_sales_leads_for_utm()
+    
+    if sales_leads:
+        # Convert to DataFrame
+        sales_leads_df = pd.DataFrame(sales_leads)
+        
+        # Parse dates and filter for valid dates
+        sales_leads_df['date_created'] = pd.to_datetime(sales_leads_df['date_created'], errors='coerce')
+        sales_leads_with_dates = sales_leads_df.dropna(subset=['date_created'])
+        
+        # Filter for 2025 data only
+        sales_leads_with_dates = sales_leads_with_dates[sales_leads_with_dates['date_created'].dt.year == 2025]
+        
+        if not sales_leads_with_dates.empty:
+            # Add month-year column for grouping with proper formatting
+            sales_leads_with_dates['Month Year'] = sales_leads_with_dates['date_created'].dt.strftime('%B %Y')
+            
+            # Count leads by raw channel and month
+            channel_counts = sales_leads_with_dates.groupby(['Month Year', 'channel']).size().reset_index(name='count')
+            
+            # Create pivot table for easier charting
+            channel_pivot = channel_counts.pivot(index='Month Year', columns='channel', values='count').fillna(0)
+            
+            # Sort the pivot table by month chronologically
+            channel_pivot.index = pd.to_datetime(channel_pivot.index)
+            channel_pivot = channel_pivot.sort_index()
+            channel_pivot.index = channel_pivot.index.strftime('%B %Y')
+            
+            # Create side-by-side bar chart with dynamic colors
+            fig = px.bar(
+                channel_pivot,
+                title='',
+                labels={'value': 'Number of Leads', 'index': 'Month'}
+            )
+            
+            # Update layout
+            fig.update_layout(
+                xaxis_title="Month",
+                yaxis_title="Number of Leads",
+                height=500,
+                barmode='group',  # Side-by-side bars instead of stacked
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.2,
+                    xanchor="center",
+                    x=0.5,
+                    title_text=""  # Remove legend title
+                )
+            )
+            
+            # Remove "channel" prefix from legend entries
+            for trace in fig.data:
+                if hasattr(trace, 'name') and trace.name:
+                    # Remove any "channel" prefix from the trace name
+                    trace.name = trace.name.replace('channel', '').strip()
+            
+            # Rotate x-axis labels
+            fig.update_xaxes(tickangle=45)
+            
+            # Display the chart
+            st.plotly_chart(fig, use_container_width=True)
+            
+        else:
+            st.warning("No Sales Board leads with valid creation dates found for 2025 UTM analysis.")
+    else:
+        st.warning("No Sales Board leads data found for UTM analysis.")
 
     # NEW: Qualified vs Unqualified Breakdown Section
     st.markdown("---")
