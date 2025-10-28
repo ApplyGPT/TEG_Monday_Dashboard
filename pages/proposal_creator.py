@@ -1137,11 +1137,8 @@ def main():
         
         # If OAuth is in progress (waiting for user input), don't proceed with Google Slides creation
         if creds is None:
-            # Check if we're in the middle of an OAuth flow
-            if 'oauth_state' in st.session_state:
-                # OAuth flow is in progress, don't try service account
-                st.info("⏳ Please complete the OAuth authentication process above.")
-                return
+            # OAuth flow is in progress (showing auth URL), don't proceed
+            return
         
         if not creds:
             # Check if we're in deployed environment and OAuth failed
