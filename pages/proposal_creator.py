@@ -169,7 +169,8 @@ def load_oauth_credentials():
                     st.query_params.clear()
                     
                     st.success("✅ Authentication successful!")
-                    st.rerun()  # Refresh the page to use the new credentials
+                    # Return the credentials so the flow continues to create Google Slides
+                    return creds
                     
                 except Exception as token_error:
                     st.error(f"❌ Failed to exchange authorization code: {token_error}")
