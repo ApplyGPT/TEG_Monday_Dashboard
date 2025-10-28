@@ -788,11 +788,7 @@ def main():
         
         print(f"Total items from all boards: {len(all_items)}")
         
-        # Qualification statuses (from user's spec)
-        qualified_statuses = [
-            "New", "Assigned", "Discovery Call Booked", 
-            "Design Review", "Sales Qualified", "Win", "Closed"
-        ]
+        # Qualification rule: Unqualified only if status is Disqualified; otherwise Qualified
         
         all_lead_data = []
         
@@ -807,6 +803,15 @@ def main():
                 except:
                     column_values = []
             
+            # Define the "Disqualified" status column for each board type
+            # These columns contain the actual Lead Status
+            disqualified_status_cols = {
+                "status7",  # New Leads
+                "color_mknx1h9r",  # Discovery Call
+                "color_mknx4zp1",  # Design Review
+                "color_mknxd1j2"   # Sales
+            }
+            
             # Extract ALL column data from the item
             for col_val in column_values:
                 col_id = col_val.get("id", "")
@@ -816,21 +821,12 @@ def main():
                     # Get ALL column values - we'll identify form fields by pattern matching values
                     lead_data[col_id] = text
                     
-                    # Find Lead Status (should be a "status" column, try common ones)
-                    if col_id in ["status", "status_14", "status_7_1"] and not lead_status:
+                    # Find Lead Status - check the Disqualified status columns
+                    if col_id in disqualified_status_cols and not lead_status:
                         lead_status = text
             
-            # Determine qualification
-            if not lead_status:
-                # Look for any status-like column
-                for col_val in column_values:
-                    col_id = col_val.get("id", "")
-                    text = (col_val.get("text") or "").strip()
-                    if "status" in col_id.lower() and text:
-                        lead_status = text
-                        break
-            
-            is_qualified = lead_status in qualified_statuses
+            # New rule: only "Disqualified" is unqualified; anything else (including empty) is qualified
+            is_qualified = True if not lead_status else str(lead_status).strip().lower() != "disqualified"
             
             all_lead_data.append({
                 'lead_status': lead_status,
@@ -862,10 +858,10 @@ def main():
         field_column_mapping = {
             'CLIENT TYPE?': ['status_1__1', 'status_14__1'],  # status_1__1 for New Leads, status_14__1 for other boards
             'WHAT IS YOUR TIMELINE FOR STARTING?': ['text_mkwf56ca', 'text3__1'],  # text_mkwf56ca for New Leads, text3__1 for other boards
-            'WHAT IS YOUR STATUS?': ['text_mkwf2541', 'text_mkwf8r57'],  # text_mkwf2541 for New Leads, text_mkwf8r57 for Discovery/Design
-            'HOW MANY STYLES DO YOU WANT TO DEVELOP?': ['text_mkwfxk8t', 'text_mkwfs99f'],  # text_mkwfxk8t for New Leads, text_mkwfs99f for other boards
-            'WHAT KINDS OF CLOTHING DO YOU WANT TO MAKE?': ['text_mkwfva26', 'text_mkwf8n18'],  # text_mkwfva26 for New Leads, text_mkwf8n18 for other boards
-            'BUDGET FOR DEVELOPMENT (PATTERNS AND SAMPLES)': ['text_mkwfkqex', 'text_mkwf9e6c']  # text_mkwfkqex for New Leads, text_mkwf9e6c for other boards
+            'WHAT IS YOUR STATUS?': ['text_mkwf2541', 'text_mkwf8r57', 'text37__1'],  # text_mkwf2541 for New Leads, text_mkwf8r57 for Discovery Call, text37__1 for Design Review
+            'HOW MANY STYLES DO YOU WANT TO DEVELOP?': ['text_mkwfxk8t', 'text_mkwfs99f', 'text30__1', 'text30__1'],  # text_mkwfxk8t for New Leads, text_mkwfs99f for Discovery, text30__1 for Design Review, text30__1 for Sales
+            'WHAT KINDS OF CLOTHING DO YOU WANT TO MAKE?': ['text_mkwfva26', 'text_mkwf8n18', 'text8__1'],  # text_mkwfva26 for New Leads, text_mkwf8n18 for Discovery Call, text8__1 for Design Review and Sales
+            'BUDGET FOR DEVELOPMENT (PATTERNS AND SAMPLES)': ['text_mkwfkqex', 'text_mkwf9e6c', 'text7__1']  # text_mkwfkqex for New Leads, text_mkwf9e6c for Discovery Call, text7__1 for Design Review and Sales
         }
         
         # All fields now use lists of possible column IDs
@@ -912,31 +908,20 @@ def main():
             
             # Filter out invalid values for specific fields
             if 'HOW MANY STYLES' in field_name.upper():
-                unique_values = [v for v in unique_values if v not in ['2']]  # Filter out "2"
+                # Only show valid options
+                valid_options = ['LESS THAN 5', '5-10', '11-20', '20+', 'I DON\'T KNOW']
+                unique_values = [v for v in unique_values if v.upper() in [o.upper() for o in valid_options]]
+            elif field_name.upper().startswith('CLIENT TYPE'):
+                # Exclude EXISTING (case insensitive)
+                unique_values = [v for v in unique_values if str(v).strip().lower() != 'existing']
             elif 'TIMELINE' in field_name.upper():
                 # Only show valid timeline values
                 valid_timelines = ['I JUST WANT TO LEARN THE PROCESS', 'READY TO GET STARTED', 'WITHIN THE NEXT 90 DAYS']
                 unique_values = [v for v in unique_values if v.upper() in [t.upper() for t in valid_timelines]]
             elif 'BUDGET' in field_name.upper():
-                # Budget values can have commas in the number format (< $5,000), 
-                # so only filter out values that look like multi-select (comma-separated with multiple dollar amounts)
-                # A proper multi-select would look like: "< $5,000, $5,000 - $10,000"
-                # Single values have commas in the number itself, not as separators
-                filtered = []
-                for v in unique_values:
-                    val_str = str(v)
-                    # Look for patterns like "$X,XXX or $Y" which would indicate comma-separated list
-                    # NOT values like "$X,XXX" which are just thousands
-                    # A multi-select has space-comma-space pattern between values: ", "
-                    if ', ' in val_str and val_str.count('$') > 1:
-                        # This looks like a comma-separated list of budget values
-                        # Count how many distinct budget amounts there are
-                        # Multi-select would have pattern like: "< $5,000, $5,000 - $10,000"
-                        # vs single values like: "$5,000 - $10,000" (no comma-space before the dash)
-                        if val_str.count('$') >= 3:  # At least 3 dollar signs means likely multi-select
-                            continue
-                    filtered.append(v)
-                unique_values = filtered
+                # Only show the five allowed budget values
+                allowed_budgets = ['< $5,000', '$5,000 - $10,000', '$10,000 - $20,000', '$20,000 - $50,000', 'other']
+                unique_values = [v for v in unique_values if str(v) in allowed_budgets]
             
             if len(unique_values) == 0:
                 continue
@@ -965,12 +950,15 @@ def main():
                                         col_id_option: item,
                                         'is_qualified': row['is_qualified']
                                     })
-                            break  # Only process first available column per row
                 
                 if multi_select_data:
                     multi_select_df = pd.DataFrame(multi_select_data)
-                    # Get unique values from the primary column
-                    unique_values = list(multi_select_df[col_id].unique()) if col_id in multi_select_df.columns else []
+                    # Get unique values from all columns, not just primary
+                    all_values = []
+                    for col_id_option in col_ids_for_field:
+                        if col_id_option in multi_select_df.columns:
+                            all_values.extend(multi_select_df[col_id_option].dropna().unique().tolist())
+                    unique_values = list(set(all_values)) if all_values else []
                 else:
                     unique_values = []
             else:
@@ -981,7 +969,13 @@ def main():
             
             # Filter out invalid values again after multi-select processing
             if 'HOW MANY STYLES' in field_name.upper():
-                unique_values = [v for v in unique_values if v not in ['2']]
+                # Only show valid options
+                valid_options = ['LESS THAN 5', '5-10', '11-20', '20+', 'I DON\'T KNOW']
+                unique_values = [v for v in unique_values if v.upper() in [o.upper() for o in valid_options]]
+            elif 'CLOTHING' in field_name.upper():
+                # Only show valid clothing types (must be all uppercase)
+                valid_clothing = ['WOMENSWEAR', 'MENSWEAR', 'STREETWEAR', 'ACTIVEWEAR', 'KIDS', 'BRIDAL/COUTURE', 'OTHER']
+                unique_values = [v for v in unique_values if v == v.upper() and v in valid_clothing]
             elif 'TIMELINE' in field_name.upper():
                 # Only show valid timeline values
                 valid_timelines = ['I JUST WANT TO LEARN THE PROCESS', 'READY TO GET STARTED', 'WITHIN THE NEXT 90 DAYS']
@@ -1000,7 +994,12 @@ def main():
                     
                     # Filter data for this value
                     if has_commas and is_clothing_field:
-                        filtered_data = multi_select_df[multi_select_df[col_id] == unique_value]
+                        # Check all columns in multi_select_df for this field
+                        mask = pd.Series([False] * len(multi_select_df))
+                        for col_id_option in col_ids_for_field:
+                            if col_id_option in multi_select_df.columns:
+                                mask = mask | (multi_select_df[col_id_option] == unique_value)
+                        filtered_data = multi_select_df[mask]
                     else:
                         # Check all possible column IDs for this field
                         mask = pd.Series([False] * len(df))

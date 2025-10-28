@@ -110,6 +110,8 @@ ENV/
 env.bak/
 venv.bak/
 credentials.txt
+calendly_data.db
+monday_data.db
 
 # Spyder project settings
 .spyderproject
