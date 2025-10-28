@@ -115,7 +115,8 @@ def load_oauth_credentials():
         
         if is_deployed:
             # For deployed environments, use web-based OAuth flow
-            redirect_uri = oauth.get("redirect_uri", "https://blanklabelshop.com/ads-dashboard/oauth2callback")
+            # Redirect back to the same page (proposal_creator) to handle the callback
+            redirect_uri = oauth.get("redirect_uri", "https://blanklabelshop.com/ads-dashboard/proposal_creator")
             
             flow = Flow.from_client_config(
                 {
