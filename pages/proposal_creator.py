@@ -79,8 +79,8 @@ def load_oauth_credentials():
     """Load user OAuth credentials from secrets and run local flow if needed (fallback)."""
     try:
         oauth = st.secrets.get('google_oauth')
-        if not oauth or not InstalledAppFlow:
-            st.error("Google OAuth secrets not found or InstalledAppFlow not available")
+        if not oauth or not Flow:
+            st.error("Google OAuth secrets not found or Flow not available")
             return None
         
         scopes = [
@@ -91,6 +91,7 @@ def load_oauth_credentials():
         # Check if we're in a deployed environment
         is_deployed = (
             os.environ.get('STREAMLIT_SERVER_HEADLESS') == 'true' or
+            st.secrets.get('is_production', False) or
             'streamlit.app' in socket.getfqdn() or
             'blanklabelshop.com' in socket.getfqdn()
         )
@@ -109,29 +110,34 @@ def load_oauth_credentials():
                 st.session_state.google_creds = None
         
         if is_deployed:
-            # For deployed environments, use redirect-based OAuth flow
-            st.info("🔐 Authenticating with Google...")
+            # For deployed environments, use web-based OAuth flow
+            redirect_uri = "https://blanklabelshop.com/ads-dashboard/oauth2callback"
+            
+            flow = Flow.from_client_config(
+                {
+                    "web": {
+                        "client_id": oauth["client_id"],
+                        "client_secret": oauth["client_secret"],
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                        "redirect_uris": [
+                            "https://blanklabelshop.com/ads-dashboard/oauth2callback"
+                        ]
+                    }
+                },
+                scopes=scopes,
+            )
+            flow.redirect_uri = redirect_uri
             
             # Check for OAuth callback with authorization code
             query_params = st.query_params
             if "code" in query_params:
                 try:
-                    # Create flow for token exchange
-                    flow = InstalledAppFlow.from_client_config(
-                        {
-                            "installed": {
-                                "client_id": oauth["client_id"],
-                                "client_secret": oauth["client_secret"],
-                                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                                "token_uri": "https://oauth2.googleapis.com/token",
-                                "redirect_uris": [
-                                    "https://blanklabelshop.com/ads-dashboard/proposal_creator",
-                                    "https://blanklabelshop.com/ads-dashboard/oauth2callback"
-                                ]
-                            }
-                        },
-                        scopes=scopes,
-                    )
+                    # Verify state parameter for security
+                    if "state" in query_params and st.session_state.get('oauth_state'):
+                        if query_params["state"] != st.session_state.get("oauth_state"):
+                            st.error("❌ Invalid OAuth state. Possible security issue. Please try again.")
+                            return None
                     
                     # Exchange code for credentials
                     flow.fetch_token(code=query_params["code"])
@@ -140,41 +146,35 @@ def load_oauth_credentials():
                     # Store credentials in session state
                     st.session_state.google_creds = creds
                     
-                    # Clear the query parameters to avoid re-processing
+                    # Save credentials to file for persistence
+                    try:
+                        import json
+                        cred_file = "/tmp/google_creds.json"
+                        with open(cred_file, "w") as f:
+                            f.write(creds.to_json())
+                    except Exception:
+                        pass  # Ignore if we can't save to file
+                    
+                    # Clear OAuth state and query parameters
+                    if 'oauth_state' in st.session_state:
+                        del st.session_state['oauth_state']
                     st.query_params.clear()
                     
                     st.success("✅ Authentication successful!")
                     st.rerun()  # Refresh the page to use the new credentials
                     
                 except Exception as token_error:
-                    st.error(f"Failed to exchange authorization code: {str(token_error)}")
-                    st.error("Please try the authentication process again.")
+                    st.error(f"❌ Failed to exchange authorization code: {token_error}")
+                    st.info("Please try the authentication process again.")
                     return None
             
             else:
-                # Start OAuth flow - generate authorization URL
-                flow = InstalledAppFlow.from_client_config(
-                    {
-                        "installed": {
-                            "client_id": oauth["client_id"],
-                            "client_secret": oauth["client_secret"],
-                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                            "token_uri": "https://oauth2.googleapis.com/token",
-                            "redirect_uris": [
-                                "https://blanklabelshop.com/ads-dashboard/proposal_creator",
-                                "https://blanklabelshop.com/ads-dashboard/oauth2callback"
-                            ]
-                        }
-                    },
-                    scopes=scopes,
-                )
-                
+                # Generate authorization URL
                 try:
-                    # Get the authorization URL
                     auth_url, state = flow.authorization_url(
-                        prompt='consent',
-                        access_type='offline',
-                        include_granted_scopes='true'
+                        access_type="offline",
+                        include_granted_scopes="true",
+                        prompt="consent"
                     )
                     
                     # Store the flow state for verification
@@ -191,67 +191,71 @@ def load_oauth_credentials():
                     return None
                     
                 except Exception as e:
-                    st.error(f"OAuth authentication failed: {str(e)}")
+                    st.error(f"❌ OAuth authentication failed: {str(e)}")
                     return None
         
         else:
-            # For local development, use local server
-            flow = InstalledAppFlow.from_client_config(
-                {
-                    "installed": {
-                        "client_id": oauth["client_id"],
-                        "client_secret": oauth["client_secret"],
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                        "redirect_uris": [
-                            "http://localhost:8080",
-                            "http://localhost:8081", 
-                            "http://localhost:8082",
-                            "http://localhost:8083",
-                            "http://localhost:8084",
-                            "http://127.0.0.1:8080",
-                            "http://127.0.0.1:8081",
-                            "http://127.0.0.1:8082", 
-                            "http://127.0.0.1:8083",
-                            "http://127.0.0.1:8084",
-                            "http://localhost",
-                            "http://127.0.0.1"
-                        ]
-                    }
-                },
-                scopes=scopes,
-            )
-            
-            # Try local server ports
-            ports_to_try = [8080, 8081, 8082, 8083, 8084]
-            creds = None
-            
-            for port in ports_to_try:
-                try:
-                    creds = flow.run_local_server(port=port)
-                    # Store credentials in session state
-                    st.session_state.google_creds = creds
-                    break
-                except OSError as e:
-                    if "10048" in str(e) or "Address already in use" in str(e):
+            # For local development, use InstalledAppFlow with local server
+            if InstalledAppFlow:
+                flow = InstalledAppFlow.from_client_config(
+                    {
+                        "installed": {
+                            "client_id": oauth["client_id"],
+                            "client_secret": oauth["client_secret"],
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                            "redirect_uris": [
+                                "http://localhost:8080",
+                                "http://localhost:8081", 
+                                "http://localhost:8082",
+                                "http://localhost:8083",
+                                "http://localhost:8084",
+                                "http://127.0.0.1:8080",
+                                "http://127.0.0.1:8081",
+                                "http://127.0.0.1:8082", 
+                                "http://127.0.0.1:8083",
+                                "http://127.0.0.1:8084",
+                                "http://localhost",
+                                "http://127.0.0.1"
+                            ]
+                        }
+                    },
+                    scopes=scopes,
+                )
+                
+                # Try local server ports
+                ports_to_try = [8080, 8081, 8082, 8083, 8084]
+                creds = None
+                
+                for port in ports_to_try:
+                    try:
+                        creds = flow.run_local_server(port=port)
+                        # Store credentials in session state
+                        st.session_state.google_creds = creds
+                        break
+                    except OSError as e:
+                        if "10048" in str(e) or "Address already in use" in str(e):
+                            continue
+                        else:
+                            continue
+                    except Exception as e:
                         continue
-                    else:
-                        continue
-                except Exception as e:
-                    continue
-            
-            # Fallback to console flow
-            if not creds:
-                try:
-                    creds = flow.run_console()
-                    # Store credentials in session state
-                    st.session_state.google_creds = creds
-                except AttributeError:
-                    # If run_console doesn't exist, return None
-                    st.warning("Console OAuth flow not available.")
-                    return None
-            
-            return creds
+                
+                # Fallback to console flow
+                if not creds:
+                    try:
+                        creds = flow.run_console()
+                        # Store credentials in session state
+                        st.session_state.google_creds = creds
+                    except AttributeError:
+                        # If run_console doesn't exist, return None
+                        st.warning("Console OAuth flow not available.")
+                        return None
+                
+                return creds
+            else:
+                st.error("InstalledAppFlow not available for local development")
+                return None
         
     except Exception as e:
         st.error(f"OAuth authentication failed: {str(e)}")
