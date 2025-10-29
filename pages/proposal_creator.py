@@ -97,9 +97,6 @@ def load_oauth_credentials():
             'blanklabelshop.com' in socket.getfqdn()
         )
         
-        # Debug environment detection
-        st.write(f"🔧 **Debug Environment:** STREAMLIT_SERVER_HEADLESS={os.environ.get('STREAMLIT_SERVER_HEADLESS')}, is_production={is_production_flag}, hostname={socket.getfqdn()}, is_deployed={is_deployed}")
-        
         # Check if we have stored credentials in session state
         if 'google_creds' in st.session_state and st.session_state.google_creds:
             try:
@@ -133,9 +130,6 @@ def load_oauth_credentials():
                 scopes=scopes,
             )
             flow.redirect_uri = redirect_uri
-            
-            # Debug: Show that we're using production flow
-            st.info(f"🔧 **Debug:** Using production OAuth flow with redirect_uri: {redirect_uri}")
             
             # Check for OAuth callback with authorization code
             query_params = st.query_params
@@ -189,14 +183,8 @@ def load_oauth_credentials():
                     # Store the flow state for verification
                     st.session_state['oauth_state'] = state
                     
-                    # Display the URL for user to visit
-                    st.info("🔐 **Step 1:** Please visit this URL to authorize the application:")
-                    st.markdown(f"[**🔗 Click here to authorize**]({auth_url})")
-                    st.info("**Step 2:** After clicking the link above, you'll be redirected back to this page automatically.")
-                    
-                    # Also display the URL as text for easy copying
-                    st.code(auth_url, language="text")
-                    
+                    # Show direct authorization link (no auto-redirect)
+                    st.markdown(f"[🔗 Click here to authorize Google access]({auth_url})")
                     return None
                     
                 except Exception as e:
@@ -205,7 +193,6 @@ def load_oauth_credentials():
         
         else:
             # For local development, use InstalledAppFlow with local server
-            st.info(f"🔧 **Debug:** Using LOCAL OAuth flow (is_deployed = False)")
             if InstalledAppFlow:
                 flow = InstalledAppFlow.from_client_config(
                     {
@@ -1008,14 +995,14 @@ def main():
 
     # Basic variables
     st.subheader("Variables")
-    name_value = st.text_input("Client Name", value="")
+    name_value = st.text_input("Client Name", value=st.session_state.get('pc_name_value', ""), key='pc_name_value')
 
     # Scope items (exact four items)
     st.subheader("Scope Items")
-    s1 = st.checkbox("SOURCE FABRIC & TRIMS EFFECTIVELY")
-    s2 = st.checkbox("DEVELOP HIGH QUALITY PATTERNS & SAMPLES")
-    s3 = st.checkbox("PRODUCE A SMALL VOLUME PRODUCTION RUN FOR SALES")
-    s4 = st.checkbox("MANAGE FABRIC TREATMENTS WITH PRECISION")
+    s1 = st.checkbox("SOURCE FABRIC & TRIMS EFFECTIVELY", value=st.session_state.get('pc_s1', False), key='pc_s1')
+    s2 = st.checkbox("DEVELOP HIGH QUALITY PATTERNS & SAMPLES", value=st.session_state.get('pc_s2', False), key='pc_s2')
+    s3 = st.checkbox("PRODUCE A SMALL VOLUME PRODUCTION RUN FOR SALES", value=st.session_state.get('pc_s3', False), key='pc_s3')
+    s4 = st.checkbox("MANAGE FABRIC TREATMENTS WITH PRECISION", value=st.session_state.get('pc_s4', False), key='pc_s4')
     group_scope = [label for flag, label in [
         (s1, "SOURCE FABRIC & TRIMS EFFECTIVELY"),
         (s2, "DEVELOP HIGH QUALITY PATTERNS & SAMPLES"),
@@ -1027,11 +1014,11 @@ def main():
     st.subheader("Additional Packages")
     colp1, colp2, colp3 = st.columns(3)
     with colp1:
-        pkg_sourcing = st.checkbox("SOURCING ($1330 per style)")
+        pkg_sourcing = st.checkbox("SOURCING ($1330 per style)", value=st.session_state.get('pc_pkg_sourcing', False), key='pc_pkg_sourcing')
     with colp2:
-        pkg_treatment = st.checkbox("TREATMENT ($760 per service)")
+        pkg_treatment = st.checkbox("TREATMENT ($760 per service)", value=st.session_state.get('pc_pkg_treatment', False), key='pc_pkg_treatment')
     with colp3:
-        pkg_development = st.checkbox("DEVELOPMENT ($2320 per style)")
+        pkg_development = st.checkbox("DEVELOPMENT ($2320 per style)", value=st.session_state.get('pc_pkg_development', False), key='pc_pkg_development')
 
     # Show sub-field descriptions via expanders on page
     with st.expander("SOURCING - sub-fields", expanded=False):
@@ -1077,7 +1064,7 @@ def main():
     # PDF upload (first page to image)
     st.subheader("PDF Upload")
     pdf_file = st.file_uploader("Upload a PDF to insert as first-page image", type=["pdf"]) 
-    img_bytes = None
+    img_bytes = st.session_state.get('pc_img_bytes')
     if pdf_file is not None:
         try:
             import fitz  # PyMuPDF
@@ -1087,9 +1074,12 @@ def main():
                 page = doc.load_page(0)
                 pix = page.get_pixmap(dpi=180)
                 img_bytes = pix.tobytes("png")
+                st.session_state['pc_img_bytes'] = img_bytes
                 st.success("PDF converted to image for slide")
         except Exception as e:
             st.warning(f"Could not convert PDF to image: {e}")
+    elif img_bytes is not None:
+        st.info("Using previously uploaded PDF image (restored)")
 
     # Actions
     col_dl, col_gs = st.columns(2)
@@ -1135,14 +1125,11 @@ def main():
             st.error(f"Failed to generate PowerPoint: {e}")
 
     if push_gslides:
-        # Clear any existing Google authentication to start fresh
-        if 'google_creds' in st.session_state:
-            del st.session_state.google_creds
-        # Clear any OAuth flow states
-        if 'oauth_state' in st.session_state:
-            del st.session_state.oauth_state
-        
-        # Try OAuth first (preferred for quota reasons)
+        # Store only non-widget state to avoid conflicts
+        if img_bytes is not None:
+            st.session_state['pc_img_bytes'] = img_bytes
+
+        # Initiate OAuth (in production shows an authorization link and returns)
         creds = load_oauth_credentials()
         
         # If OAuth is in progress (waiting for user input), don't proceed with Google Slides creation
@@ -1178,6 +1165,51 @@ def main():
             st.error("Google API client not available")
         else:
             try:
+                # Rebuild values from session (in case of rerun)
+                name_value = st.session_state.get('pc_name_value', name_value)
+                s1 = st.session_state.get('pc_s1', s1)
+                s2 = st.session_state.get('pc_s2', s2)
+                s3 = st.session_state.get('pc_s3', s3)
+                s4 = st.session_state.get('pc_s4', s4)
+                group_scope = [label for flag, label in [
+                    (s1, "SOURCE FABRIC & TRIMS EFFECTIVELY"),
+                    (s2, "DEVELOP HIGH QUALITY PATTERNS & SAMPLES"),
+                    (s3, "PRODUCE A SMALL VOLUME PRODUCTION RUN FOR SALES"),
+                    (s4, "MANAGE FABRIC TREATMENTS WITH PRECISION"),
+                ] if flag]
+                pkg_sourcing = st.session_state.get('pc_pkg_sourcing', pkg_sourcing)
+                pkg_treatment = st.session_state.get('pc_pkg_treatment', pkg_treatment)
+                pkg_development = st.session_state.get('pc_pkg_development', pkg_development)
+                sourcing_items = [
+                    "SOURCING INTAKE SESSION",
+                    "EXPERT INPUT AND PLANNING",
+                    "SWATCHES AND TRIMS GATHERED",
+                    "NEGOTIATE PRICING AND MINIMUMS",
+                    "GUIDANCE IN POs AND ORDERING",
+                    "TRACKING RECEIPT OF ORDERS",
+                    "1-2 ROUNDS OF REVISIONS",
+                ] if pkg_sourcing else []
+                development_items = [
+                    "DEVELOPMENT ONBOARDING SESSION",
+                    "TEG SPECIFICATION SHEETS COMPLETED",
+                    "TECHNICAL INTAKE WITH PATTERN MAKER",
+                    "FIRST PATTERNS & FIRST SAMPLES",
+                    "ONE FITTING WITH PATTERN MAKER",
+                    "ONE ROUND OF FIT ADJUSTMENTS",
+                    "ONE DUPLICATE PER STYLE",
+                    "FINAL PRODUCTION READY PATTERNS",
+                ] if pkg_development else []
+                treatment_items = [
+                    "TREATMENT INTAKE SESSION",
+                    "EXPERT INPUT AND PLANNING",
+                    "ARTWORK / COLOR APPROVAL",
+                    "NEGOTIATE PRICING AND MINIMUMS",
+                    "GUIDANCE IN POs AND ORDERING",
+                    "COORDINATE SEND-OUTS",
+                    "PROJECT MANAGEMENT",
+                ] if pkg_treatment else []
+                img_bytes = st.session_state.get('pc_img_bytes', img_bytes)
+
                 new_id = upload_pptx_to_google_slides(
                     name_value,
                     group_scope,
