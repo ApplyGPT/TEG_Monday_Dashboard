@@ -309,6 +309,71 @@ def create_daily_chart(df):
     
     return fig
 
+def create_two_week_daily_chart(df):
+    """Create daily calls chart for the past two weeks from the last call date"""
+    if df.empty:
+        return None
+    
+    # Find the last call date (most recent date with calls)
+    last_call_date = df['date'].max()
+    
+    # Calculate two weeks back from the last call date
+    two_weeks_ago = last_call_date - timedelta(days=14)
+    
+    # Filter data for the past two weeks from last call date
+    df_filtered = df[
+        (df['date'] >= two_weeks_ago) & 
+        (df['date'] <= last_call_date)
+    ].copy()
+    
+    # Count calls for each day in the past two weeks
+    daily_counts = df_filtered.groupby('date').size().reset_index(name='count')
+    
+    # Create a complete date range for the past two weeks (including days with 0 calls)
+    date_range = pd.date_range(start=two_weeks_ago, end=last_call_date, freq='D')
+    complete_dates = pd.DataFrame({'date': [d.date() for d in date_range]})
+    
+    # Merge with actual counts
+    daily_counts = complete_dates.merge(daily_counts, on='date', how='left')
+    daily_counts['count'] = daily_counts['count'].fillna(0).astype(int)
+    daily_counts = daily_counts.sort_values('date')
+    
+    # Convert date to datetime for better Plotly handling
+    daily_counts['date_datetime'] = pd.to_datetime(daily_counts['date'])
+    
+    # Create bar chart
+    fig = px.bar(
+        daily_counts,
+        x='date_datetime',
+        y='count',
+        title='Calls by Day (Past 2 Weeks)',
+        labels={'count': 'Number of Calls', 'date_datetime': 'Date'},
+        text='count'
+    )
+    
+    # Customize x-axis to show dates in "Oct 29" format
+    fig.update_xaxes(
+        tickformat='%b %d',
+        dtick=86400000  # One day in milliseconds
+    )
+    
+    fig.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Number of Calls",
+        height=600,
+        showlegend=False,
+        xaxis=dict(
+            tickangle=45
+        )
+    )
+    
+    fig.update_traces(
+        marker_color='#1f77b4',
+        textposition='outside'
+    )
+    
+    return fig
+
 def create_weekly_chart(df):
     """Create weekly calls chart"""
     if df.empty:
@@ -520,31 +585,12 @@ def main():
             tab1, tab2, tab3 = st.tabs(["📅 Daily View", "📊 Weekly View", "📊 Monthly View"])
             
             with tab1:
-                # Add month selector for the calendar view
-                
-                # Get available months from data
-                if not df_2025.empty:
-                    available_months = df_2025['start_time'].dt.to_period('M').unique()
-                    month_strings = [str(month) for month in sorted(available_months)]
-                    
-                    # Create month selector
-                    selected_month_str = st.selectbox(
-                        "Select Month:",
-                        options=month_strings,
-                        index=len(month_strings) - 1 if month_strings else 0,  # Default to most recent month
-                        help="Select a month to view calls in calendar format"
-                    )
-                    
-                    # Parse selected month
-                    if selected_month_str:
-                        selected_month = pd.to_datetime(selected_month_str).to_pydatetime().replace(day=1)
-                        
-                        # Create and display calendar view
-                        daily_counts = create_monthly_calendar_view(df_2025, selected_month)
-                        if daily_counts:
-                            display_calendar_grid(daily_counts, selected_month)
-                        else:
-                            st.info(f"No calls scheduled for {selected_month.strftime('%B %Y')}")
+                # Display two-week daily view graph
+                two_week_fig = create_two_week_daily_chart(df_2025)
+                if two_week_fig:
+                    st.plotly_chart(two_week_fig, use_container_width=True)
+                else:
+                    st.info("No calls scheduled in the past two weeks")
             
             with tab2:
                 weekly_fig = create_weekly_chart(df_2025)

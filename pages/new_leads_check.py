@@ -1,567 +1,237 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date, timedelta
-import plotly.express as px
+from datetime import datetime, date
 import calendar
-import sys
-import os
-import requests
+import sys, os
 
-# Add parent directory to path to import database_utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from database_utils import get_new_leads_data, check_database_exists
+from database_utils import (
+    check_database_exists,
+    get_new_leads_data,
+    get_discovery_call_data,
+    get_design_review_data,
+    get_sales_data,
+)
 
-# Page configuration
 st.set_page_config(
     page_title="New Leads Check",
     page_icon="🔍",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# Custom CSS to hide QuickBooks and SignNow pages from sidebar
-st.markdown("""
+st.markdown(
+    """
 <style>
-    /* Hide QuickBooks and SignNow pages from sidebar */
-    [data-testid="stSidebarNav"] a[href*="quickbooks_form"],
-    [data-testid="stSidebarNav"] a[href*="signnow_form"] {
-        display: none !important;
-    }
-    .embed-header {
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: #1f77b4;
-        margin-bottom: 1rem;
-        text-align: center;
-    }
-    .stDataFrame {
-        font-size: 12px;
-    }
-    .stDataFrame > div {
-        max-height: 600px;
-        overflow-y: auto;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Monday.com API settings from Streamlit secrets
-def load_credentials():
-    """Load credentials from Streamlit secrets"""
-    try:
-        # Access secrets from Streamlit
-        if 'monday' not in st.secrets:
-            st.error("Monday.com configuration not found in secrets.toml. Please check your configuration.")
-            st.stop()
-        
-        monday_config = st.secrets['monday']
-        
-        if 'api_token' not in monday_config:
-            st.error("API token not found in secrets.toml. Please add your Monday.com API token.")
-            st.stop()
-            
-        required_board_ids = [
-            'new_leads_board_id', 'discovery_call_board_id', 
-            'design_review_board_id', 'sales_board_id'
-        ]
-        
-        board_ids = {}
-        for board_id_key in required_board_ids:
-            if board_id_key not in monday_config:
-                st.error(f"{board_id_key} not found in secrets.toml. Please add the board ID.")
-                st.stop()
-            board_ids[board_id_key] = int(monday_config[board_id_key])
-        
-        return {
-            'api_token': monday_config['api_token'],
-            **board_ids
-        }
-    except Exception as e:
-        st.error(f"Error reading secrets: {str(e)}")
-        st.stop()
-
-credentials = load_credentials()
-API_TOKEN = credentials['api_token']
-
-# Board configurations - will fetch all groups except those starting with No, Not, Spam
-BOARDS = {
-    'New Leads v2': credentials['new_leads_board_id'],
-    'Discovery Call v2': credentials['discovery_call_board_id'],
-    'Design Review v2': credentials['design_review_board_id'],
-    'Sales v2': credentials['sales_board_id']
+/* Hide QuickBooks and SignNow pages from sidebar */
+[data-testid="stSidebarNav"] a[href*="quickbooks_form"],
+[data-testid="stSidebarNav"] a[href*="signnow_form"] {
+    display: none !important;
 }
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_board_groups(board_id, board_name):
-    """Get all groups from a Monday.com board and filter out unwanted ones"""
-    url = "https://api.monday.com/v2"
-    headers = {
-        "Authorization": API_TOKEN,
-        "Content-Type": "application/json",
-    }
-    
-    # GraphQL query to get all groups from the board
-    query = f"""
-    query {{
-        boards(ids: [{board_id}]) {{
-            groups {{
-                id
-                title
-            }}
-        }}
-    }}
-    """
-    
-    try:
-        response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Check for API errors
-        if "errors" in data and data["errors"]:
-            return []
-        
-        if ("data" in data and "boards" in data["data"] and 
-            data["data"]["boards"] and data["data"]["boards"][0].get("groups")):
-            
-            all_groups = data["data"]["boards"][0]["groups"]
-            
-            # Filter out groups that start with "No", "Not", or "Spam" (case insensitive)
-            filtered_groups = []
-            excluded_groups = []
-            
-            for group in all_groups:
-                group_title = group.get("title", "").strip()  # Remove leading/trailing whitespace
-                group_id = group.get("id", "")
-                if group_title and group_id:
-                    # Check if group starts with excluded prefixes (case insensitive)
-                    if (not group_title.lower().startswith(('no', 'not', 'spam'))):
-                        filtered_groups.append({"id": group_id, "title": group_title})
-                    else:
-                        excluded_groups.append(group_title)
-            
-            return filtered_groups
-        else:
-            return []
-            
-    except requests.exceptions.Timeout:
-        return []
-    except requests.exceptions.RequestException as e:
-        return []
-    except Exception as e:
-        return []
+.embed-header {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #1f77b4;
+    margin-bottom: 1rem;
+    text-align: center;
+}
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_board_data(board_id, board_name, groups):
-    """Get items from specific groups in a Monday.com board with caching"""
-    url = "https://api.monday.com/v2"
-    headers = {
-        "Authorization": API_TOKEN,
-        "Content-Type": "application/json",
-    }
-    
-    all_items = []
-    
-    for group in groups:
-        group_id = group["id"]
-        group_title = group["title"]
-        
-        # GraphQL query to fetch data from specific board and group
-        query = f"""
-        query {{
-            boards(ids: [{board_id}]) {{
-                groups(ids: ["{group_id}"]) {{
-                    id
-                    title
-                    items_page(limit: 500) {{
-                        items {{
-                            id
-                            name
-                            created_at
-                            column_values {{
-                                id
-                                text
-                                value
-                                type
-                            }}
-                        }}
-                    }}
-                }}
-            }}
-        }}
-        """
-        
-        try:
-            response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Check for API errors
-            if "errors" in data and data["errors"]:
-                continue
-            
-            if ("data" in data and "boards" in data["data"] and 
-                data["data"]["boards"] and data["data"]["boards"][0].get("groups")):
-                
-                board_info = data["data"]["boards"][0]
-                groups_data = board_info.get("groups", [])
-                
-                for group_data in groups_data:
-                    items_page = group_data.get("items_page", {})
-                    items = items_page.get("items", [])
-                    
-                    # Add board name and group to each item
-                    for item in items:
-                        item['board_name'] = board_name
-                        item['group_name'] = group_title
-                    
-                    all_items.extend(items)
-                
-        except requests.exceptions.Timeout:
-            continue
-        except requests.exceptions.RequestException as e:
-            continue
-        except Exception as e:
-            continue
-    
-    return all_items
+.stDataFrame {
+    font-size: 12px;
+}
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_all_leads_data_from_db():
-    """Get leads data from all boards in SQLite database"""
-    from database_utils import get_new_leads_data, get_discovery_call_data, get_design_review_data, get_sales_data
-    
-    all_leads = []
-    
-    # Get data from all boards
-    boards_data = {
-        'New Leads v2': get_new_leads_data(),
-        'Discovery Call v2': get_discovery_call_data(), 
-        'Design Review v2': get_design_review_data(),
-        'Sales v2': get_sales_data().get('data', {}).get('boards', [{}])[0].get('items_page', {}).get('items', [])
-    }
-    
-    # Add board and group information to each item
-    for board_name, items in boards_data.items():
-        for item in items:
-            # Add board name to each item
-            item['board_name'] = board_name
-            
-            # Try to determine group based on board or set default
-            if board_name == 'New Leads v2':
-                item['group_name'] = 'Active Leads'
-            elif board_name == 'Discovery Call v2':
-                item['group_name'] = 'Scheduled Calls'
-            elif board_name == 'Design Review v2':
-                item['group_name'] = 'Design Reviews'
-            elif board_name == 'Sales v2':
-                item['group_name'] = 'Sales Pipeline'
-            else:
-                item['group_name'] = 'Active'
-            
-            all_leads.append(item)
-    
-    return all_leads
+.stDataFrame > div {
+    max-height: 600px;
+    overflow-y: auto;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
+@st.cache_data(ttl=600, show_spinner=False)
+def get_all_leads_data_from_db(force_refresh=False):
+    """Load all leads data from local SQLite database (cached)."""
+    if force_refresh:
+        st.cache_data.clear()
+
+    boards = {
+        "New Leads v2": get_new_leads_data(),
+        "Discovery Call v2": get_discovery_call_data(),
+        "Design Review v2": get_design_review_data(),
+        "Sales v2": get_sales_data()
+        .get("data", {})
+        .get("boards", [{}])[0]
+        .get("items_page", {})
+        .get("items", []),
+    }
+
+    # Flatten structure and tag board name
+    return [
+        {**item, "board_name": board_name}
+        for board_name, items in boards.items()
+        for item in items
+    ]
+
+
+@st.cache_data(ttl=600)
 def format_leads_data(leads_data):
-    """Convert Monday.com leads data to pandas DataFrame"""
+    """Convert Monday.com leads JSON into DataFrame (fast & vectorized)."""
     if not leads_data:
         return pd.DataFrame()
 
-    records = []
-    debug_columns = []  # Store column info for debugging
+    df = pd.DataFrame(
+        [
+            {
+                "Item Name": i.get("name", ""),
+                "Current Board": i.get("board_name", ""),
+                "Created At": i.get("created_at", ""),
+                "Date Created (Custom)": next(
+                    (
+                        c.get("text")
+                        for c in (i.get("column_values") or [])
+                        if (
+                            c.get("type") == "date"
+                            and c.get("text")
+                            and "new lead form fill date"
+                            not in (c.get("id") or "").lower()
+                        )
+                    ),
+                    None,
+                ),
+            }
+            for i in leads_data
+        ]
+    )
 
-    for item in leads_data:
-        date_created = None
+    # Parse datetime efficiently
+    df["Effective Date"] = pd.to_datetime(df["Date Created (Custom)"], errors="coerce")
+    mask = df["Effective Date"].isna()
+    if mask.any():
+        df.loc[mask, "Effective Date"] = pd.to_datetime(
+            df.loc[mask, "Created At"], errors="coerce"
+        )
 
-        # Try to get the custom 'Date Created' field from column_values
-        for col in item.get("column_values") or []:
-            col_id = (col.get("id") or "").lower()
-            text = (col.get("text") or "").strip()
-            col_type = col.get("type") or ""
-
-            # Debug: collect column information
-            if col_id and col_type == "date":
-                debug_columns.append({
-                    "col_id": col_id,
-                    "text": text,
-                    "col_type": col_type
-                })
-
-            # Try multiple patterns to match "Date Created" column
-            if (col_type == "date" and text and 
-                ("created" in col_id or "date" in col_id) and
-                "new lead form fill date" not in col_id.lower()):
-                date_created = text  # This is typically in "YYYY-MM-DD" format
-                break
-
-        record = {
-            "Item Name": item.get("name", ""),
-            "Current Board": item.get("board_name", ""),
-            "Group": item.get("group_name", ""),
-            "Created At": item.get("created_at", ""),  # Fallback
-            "Date Created (Custom)": date_created,
-            "Raw Created At": item.get("created_at", "")  # Keep raw for debugging
-        }
-
-        records.append(record)
-
-    df = pd.DataFrame(records)
-    
-    # Store debug info for later use
-    if debug_columns:
-        df.attrs['debug_columns'] = debug_columns
-
-    if not df.empty:
-        # Try to parse the custom 'Date Created' first
-        df['Effective Date'] = pd.to_datetime(df['Date Created (Custom)'], errors='coerce')
-
-        # Fallback to 'Created At' if 'Date Created' is missing
-        missing_dates = df['Effective Date'].isna()
-        df.loc[missing_dates, 'Effective Date'] = pd.to_datetime(df.loc[missing_dates, 'Created At'], errors='coerce', utc=True).dt.tz_convert('America/New_York').dt.tz_localize(None)
-
-        # Add column just for comparing date part
-        df['Effective Date Date'] = df['Effective Date'].dt.date
-
-        # For display - show which date source was used
-        df['Date Created Display'] = df['Effective Date'].dt.strftime('%Y-%m-%d')
-        
-        # Add indicator of which date source was used
-        df['Date Source'] = df.apply(lambda row: 
-            'Custom Date Created' if pd.notna(row['Date Created (Custom)']) and pd.notna(row['Effective Date'])
-            else 'Fallback Created At' if pd.notna(row['Raw Created At']) and pd.notna(row['Effective Date'])
-            else 'No Date', axis=1)
-
+    df["Effective Date Date"] = df["Effective Date"].dt.date
     return df
 
+
 def filter_leads_by_date(df, selected_date):
-    """Filter leads by the selected date"""
+    """Filter leads DataFrame by selected date."""
     if df.empty:
         return df
-    
-    # Convert selected_date to datetime for comparison
     if isinstance(selected_date, str):
         selected_date = pd.to_datetime(selected_date).date()
-    elif isinstance(selected_date, date):
-        selected_date = selected_date
-    
-    # Use the already calculated 'Effective Date Date' column if it exists
-    if 'Effective Date Date' in df.columns:
-        # Filter using the existing date column
-        filtered_df = df[df['Effective Date Date'] == selected_date].copy()
-    else:
-        # Fallback: recalculate if needed
-        df_copy = df.copy()
-        df_copy['Effective Date Date'] = df_copy['Effective Date'].apply(
-            lambda x: x.date() if pd.notna(x) else None
-        )
-        filtered_df = df_copy[df_copy['Effective Date Date'] == selected_date].copy()
-    
-    return filtered_df
+    return df[df["Effective Date Date"] == selected_date].copy()
 
-def create_monthly_calendar(df, selected_date):
-    """Create a monthly calendar view showing lead counts by day up to the selected date"""
+
+def get_daily_counts(df, selected_date):
+    """Return Series of daily lead counts for the month up to selected date."""
     if df.empty:
-        return None, None
-    
-    # Get the month from the selected date
-    selected_month = selected_date.replace(day=1)
-    
-    # Only show days up to the selected date
-    last_day_to_show = selected_date.day
-    
-    # Create date range for the month up to selected date
-    month_dates = []
-    for day in range(1, last_day_to_show + 1):
-        month_dates.append(selected_month.replace(day=day))
-    
-    # Count leads for each day
-    daily_counts = {}
-    for month_date in month_dates:
-        day_leads = df[df['Effective Date Date'] == month_date]
-        daily_counts[month_date] = len(day_leads)
-    
-    return daily_counts, selected_month
+        return pd.Series(dtype=int)
 
-def display_calendar_view(daily_counts, selected_month):
-    """Display the calendar view with lead counts up to selected date"""
-    if not daily_counts:
+    month_start = selected_date.replace(day=1)
+    mask = (df["Effective Date Date"] >= month_start) & (
+        df["Effective Date Date"] <= selected_date
+    )
+    subset = df.loc[mask, "Effective Date Date"]
+    return subset.value_counts().sort_index()
+
+
+def display_calendar_html(daily_counts, selected_date):
+    """Render a lightweight HTML calendar instead of heavy Streamlit columns."""
+    if daily_counts.empty:
+        st.info("No leads this month.")
         return
-    
-    month_name = selected_month.strftime('%B %Y')
-    
-    # Get the last day to show (from daily_counts)
-    last_day = max(date.day for date in daily_counts.keys()) if daily_counts else 1
-    
-    # Create calendar grid for the month up to the last day
-    cal = calendar.monthcalendar(selected_month.year, selected_month.month)
-      
-    # Create calendar grid with Streamlit columns
-    col_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-    
-    # Header row
-    cols = st.columns(7)
-    for i, col_name in enumerate(col_names):
-        with cols[i]:
-            st.markdown(f"**{col_name}**")
-    
-    # Calendar rows
-    for week in cal:
-        cols = st.columns(7)
-        for i, day in enumerate(week):
-            with cols[i]:
-                if day == 0:
-                    st.write("")  # Empty cell for days not in this month
-                elif day > last_day:
-                    st.write("")  # Empty cell for days beyond selected date
-                else:
-                    current_date = selected_month.replace(day=day)
-                    lead_count = daily_counts.get(current_date, 0)
-                    
-                    if lead_count > 0:
-                        # Color code based on lead count
-                        if lead_count >= 20:
-                            color = "#f0f0f0"  
-                        elif lead_count >= 10:
-                            color = "#f0f0f0"  
-                        else:
-                            color = "#f0f0f0"  
-                        
-                        st.markdown(f"""
-                        <div style="
-                            background-color: {color};
-                            color: 666666;
-                            padding: 8px;
-                            border-radius: 8px;
-                            text-align: center;
-                            margin: 2px;
-                        ">
-                            <strong>{day}</strong><br>
-                            <small>{lead_count} leads</small>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div style="
-                            background-color: #f0f0f0;
-                            color: #666666;
-                            padding: 8px;
-                            border-radius: 8px;
-                            text-align: center;
-                            margin: 2px;
-                        ">
-                            <strong>{day}</strong><br>
-                            <small>0 leads</small>
-                        </div>
-                        """, unsafe_allow_html=True)
+
+    first_weekday, days_in_month = calendar.monthrange(
+        selected_date.year, selected_date.month
+    )
+    html = "<table style='width:100%; border-collapse:collapse; text-align:center;'>"
+    html += (
+        "<tr>"
+        + "".join(f"<th>{d}</th>" for d in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+        + "</tr><tr>"
+    )
+
+    # Leading empty cells
+    for _ in range(first_weekday):
+        html += "<td></td>"
+
+    # Fill the days
+    for day in range(1, selected_date.day + 1):
+        date_obj = selected_date.replace(day=day)
+        count = int(daily_counts.get(date_obj, 0))
+        color = ("#b3e6b3")
+        html += (
+            f"<td style='padding:8px; border:1px solid #ccc; background:{color};'>"
+            f"<b>{day}</b><br><small>{count} leads</small></td>"
+        )
+        if (first_weekday + day) % 7 == 0:
+            html += "</tr><tr>"
+
+    html += "</tr></table>"
+    st.markdown(html, unsafe_allow_html=True)
+
 
 def main():
-    """Main application function"""
-    # Header
     st.markdown('<div class="embed-header">🔍 NEW LEADS CHECK</div>', unsafe_allow_html=True)
-    
-    # Check if database exists and has data
+
+    # Check database
     db_exists, db_message = check_database_exists()
-    
     if not db_exists:
         st.error(f"❌ Database not ready: {db_message}")
-        st.info("💡 Please go to the 'Database Refresh' page to initialize the database with Monday.com data.")
+        st.info(
+            "💡 Please go to the 'Database Refresh' page to initialize the database with Monday.com data."
+        )
         return
-    
-    # Sidebar for configuration
+
+    # Sidebar controls
     with st.sidebar:
         st.header("⚙️ Settings")
-        st.info(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # Refresh button
-        if st.button("🔄 Refresh Data"):
-            st.cache_data.clear()
-            st.rerun()
-    
-    # Load data from database first
+        refresh = st.button("🔄 Refresh Data")
+        st.info(f"Last Updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
+
+    # Load data
     with st.spinner("Loading leads data from database..."):
-        leads_data = get_all_leads_data_from_db()
+        leads_data = get_all_leads_data_from_db(force_refresh=refresh)
         df = format_leads_data(leads_data)
-    
+
     if df.empty:
-        st.warning("No leads data found. Please check your board configurations and API permissions.")
+        st.warning(
+            "No leads data found in database. Please refresh the database from the 'Database Refresh' page."
+        )
         return
-    
-    # Date selector
+
+    # Date input
     st.subheader("📅 Select Date")
     selected_date = st.date_input(
         "Choose a date to view leads created on that day:",
         value=date.today(),
-        help="Select the date to filter leads by their creation date"
+        help="Select the date to filter leads by their creation date",
     )
-    
-    # Display monthly calendar view based on selected date
+
+    # Monthly view
     st.subheader("Monthly Calendar View")
-    daily_counts, calendar_month = create_monthly_calendar(df, selected_date)
-    if daily_counts:
-        display_calendar_view(daily_counts, calendar_month)
-        st.markdown("---")
-    
-    # Filter data by selected date
+    daily_counts = get_daily_counts(df, selected_date)
+    display_calendar_html(daily_counts, selected_date)
+    st.markdown("---")
+
+    # Filtered data
     filtered_df = filter_leads_by_date(df, selected_date)
-    
     if filtered_df.empty:
-        st.info(f"No leads were created on {selected_date.strftime('%B %d, %Y')}.")
-        
-        # Debug information to help troubleshoot
-        if not df.empty:
-            st.subheader("🔍 Debug Information")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.write("**Date Range in Data:**")
-                if 'Effective Date Date' in df.columns:
-                    date_counts = df['Effective Date Date'].value_counts().head(10)
-                    if not date_counts.empty:
-                        st.write(date_counts)
-                    else:
-                        st.write("No valid dates found")
-                else:
-                    st.write("No date column found")
-            
-            with col2:
-                st.write(f"**Selected Date:** {selected_date}")
-                st.write(f"**Selected Date Type:** {type(selected_date)}")
-                if not df.empty and 'Effective Date Date' in df.columns:
-                    sample_dates = df['Effective Date Date'].dropna().head(5).tolist()
-                    st.write(f"**Sample dates in data:** {sample_dates}")
-            
-            # Show column debugging info
-            if hasattr(df, 'attrs') and 'debug_columns' in df.attrs:
-                st.subheader("📋 Column Debug Information")
-                debug_df = pd.DataFrame(df.attrs['debug_columns'])
-                if not debug_df.empty:
-                    # Show unique column IDs and their sample values
-                    unique_cols = debug_df.groupby('col_id').agg({
-                        'text': lambda x: list(x.dropna().unique())[:3],  # First 3 unique values
-                        'col_type': 'first'
-                    }).reset_index()
-                    st.write("**Date columns found in Monday.com data:**")
-                    st.dataframe(unique_cols, hide_index=True)
-                else:
-                    st.write("No date columns found in the data")
-        
+        st.info(f"No leads were created on {selected_date:%B %d, %Y}.")
     else:
-        # Show filtered results
-        total_leads = len(filtered_df)
-        st.metric("Leads Found", total_leads)
-        
-        # Display the filtered data with date information
-        display_columns = ['Item Name', 'Current Board', 'Group']     
-        
+        st.metric("Leads Found", len(filtered_df))
         st.dataframe(
-            filtered_df[display_columns],
-            width='stretch',
+            filtered_df[["Item Name", "Current Board"]],
+            use_container_width=True,
             hide_index=True,
             column_config={
                 "Item Name": "Item Name",
-                "Current Board": "Current Board", 
-                "Group": "Group"
-            }
+                "Current Board": "Current Board",
+            },
         )
 
 if __name__ == "__main__":
