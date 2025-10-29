@@ -157,6 +157,9 @@ def load_oauth_credentials():
                     except Exception:
                         pass  # Ignore if we can't save to file
                     
+                    # Set flag to indicate we're returning from OAuth
+                    st.session_state['pc_oauth_in_progress'] = True
+                    
                     # Clear OAuth state and query parameters
                     if 'oauth_state' in st.session_state:
                         del st.session_state['oauth_state']
@@ -1004,35 +1007,34 @@ def main():
         # Reset the flag immediately to prevent multiple triggers
         st.session_state['pc_create_slides_after_oauth'] = False
     
-    # Initialize backup session state values if they don't exist (separate from widget keys)
-    # These will be used to restore data after OAuth redirect
-    if 'pc_backup_name_value' not in st.session_state:
-        st.session_state['pc_backup_name_value'] = st.session_state.get('pc_name_value', "")
-    if 'pc_backup_s1' not in st.session_state:
-        st.session_state['pc_backup_s1'] = st.session_state.get('pc_s1', False)
-    if 'pc_backup_s2' not in st.session_state:
-        st.session_state['pc_backup_s2'] = st.session_state.get('pc_s2', False)
-    if 'pc_backup_s3' not in st.session_state:
-        st.session_state['pc_backup_s3'] = st.session_state.get('pc_s3', False)
-    if 'pc_backup_s4' not in st.session_state:
-        st.session_state['pc_backup_s4'] = st.session_state.get('pc_s4', False)
-    if 'pc_backup_pkg_sourcing' not in st.session_state:
-        st.session_state['pc_backup_pkg_sourcing'] = st.session_state.get('pc_pkg_sourcing', False)
-    if 'pc_backup_pkg_treatment' not in st.session_state:
-        st.session_state['pc_backup_pkg_treatment'] = st.session_state.get('pc_pkg_treatment', False)
-    if 'pc_backup_pkg_development' not in st.session_state:
-        st.session_state['pc_backup_pkg_development'] = st.session_state.get('pc_pkg_development', False)
+    # Check if we just returned from OAuth callback
+    # When returning from OAuth, use backup values for widgets instead of widget state
+    is_oauth_return = st.session_state.get('pc_oauth_in_progress', False)
+    
+    # Get backup values if available and we're returning from OAuth
+    backup_name = st.session_state.get('pc_backup_name_value') if is_oauth_return else None
+    backup_s1 = st.session_state.get('pc_backup_s1') if is_oauth_return else None
+    backup_s2 = st.session_state.get('pc_backup_s2') if is_oauth_return else None
+    backup_s3 = st.session_state.get('pc_backup_s3') if is_oauth_return else None
+    backup_s4 = st.session_state.get('pc_backup_s4') if is_oauth_return else None
+    backup_pkg_sourcing = st.session_state.get('pc_backup_pkg_sourcing') if is_oauth_return else None
+    backup_pkg_treatment = st.session_state.get('pc_backup_pkg_treatment') if is_oauth_return else None
+    backup_pkg_development = st.session_state.get('pc_backup_pkg_development') if is_oauth_return else None
+    
+    # Clear the OAuth flag after we've used it to restore data
+    if is_oauth_return:
+        st.session_state['pc_oauth_in_progress'] = False
 
     # Basic variables
     st.subheader("Variables")
-    name_value = st.text_input("Client Name", value=st.session_state.get('pc_name_value', ""), key='pc_name_value')
+    name_value = st.text_input("Client Name", value=backup_name if backup_name is not None else st.session_state.get('pc_name_value', ""), key='pc_name_value')
 
     # Scope items (exact four items)
     st.subheader("Scope Items")
-    s1 = st.checkbox("SOURCE FABRIC & TRIMS EFFECTIVELY", value=st.session_state.get('pc_s1', False), key='pc_s1')
-    s2 = st.checkbox("DEVELOP HIGH QUALITY PATTERNS & SAMPLES", value=st.session_state.get('pc_s2', False), key='pc_s2')
-    s3 = st.checkbox("PRODUCE A SMALL VOLUME PRODUCTION RUN FOR SALES", value=st.session_state.get('pc_s3', False), key='pc_s3')
-    s4 = st.checkbox("MANAGE FABRIC TREATMENTS WITH PRECISION", value=st.session_state.get('pc_s4', False), key='pc_s4')
+    s1 = st.checkbox("SOURCE FABRIC & TRIMS EFFECTIVELY", value=backup_s1 if backup_s1 is not None else st.session_state.get('pc_s1', False), key='pc_s1')
+    s2 = st.checkbox("DEVELOP HIGH QUALITY PATTERNS & SAMPLES", value=backup_s2 if backup_s2 is not None else st.session_state.get('pc_s2', False), key='pc_s2')
+    s3 = st.checkbox("PRODUCE A SMALL VOLUME PRODUCTION RUN FOR SALES", value=backup_s3 if backup_s3 is not None else st.session_state.get('pc_s3', False), key='pc_s3')
+    s4 = st.checkbox("MANAGE FABRIC TREATMENTS WITH PRECISION", value=backup_s4 if backup_s4 is not None else st.session_state.get('pc_s4', False), key='pc_s4')
     group_scope = [label for flag, label in [
         (s1, "SOURCE FABRIC & TRIMS EFFECTIVELY"),
         (s2, "DEVELOP HIGH QUALITY PATTERNS & SAMPLES"),
@@ -1044,11 +1046,11 @@ def main():
     st.subheader("Additional Packages")
     colp1, colp2, colp3 = st.columns(3)
     with colp1:
-        pkg_sourcing = st.checkbox("SOURCING ($1330 per style)", value=st.session_state.get('pc_pkg_sourcing', False), key='pc_pkg_sourcing')
+        pkg_sourcing = st.checkbox("SOURCING ($1330 per style)", value=backup_pkg_sourcing if backup_pkg_sourcing is not None else st.session_state.get('pc_pkg_sourcing', False), key='pc_pkg_sourcing')
     with colp2:
-        pkg_treatment = st.checkbox("TREATMENT ($760 per service)", value=st.session_state.get('pc_pkg_treatment', False), key='pc_pkg_treatment')
+        pkg_treatment = st.checkbox("TREATMENT ($760 per service)", value=backup_pkg_treatment if backup_pkg_treatment is not None else st.session_state.get('pc_pkg_treatment', False), key='pc_pkg_treatment')
     with colp3:
-        pkg_development = st.checkbox("DEVELOPMENT ($2320 per style)", value=st.session_state.get('pc_pkg_development', False), key='pc_pkg_development')
+        pkg_development = st.checkbox("DEVELOPMENT ($2320 per style)", value=backup_pkg_development if backup_pkg_development is not None else st.session_state.get('pc_pkg_development', False), key='pc_pkg_development')
 
     # Show sub-field descriptions via expanders on page
     with st.expander("SOURCING - sub-fields", expanded=False):
