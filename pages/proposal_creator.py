@@ -162,7 +162,11 @@ def load_oauth_credentials():
                         del st.session_state['oauth_state']
                     st.query_params.clear()
                     
-                    st.success("✅ Authentication successful!")
+                    # If we have the flag set, automatically proceed with Google Slides creation
+                    if st.session_state.get('pc_create_slides_after_oauth', False):
+                        st.success("✅ Authentication successful! Creating Google Slides...")
+                    else:
+                        st.success("✅ Authentication successful!")
                     # Return the credentials so the flow continues to create Google Slides
                     return creds
                     
@@ -992,6 +996,32 @@ def main():
     st.title("📽️ Proposal Creator")
 
     inputs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "inputs")
+    
+    # Check if we're returning from OAuth and should auto-trigger slides creation
+    auto_create_slides = False
+    if st.session_state.get('pc_create_slides_after_oauth', False) and 'google_creds' in st.session_state:
+        auto_create_slides = True
+        # Reset the flag immediately to prevent multiple triggers
+        st.session_state['pc_create_slides_after_oauth'] = False
+    
+    # Initialize backup session state values if they don't exist (separate from widget keys)
+    # These will be used to restore data after OAuth redirect
+    if 'pc_backup_name_value' not in st.session_state:
+        st.session_state['pc_backup_name_value'] = st.session_state.get('pc_name_value', "")
+    if 'pc_backup_s1' not in st.session_state:
+        st.session_state['pc_backup_s1'] = st.session_state.get('pc_s1', False)
+    if 'pc_backup_s2' not in st.session_state:
+        st.session_state['pc_backup_s2'] = st.session_state.get('pc_s2', False)
+    if 'pc_backup_s3' not in st.session_state:
+        st.session_state['pc_backup_s3'] = st.session_state.get('pc_s3', False)
+    if 'pc_backup_s4' not in st.session_state:
+        st.session_state['pc_backup_s4'] = st.session_state.get('pc_s4', False)
+    if 'pc_backup_pkg_sourcing' not in st.session_state:
+        st.session_state['pc_backup_pkg_sourcing'] = st.session_state.get('pc_pkg_sourcing', False)
+    if 'pc_backup_pkg_treatment' not in st.session_state:
+        st.session_state['pc_backup_pkg_treatment'] = st.session_state.get('pc_pkg_treatment', False)
+    if 'pc_backup_pkg_development' not in st.session_state:
+        st.session_state['pc_backup_pkg_development'] = st.session_state.get('pc_pkg_development', False)
 
     # Basic variables
     st.subheader("Variables")
@@ -1086,7 +1116,7 @@ def main():
     with col_dl:
         generate = st.button("Create PowerPoint", type="primary")
     with col_gs:
-        push_gslides = st.button("Create Google Slides", type="primary")
+        push_gslides = st.button("Create Google Slides", type="primary") or auto_create_slides
     
 
     if generate:
@@ -1125,9 +1155,21 @@ def main():
             st.error(f"Failed to generate PowerPoint: {e}")
 
     if push_gslides:
-        # Store only non-widget state to avoid conflicts
+        # Store all form data in backup session state BEFORE initiating OAuth
+        # This ensures data persists across page redirects
+        # Using backup keys to avoid conflicts with widget keys
+        st.session_state['pc_backup_name_value'] = name_value
+        st.session_state['pc_backup_s1'] = s1
+        st.session_state['pc_backup_s2'] = s2
+        st.session_state['pc_backup_s3'] = s3
+        st.session_state['pc_backup_s4'] = s4
+        st.session_state['pc_backup_pkg_sourcing'] = pkg_sourcing
+        st.session_state['pc_backup_pkg_treatment'] = pkg_treatment
+        st.session_state['pc_backup_pkg_development'] = pkg_development
         if img_bytes is not None:
             st.session_state['pc_img_bytes'] = img_bytes
+        # Mark that we're ready to create slides after OAuth completes
+        st.session_state['pc_create_slides_after_oauth'] = True
 
         # Initiate OAuth (in production shows an authorization link and returns)
         creds = load_oauth_credentials()
@@ -1135,7 +1177,14 @@ def main():
         # If OAuth is in progress (waiting for user input), don't proceed with Google Slides creation
         if creds is None:
             # OAuth flow is in progress (showing auth URL), don't proceed
-            return
+            # Check if we're returning from OAuth callback and should auto-create
+            if st.session_state.get('pc_create_slides_after_oauth', False) and 'google_creds' in st.session_state:
+                # We have credentials from OAuth callback, use them
+                creds = st.session_state.google_creds
+                # Clear the flag
+                st.session_state['pc_create_slides_after_oauth'] = False
+            else:
+                return
         
         if not creds:
             # Check if we're in deployed environment and OAuth failed
@@ -1165,21 +1214,22 @@ def main():
             st.error("Google API client not available")
         else:
             try:
-                # Rebuild values from session (in case of rerun)
-                name_value = st.session_state.get('pc_name_value', name_value)
-                s1 = st.session_state.get('pc_s1', s1)
-                s2 = st.session_state.get('pc_s2', s2)
-                s3 = st.session_state.get('pc_s3', s3)
-                s4 = st.session_state.get('pc_s4', s4)
+                # Rebuild values from backup session state (in case of OAuth redirect)
+                # Use backup keys first, then fall back to current widget values
+                name_value = st.session_state.get('pc_backup_name_value', name_value)
+                s1 = st.session_state.get('pc_backup_s1', s1)
+                s2 = st.session_state.get('pc_backup_s2', s2)
+                s3 = st.session_state.get('pc_backup_s3', s3)
+                s4 = st.session_state.get('pc_backup_s4', s4)
                 group_scope = [label for flag, label in [
                     (s1, "SOURCE FABRIC & TRIMS EFFECTIVELY"),
                     (s2, "DEVELOP HIGH QUALITY PATTERNS & SAMPLES"),
                     (s3, "PRODUCE A SMALL VOLUME PRODUCTION RUN FOR SALES"),
                     (s4, "MANAGE FABRIC TREATMENTS WITH PRECISION"),
                 ] if flag]
-                pkg_sourcing = st.session_state.get('pc_pkg_sourcing', pkg_sourcing)
-                pkg_treatment = st.session_state.get('pc_pkg_treatment', pkg_treatment)
-                pkg_development = st.session_state.get('pc_pkg_development', pkg_development)
+                pkg_sourcing = st.session_state.get('pc_backup_pkg_sourcing', pkg_sourcing)
+                pkg_treatment = st.session_state.get('pc_backup_pkg_treatment', pkg_treatment)
+                pkg_development = st.session_state.get('pc_backup_pkg_development', pkg_development)
                 sourcing_items = [
                     "SOURCING INTAKE SESSION",
                     "EXPERT INPUT AND PLANNING",
