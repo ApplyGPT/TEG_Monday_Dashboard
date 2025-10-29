@@ -50,21 +50,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# ----------------------
+# Data functions
+# ----------------------
 @st.cache_data(ttl=600, show_spinner=False)
-def get_all_leads_data_from_db(force_refresh=False):
+def get_all_leads_data_from_db():
     """Load all leads data from local SQLite database (cached)."""
-    if force_refresh:
-        st.cache_data.clear()
-
+    # Keep imports of board fetchers centralized above for faster reloads
     boards = {
         "New Leads v2": get_new_leads_data(),
         "Discovery Call v2": get_discovery_call_data(),
         "Design Review v2": get_design_review_data(),
-        "Sales v2": get_sales_data()
-        .get("data", {})
-        .get("boards", [{}])[0]
-        .get("items_page", {})
-        .get("items", []),
+        "Sales v2": (
+            get_sales_data()
+            .get("data", {})
+            .get("boards", [{}])[0]
+            .get("items_page", {})
+            .get("items", [])
+        ),
     }
 
     # Flatten structure and tag board name
@@ -77,7 +80,6 @@ def get_all_leads_data_from_db(force_refresh=False):
 
 @st.cache_data(ttl=600)
 def format_leads_data(leads_data):
-    """Convert Monday.com leads JSON into DataFrame (fast & vectorized)."""
     if not leads_data:
         return pd.DataFrame()
 
@@ -105,7 +107,6 @@ def format_leads_data(leads_data):
         ]
     )
 
-    # Parse datetime efficiently
     df["Effective Date"] = pd.to_datetime(df["Date Created (Custom)"], errors="coerce")
     mask = df["Effective Date"].isna()
     if mask.any():
@@ -118,7 +119,6 @@ def format_leads_data(leads_data):
 
 
 def filter_leads_by_date(df, selected_date):
-    """Filter leads DataFrame by selected date."""
     if df.empty:
         return df
     if isinstance(selected_date, str):
@@ -127,20 +127,22 @@ def filter_leads_by_date(df, selected_date):
 
 
 def get_daily_counts(df, selected_date):
-    """Return Series of daily lead counts for the month up to selected date."""
     if df.empty:
-        return pd.Series(dtype=int)
+        return pd.Series(dtype=int)  # explicit dtype to avoid warnings
 
     month_start = selected_date.replace(day=1)
     mask = (df["Effective Date Date"] >= month_start) & (
         df["Effective Date Date"] <= selected_date
     )
     subset = df.loc[mask, "Effective Date Date"]
-    return subset.value_counts().sort_index()
+    # value_counts returns dtype int by default; convert index to date objects if needed
+    counts = subset.value_counts().sort_index()
+    # Ensure index objects are plain date if they are Timestamp
+    counts.index = [d.date() if hasattr(d, "date") else d for d in counts.index]
+    return counts
 
 
 def display_calendar_html(daily_counts, selected_date):
-    """Render a lightweight HTML calendar instead of heavy Streamlit columns."""
     if daily_counts.empty:
         st.info("No leads this month.")
         return
@@ -159,11 +161,11 @@ def display_calendar_html(daily_counts, selected_date):
     for _ in range(first_weekday):
         html += "<td></td>"
 
-    # Fill the days
+    # Fill the days (only up to selected_date.day)
     for day in range(1, selected_date.day + 1):
         date_obj = selected_date.replace(day=day)
         count = int(daily_counts.get(date_obj, 0))
-        color = ("#b3e6b3")
+        color = "#b3e6b3"
         html += (
             f"<td style='padding:8px; border:1px solid #ccc; background:{color};'>"
             f"<b>{day}</b><br><small>{count} leads</small></td>"
@@ -175,10 +177,12 @@ def display_calendar_html(daily_counts, selected_date):
     st.markdown(html, unsafe_allow_html=True)
 
 
+# ----------------------
+# Main UI
+# ----------------------
 def main():
     st.markdown('<div class="embed-header">🔍 NEW LEADS CHECK</div>', unsafe_allow_html=True)
 
-    # Check database
     db_exists, db_message = check_database_exists()
     if not db_exists:
         st.error(f"❌ Database not ready: {db_message}")
@@ -187,15 +191,18 @@ def main():
         )
         return
 
-    # Sidebar controls
+    # Sidebar
     with st.sidebar:
         st.header("⚙️ Settings")
         refresh = st.button("🔄 Refresh Data")
         st.info(f"Last Updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
-    # Load data
+    # If user requested refresh, clear cache BEFORE calling cached function
+    if refresh:
+        st.cache_data.clear()
+
     with st.spinner("Loading leads data from database..."):
-        leads_data = get_all_leads_data_from_db(force_refresh=refresh)
+        leads_data = get_all_leads_data_from_db()
         df = format_leads_data(leads_data)
 
     if df.empty:
@@ -204,7 +211,6 @@ def main():
         )
         return
 
-    # Date input
     st.subheader("📅 Select Date")
     selected_date = st.date_input(
         "Choose a date to view leads created on that day:",
@@ -212,13 +218,11 @@ def main():
         help="Select the date to filter leads by their creation date",
     )
 
-    # Monthly view
     st.subheader("Monthly Calendar View")
     daily_counts = get_daily_counts(df, selected_date)
     display_calendar_html(daily_counts, selected_date)
     st.markdown("---")
 
-    # Filtered data
     filtered_df = filter_leads_by_date(df, selected_date)
     if filtered_df.empty:
         st.info(f"No leads were created on {selected_date:%B %d, %Y}.")
@@ -233,6 +237,7 @@ def main():
                 "Current Board": "Current Board",
             },
         )
+
 
 if __name__ == "__main__":
     main()
