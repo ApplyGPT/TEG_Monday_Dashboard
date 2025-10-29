@@ -997,7 +997,7 @@ def upload_pptx_to_google_slides(name_value: str,
 
 def main():
     st.title("📽️ Proposal Creator")
-
+    
     inputs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "inputs")
     
     # Check if we're returning from OAuth and should auto-trigger slides creation
@@ -1024,6 +1024,14 @@ def main():
     # Clear the OAuth flag after we've used it to restore data
     if is_oauth_return:
         st.session_state['pc_oauth_in_progress'] = False
+    
+    # Show warning about OAuth flow
+    # Check if there are active credentials or if we're in the middle of OAuth
+    has_google_creds = 'google_creds' in st.session_state and st.session_state.get('google_creds') is not None
+    
+    # Only show warning if user hasn't authenticated yet
+    if not has_google_creds and not is_oauth_return:
+        st.warning("⚠️ **Important:** If you want to create Google Slides, click '**Create Google Slides**' FIRST to authorize Google access. This will avoid losing data when redirected.")
 
     # Basic variables
     st.subheader("Variables")
