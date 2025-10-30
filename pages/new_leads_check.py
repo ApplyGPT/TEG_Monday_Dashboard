@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, date
 import calendar
 import sys, os
+import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database_utils import (
@@ -76,6 +77,41 @@ def get_all_leads_data_from_db():
         for board_name, items in boards.items()
         for item in items
     ]
+
+
+def _current_month_bounds(today: date):
+    month_start = today.replace(day=1)
+    return month_start, today
+
+
+def _is_current_month(selected_date: date) -> bool:
+    today = date.today()
+    return selected_date.year == today.year and selected_date.month == today.month
+
+
+def _cache_file_path() -> str:
+    # Store cache under inputs for fast local read
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inputs", "new_leads_current_month.json")
+
+
+def try_load_cached_current_month_df() -> pd.DataFrame:
+    """Load precomputed current-month leads dataframe from JSON cache if available."""
+    cache_path = _cache_file_path()
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path, "r", encoding="utf-8") as f:
+                records = json.load(f)
+            if isinstance(records, list) and records:
+                df = pd.DataFrame.from_records(records)
+                # Ensure date columns are proper types
+                if "Effective Date" in df.columns:
+                    df["Effective Date"] = pd.to_datetime(df["Effective Date"], errors="coerce")
+                if "Effective Date Date" in df.columns:
+                    df["Effective Date Date"] = pd.to_datetime(df["Effective Date Date"], errors="coerce").dt.date
+                return df
+    except Exception:
+        pass
+    return pd.DataFrame()
 
 
 @st.cache_data(ttl=600)
@@ -201,22 +237,30 @@ def main():
     if refresh:
         st.cache_data.clear()
 
-    with st.spinner("Loading leads data from database..."):
-        leads_data = get_all_leads_data_from_db()
-        df = format_leads_data(leads_data)
-
-    if df.empty:
-        st.warning(
-            "No leads data found in database. Please refresh the database from the 'Database Refresh' page."
-        )
-        return
-
+    # Date filter stays as-is (confirmed requirement)
     st.subheader("📅 Select Date")
     selected_date = st.date_input(
         "Choose a date to view leads created on that day:",
         value=date.today(),
         help="Select the date to filter leads by their creation date",
     )
+
+    # Speed optimization: If user is viewing current month, try cached JSON first
+    df = pd.DataFrame()
+    if _is_current_month(selected_date):
+        df = try_load_cached_current_month_df()
+
+    # Fallback to database if cache not present or if viewing past months
+    if df.empty:
+        with st.spinner("Loading leads data from database..."):
+            leads_data = get_all_leads_data_from_db()
+            df = format_leads_data(leads_data)
+
+    if df.empty:
+        st.warning(
+            "No leads data found. Please refresh the database from the 'Database Refresh' page."
+        )
+        return
 
     st.subheader("Monthly Calendar View")
     daily_counts = get_daily_counts(df, selected_date)

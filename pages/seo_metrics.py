@@ -63,6 +63,9 @@ def main():
     st.markdown("<br><br>", unsafe_allow_html=True)
     st.markdown('<div style="padding-bottom: 1rem;"><h1>📈 SEO Metrics Dashboard</h1></div>', unsafe_allow_html=True)
     
+    # Display goal metrics image below the title and before the dashboard
+    st.image("inputs/goal_metrics.png", use_container_width=True)
+    
     st.markdown("---")
     
     # Display the Looker Studio dashboard in an iframe
