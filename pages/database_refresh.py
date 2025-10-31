@@ -203,7 +203,6 @@ def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
                                 text
                                 value
                                 type
-                                additional_info
                             }}
                         }}
                     }}
@@ -224,7 +223,6 @@ def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
                                 text
                                 value
                                 type
-                                additional_info
                             }}
                         }}
                     }}
@@ -330,7 +328,7 @@ def refresh_monday_database():
     """Refresh all board data from Monday.com"""
     credentials = load_monday_credentials()
     if not credentials:
-        return False, "Failed to load credentials"
+        return 0, ["Failed to load credentials"], ["ERROR - Failed to load credentials"]
     
     api_token = credentials['api_token']
     
@@ -605,40 +603,61 @@ def main():
         st.markdown("### 📊 Monday.com Data")
         st.markdown("Refresh all Monday.com board data (Sales, Leads, Discovery Calls, etc.)")
         
+        # Initialize session state for results if not exists
+        if 'monday_refresh_results' not in st.session_state:
+            st.session_state.monday_refresh_results = None
+        if 'monday_refresh_errors' not in st.session_state:
+            st.session_state.monday_refresh_errors = None
+        if 'monday_refresh_detailed_results' not in st.session_state:
+            st.session_state.monday_refresh_detailed_results = None
+        if 'monday_refresh_success_count' not in st.session_state:
+            st.session_state.monday_refresh_success_count = None
+        if 'monday_cache_success' not in st.session_state:
+            st.session_state.monday_cache_success = None
+        if 'monday_cache_message' not in st.session_state:
+            st.session_state.monday_cache_message = None
+        
         if st.button("🔄 Refresh All Monday Data", type="primary", use_container_width=True):
-            with st.spinner("Refreshing Monday.com database..."):
-                success_count, errors, detailed_results = refresh_monday_database()
+            try:
+                with st.spinner("Refreshing Monday.com database..."):
+                    success_count, errors, detailed_results = refresh_monday_database()
+                
+                # Store results in session state
+                st.session_state.monday_refresh_success_count = success_count
+                st.session_state.monday_refresh_errors = errors
+                st.session_state.monday_refresh_detailed_results = detailed_results
+                
+                # Generate new leads cache after successful Monday refresh
+                cache_success = False
+                cache_message = ""
+                if success_count > 0:
+                    with st.spinner("Generating New Leads cache..."):
+                        cache_success, cache_message = generate_new_leads_cache()
+                
+                # Store cache results in session state
+                st.session_state.monday_cache_success = cache_success
+                st.session_state.monday_cache_message = cache_message
+                
+                st.rerun()
+            except Exception as e:
+                # Store error in session state
+                st.session_state.monday_refresh_errors = [f"Unexpected error: {str(e)}"]
+                st.session_state.monday_refresh_detailed_results = [f"EXCEPTION - {str(e)}"]
+                st.session_state.monday_refresh_success_count = 0
+                import traceback
+                st.session_state.monday_cache_message = traceback.format_exc()
+                st.rerun()
+        
+        # Display results from session state (persists after rerun) - only show errors
+        if st.session_state.monday_refresh_success_count is not None:
+            errors = st.session_state.monday_refresh_errors or []
+            detailed_results = st.session_state.monday_refresh_detailed_results or []
             
-            # Generate new leads cache after successful Monday refresh
-            cache_success = False
-            cache_message = ""
-            if success_count > 0:
-                with st.spinner("Generating New Leads cache..."):
-                    cache_success, cache_message = generate_new_leads_cache()
-                if cache_success:
-                    st.success(f"✅ New Leads cache generated successfully")
-                else:
-                    st.warning(f"⚠️ Cache generation: {cache_message}")
+            # Only show cache warning if cache generation failed
+            if st.session_state.monday_cache_success is not None and not st.session_state.monday_cache_success:
+                st.warning(f"⚠️ Cache generation: {st.session_state.monday_cache_message}")
             
-            if success_count > 0:
-                st.markdown(f"""
-                <div class="status-success">
-                    <h4>✅ Monday Refresh Complete!</h4>
-                    <p>Successfully updated {success_count} out of 5 boards.</p>
-                    <p>Monday.com database has been refreshed with latest data.</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Show detailed results
-            st.subheader("📋 Monday.com Results")
-            for result in detailed_results:
-                if "SUCCESS" in result:
-                    st.success(f"✅ {result}")
-                elif "ERROR" in result or "EXCEPTION" in result:
-                    st.error(f"❌ {result}")
-                elif "WARNING" in result:
-                    st.warning(f"⚠️ {result}")
-            
+            # Show errors only
             if errors:
                 st.markdown(f"""
                 <div class="status-error">
@@ -649,7 +668,19 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
             
-            st.rerun()
+            # Show error results from detailed_results
+            if detailed_results:
+                error_results = [r for r in detailed_results if "ERROR" in r or "EXCEPTION" in r or "WARNING" in r]
+                if error_results:
+                    for result in error_results:
+                        if "ERROR" in result or "EXCEPTION" in result:
+                            st.error(f"❌ {result}")
+                        elif "WARNING" in result:
+                            st.warning(f"⚠️ {result}")
+            
+            # Show exception traceback if available
+            if st.session_state.monday_cache_message and "Traceback" in st.session_state.monday_cache_message:
+                st.code(st.session_state.monday_cache_message)
     
     with col2:
         st.markdown("### 📅 Calendly Data")

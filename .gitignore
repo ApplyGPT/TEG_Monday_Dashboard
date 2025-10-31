@@ -112,6 +112,7 @@ venv.bak/
 credentials.txt
 calendly_data.db
 monday_data.db
+new_leads_current_month.json
 
 # Spyder project settings
 .spyderproject

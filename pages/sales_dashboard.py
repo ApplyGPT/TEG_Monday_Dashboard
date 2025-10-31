@@ -243,15 +243,15 @@ def process_sales_data(data):
     df.loc[df['Total Value'] == 0, 'Total Value'] = df.loc[df['Total Value'] == 0, 'Numbers3']
     
     # Apply the CORRECT filters as discovered:
-    # 1. Lead Status = "Closed"
-    closed_status_mask = df['Lead Status'] == 'Closed'
+    # 1. Lead Status = "Closed" OR "Win"
+    closed_status_mask = (df['Lead Status'] == 'Closed') | (df['Lead Status'] == 'Win')
             
     # 2. Contract Amount >= 0 OR Numbers3 >= 0 OR both are null (Amount Paid or Contract Value)
     contract_amount_mask = df['Contract Amount'] >= 0
     numbers3_mask = df['Numbers3'] >= 0
     both_null_mask = df['Contract Amount'].isna() & df['Numbers3'].isna()
             
-    # Combine filters: Closed AND (Contract Amount >= 0 OR Numbers3 >= 0 OR both are null)
+    # Combine filters: (Closed OR Win) AND (Contract Amount >= 0 OR Numbers3 >= 0 OR both are null)
     final_mask = closed_status_mask & (contract_amount_mask | numbers3_mask | both_null_mask)
     df_filtered = df[final_mask].copy()
     

@@ -19,48 +19,46 @@ class DocxTemplateProcessor:
             'development_contract': {
                 'file': 'Development Contract.docx',
                 'replacements': {
-                    'March 14, 2025': 'CONTRACT_DATE',
-                    '$15,865.00': 'CONTRACT_AMOUNT',
-                    'VITALINA GHINZELLI': 'TEGMADE_FOR'
+                    '$6,971.00': 'CONTRACT_AMOUNT',
+                    'CLIENT NAME': 'CLIENT_NAME',
+                    'BRAND NAME': 'TEGMADE_FOR',
+                    'NAME': 'CLIENT_NAME',  # Standalone NAME placeholder
+                    'DATE_V': 'CONTRACT_DATE'  # Date placeholder (DATE_V)
                 },
-                'multiple_replacements': {
-                    'EUGENIA ZHANG': ['CLIENT_NAME', 'TEGMADE_FOR']  # First occurrence -> CLIENT_NAME, Second occurrence -> TEGMADE_FOR
-                }
+                'multiple_replacements': {}  # No multiple replacements needed with new placeholders
             },
             'development_terms': {
                 'file': 'Development Terms and Conditions .docx',
                 'replacements': {
-                    'JUNE 16, 2025': 'CONTRACT_DATE',
-                    'VITALINA GHINZELLI': 'TEGMADE_FOR'
+                    'BRAND NAME': 'TEGMADE_FOR',
+                    'NAME': 'CLIENT_NAME',  # Standalone NAME placeholder
+                    'DATE_V': 'CONTRACT_DATE'  # Date placeholder (DATE_V)
                 },
-                'multiple_replacements': {
-                    'SHERRY CASSEL': ['CLIENT_NAME', 'TEGMADE_FOR']  # First occurrence -> CLIENT_NAME, Second occurrence -> TEGMADE_FOR
-                }
+                'multiple_replacements': {}  # No multiple replacements needed
             },
             'production_contract': {
                 'file': 'Production Contract.docx',
                 'replacements': {
-                    'December 06, 2024': 'CONTRACT_DATE',
-                    # Replace hardcoded amounts with placeholders (like Development Contract)
-                    '$56,918.00': 'TOTAL_CONTRACT_AMOUNT',
-                    '$20,088.00': 'SEWING_COST',
-                    '$16,743.00': 'PRE_PRODUCTION_FEE',
-                    '$36,830.00': 'TOTAL_DUE_AT_SIGNING',
-                    'VITALINA GHINZELLI': 'TEGMADE_FOR'
+                    '$27,228.00': 'TOTAL_DUE_AT_SIGNING',  # Total Due at Signing
+                    '$41,428.00': 'TOTAL_CONTRACT_AMOUNT',  # Total Contract Amount
+                    '$14,200.00': 'SEWING_COST',  # Sewing Cost
+                    '$13,028.00': 'PRE_PRODUCTION_FEE',  # Pre-production Fee
+                    # $300.00 will always be $300.00 (no replacement needed)
+                    'CLIENT NAME': 'CLIENT_NAME',
+                    'BRAND NAME': 'TEGMADE_FOR',
+                    'NAME': 'CLIENT_NAME',  # Standalone NAME placeholder
+                    'DATE_V': 'CONTRACT_DATE'  # Date placeholder (DATE_V)
                 },
-                'multiple_replacements': {
-                    'Natalie Barrett': ['CLIENT_NAME', 'TEGMADE_FOR']  # First occurrence -> CLIENT_NAME, Second occurrence -> TEGMADE_FOR
-                }
+                'multiple_replacements': {}  # No multiple replacements needed with new placeholders
             },
             'production_terms': {
                 'file': 'Production Terms and Conditions.docx',
                 'replacements': {
-                    'December 06, 2024': 'CONTRACT_DATE',
-                    'VITALINA GHINZELLI': 'TEGMADE_FOR'
+                    'BRAND NAME': 'TEGMADE_FOR',
+                    'NAME': 'CLIENT_NAME',  # Standalone NAME placeholder
+                    'DATE_V': 'CONTRACT_DATE'  # Date placeholder (DATE_V)
                 },
-                'multiple_replacements': {
-                    'Natalie Barrett': ['CLIENT_NAME', 'TEGMADE_FOR']  # First occurrence -> CLIENT_NAME, Second occurrence -> TEGMADE_FOR
-                }
+                'multiple_replacements': {}  # No multiple replacements needed
             }
         }
     
@@ -158,8 +156,9 @@ class DocxTemplateProcessor:
             occurrence_counters[text_to_replace] = 0
         
         # Process paragraphs - handle multiple replacements first
-        for paragraph in doc.paragraphs:
+        for para_idx, paragraph in enumerate(doc.paragraphs):
             paragraph_replacements = []
+            original_para_text = paragraph.text
             
             # Handle multiple replacements (same text, different values for each occurrence)
             for text_to_replace, replacement_vars in multiple_replacements.items():
@@ -188,15 +187,51 @@ class DocxTemplateProcessor:
                         paragraph_replacements.append((paragraph.text, current_text))
                         replacements_made.append(f"{text_to_replace} -> {replacement_value} (occurrence {occurrence_counters[text_to_replace]})")
             
-            # Handle regular single replacements
-            for old_text, variable in replacement_map.items():
-                if old_text in paragraph.text and old_text not in multiple_replacements:
-                    paragraph_replacements.append((old_text, values[variable]))
-                    replacements_made.append(f"{old_text} -> {values[variable]}")
+            # Handle regular single replacements - process longer strings first to avoid partial matches
+            # Sort by length (longest first) to ensure "CLIENT NAME" is replaced before "NAME"
+            sorted_replacements = sorted(replacement_map.items(), key=lambda x: len(x[0]), reverse=True)
+            for old_text, variable in sorted_replacements:
+                if old_text not in multiple_replacements:
+                    paragraph_text = paragraph.text
+                    
+                    # For uppercase placeholders (like "BRAND NAME", "CLIENT NAME", "NAME")
+                    # match case-insensitively to catch "Brand Name", "Client Name", etc.
+                    # Use word boundaries for single-word placeholders to avoid matching "name" in "named"
+                    if old_text.isupper() and len(old_text.split()) > 0:
+                        # Case-insensitive matching for uppercase placeholders
+                        # For single words (like "NAME"), use word boundaries to match whole words only
+                        if len(old_text.split()) == 1:
+                            # Single word: use word boundaries (e.g., \bNAME\b matches "NAME" but not "named")
+                            pattern = re.compile(r'\b' + re.escape(old_text) + r'\b', re.IGNORECASE)
+                        else:
+                            # Multiple words: match case-insensitively (e.g., "BRAND NAME" matches "Brand Name")
+                            pattern = re.compile(re.escape(old_text), re.IGNORECASE)
+                        matches = list(pattern.finditer(paragraph_text))
+                        if matches:
+                            # Replace each occurrence with its actual case, then replace with our value
+                            for match in matches:
+                                actual_text = paragraph_text[match.start():match.end()]
+                                # Only add once per unique actual text variant
+                                if not any(r[0] == actual_text for r in paragraph_replacements):
+                                    paragraph_replacements.append((actual_text, values[variable]))
+                            replacements_made.append(f"{old_text} (case-insensitive) -> {values[variable]} ({len(matches)} occurrence(s) in para {para_idx})")
+                    elif old_text in paragraph_text:
+                        # For exact matches (like "$6,971.00" or "DATE_V")
+                        count = paragraph_text.count(old_text)
+                        if count > 0:
+                            if not any(r[0] == old_text for r in paragraph_replacements):
+                                paragraph_replacements.append((old_text, values[variable]))
+                                replacements_made.append(f"{old_text} -> {values[variable]} ({count} occurrence(s) in para {para_idx})")
             
             # Apply all replacements to this paragraph at once
             if paragraph_replacements:
                 self._replace_multiple_texts_with_bold(paragraph, paragraph_replacements)
+                # Verify replacement happened (check case-insensitively)
+                if ("BRAND NAME" in original_para_text.upper() or "Brand Name" in original_para_text) and \
+                   ("BRAND NAME" in paragraph.text.upper() or "Brand Name" in paragraph.text):
+                    print(f"⚠️ Warning: 'BRAND NAME' (any case) still present in paragraph {para_idx} after replacement")
+                    print(f"   Original: {original_para_text[:100]}...")
+                    print(f"   After: {paragraph.text[:100]}...")
             elif 'Date' in paragraph.text or 'Date:' in paragraph.text:
                 # No replacements but has Date - still fix it (for TEG lines)
                 self._fix_date_line_without_replacement(paragraph)
@@ -235,15 +270,115 @@ class DocxTemplateProcessor:
                                     paragraph_replacements.append((paragraph.text, current_text))
                                     replacements_made.append(f"{text_to_replace} -> {replacement_value} (occurrence {occurrence_counters[text_to_replace]})")
                         
-                        # Handle regular single replacements in tables
-                        for old_text, variable in replacement_map.items():
-                            if old_text in paragraph.text and old_text not in multiple_replacements:
-                                paragraph_replacements.append((old_text, values[variable]))
-                                replacements_made.append(f"{old_text} -> {values[variable]}")
+                        # Handle regular single replacements in tables - process longer strings first
+                        sorted_replacements = sorted(replacement_map.items(), key=lambda x: len(x[0]), reverse=True)
+                        for old_text, variable in sorted_replacements:
+                            if old_text not in multiple_replacements:
+                                paragraph_text = paragraph.text
+                                
+                                # For uppercase placeholders (like "BRAND NAME", "CLIENT NAME", "NAME")
+                                # match case-insensitively to catch "Brand Name", "Client Name", etc.
+                                # Use word boundaries for single-word placeholders to avoid matching "name" in "named"
+                                if old_text.isupper() and len(old_text.split()) > 0:
+                                    # Case-insensitive matching for uppercase placeholders
+                                    # For single words (like "NAME"), use word boundaries to match whole words only
+                                    if len(old_text.split()) == 1:
+                                        # Single word: use word boundaries (e.g., \bNAME\b matches "NAME" but not "named")
+                                        pattern = re.compile(r'\b' + re.escape(old_text) + r'\b', re.IGNORECASE)
+                                    else:
+                                        # Multiple words: match case-insensitively (e.g., "BRAND NAME" matches "Brand Name")
+                                        pattern = re.compile(re.escape(old_text), re.IGNORECASE)
+                                    matches = list(pattern.finditer(paragraph_text))
+                                    if matches:
+                                        # Replace each occurrence with its actual case, then replace with our value
+                                        for match in matches:
+                                            actual_text = paragraph_text[match.start():match.end()]
+                                            # Only add once per unique actual text variant
+                                            if not any(r[0] == actual_text for r in paragraph_replacements):
+                                                paragraph_replacements.append((actual_text, values[variable]))
+                                        replacements_made.append(f"{old_text} (case-insensitive) -> {values[variable]} ({len(matches)} occurrence(s) in table)")
+                                elif old_text in paragraph_text:
+                                    # For exact matches (like "$6,971.00" or "DATE_V")
+                                    count = paragraph_text.count(old_text)
+                                    if count > 0:
+                                        paragraph_replacements.append((old_text, values[variable]))
+                                        replacements_made.append(f"{old_text} -> {values[variable]} ({count} occurrence(s) in table)")
                         
                         # Apply all replacements to this paragraph at once
                         if paragraph_replacements:
                             self._replace_multiple_texts_with_bold(paragraph, paragraph_replacements)
+        
+        # Process text boxes and shapes (headers/footers might have text boxes)
+        # This ensures we catch "BRAND NAME" even if it's in a text box in the signature section
+        try:
+            for section in doc.sections:
+                # Process header paragraphs
+                if section.header:
+                    for paragraph in section.header.paragraphs:
+                        paragraph_replacements = []
+                        sorted_replacements = sorted(replacement_map.items(), key=lambda x: len(x[0]), reverse=True)
+                        for old_text, variable in sorted_replacements:
+                            if old_text not in multiple_replacements:
+                                paragraph_text = paragraph.text
+                                
+                                # Case-insensitive matching for uppercase placeholders
+                                # Use word boundaries for single-word placeholders to avoid matching "name" in "named"
+                                if old_text.isupper() and len(old_text.split()) > 0:
+                                    # For single words (like "NAME"), use word boundaries to match whole words only
+                                    if len(old_text.split()) == 1:
+                                        # Single word: use word boundaries (e.g., \bNAME\b matches "NAME" but not "named")
+                                        pattern = re.compile(r'\b' + re.escape(old_text) + r'\b', re.IGNORECASE)
+                                    else:
+                                        # Multiple words: match case-insensitively (e.g., "BRAND NAME" matches "Brand Name")
+                                        pattern = re.compile(re.escape(old_text), re.IGNORECASE)
+                                    matches = list(pattern.finditer(paragraph_text))
+                                    if matches:
+                                        for match in matches:
+                                            actual_text = paragraph_text[match.start():match.end()]
+                                            if not any(r[0] == actual_text for r in paragraph_replacements):
+                                                paragraph_replacements.append((actual_text, values[variable]))
+                                        replacements_made.append(f"{old_text} (case-insensitive) -> {values[variable]} ({len(matches)} occurrence(s) in header)")
+                                elif old_text in paragraph_text:
+                                    if not any(r[0] == old_text for r in paragraph_replacements):
+                                        paragraph_replacements.append((old_text, values[variable]))
+                                        replacements_made.append(f"{old_text} -> {values[variable]} (in header)")
+                        if paragraph_replacements:
+                            self._replace_multiple_texts_with_bold(paragraph, paragraph_replacements)
+                
+                # Process footer paragraphs
+                if section.footer:
+                    for paragraph in section.footer.paragraphs:
+                        paragraph_replacements = []
+                        sorted_replacements = sorted(replacement_map.items(), key=lambda x: len(x[0]), reverse=True)
+                        for old_text, variable in sorted_replacements:
+                            if old_text not in multiple_replacements:
+                                paragraph_text = paragraph.text
+                                
+                                # Case-insensitive matching for uppercase placeholders
+                                # Use word boundaries for single-word placeholders to avoid matching "name" in "named"
+                                if old_text.isupper() and len(old_text.split()) > 0:
+                                    # For single words (like "NAME"), use word boundaries to match whole words only
+                                    if len(old_text.split()) == 1:
+                                        # Single word: use word boundaries (e.g., \bNAME\b matches "NAME" but not "named")
+                                        pattern = re.compile(r'\b' + re.escape(old_text) + r'\b', re.IGNORECASE)
+                                    else:
+                                        # Multiple words: match case-insensitively (e.g., "BRAND NAME" matches "Brand Name")
+                                        pattern = re.compile(re.escape(old_text), re.IGNORECASE)
+                                    matches = list(pattern.finditer(paragraph_text))
+                                    if matches:
+                                        for match in matches:
+                                            actual_text = paragraph_text[match.start():match.end()]
+                                            if not any(r[0] == actual_text for r in paragraph_replacements):
+                                                paragraph_replacements.append((actual_text, values[variable]))
+                                        replacements_made.append(f"{old_text} (case-insensitive) -> {values[variable]} ({len(matches)} occurrence(s) in footer)")
+                                elif old_text in paragraph_text:
+                                    if not any(r[0] == old_text for r in paragraph_replacements):
+                                        paragraph_replacements.append((old_text, values[variable]))
+                                        replacements_made.append(f"{old_text} -> {values[variable]} (in footer)")
+                        if paragraph_replacements:
+                            self._replace_multiple_texts_with_bold(paragraph, paragraph_replacements)
+        except Exception as e:
+            print(f"⚠️ Warning: Could not process headers/footers: {str(e)}")
         
         # Process images and logos (add placeholders)
         self._process_images_and_logos(doc)
@@ -261,9 +396,16 @@ class DocxTemplateProcessor:
         # Apply all replacements and track length difference
         new_full_text = full_text
         length_diff = 0
+        
+        # Process replacements - replace all occurrences
         for old_text, new_text in replacements:
+            # Replace all occurrences (not just the first one)
             if old_text in new_full_text:
-                length_diff += len(new_text) - len(old_text)
+                # Count how many times it appears
+                count = new_full_text.count(old_text)
+                # Calculate total length difference for all occurrences
+                length_diff += (len(new_text) - len(old_text)) * count
+                # Replace all occurrences
                 new_full_text = new_full_text.replace(old_text, new_text)
         
         # If it's a signature line with Date, adjust spacing to compensate for name length change
