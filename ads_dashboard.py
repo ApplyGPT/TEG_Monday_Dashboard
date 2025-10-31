@@ -5,6 +5,7 @@ from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 import sys
+import json
 
 # Add parent directory to path to import database_utils
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -336,13 +337,121 @@ def format_sales_data(data):
                 "Assigned Person": ""
             }
             
-            # Extract column values
+            # Extract column values - FIRST PASS: collect all relevant values
+            formula_value = ""  # Amount Paid or Contract Value from formula column
+            contract_amt_value = ""  # Contract Amount
+            numbers3_value = ""  # Numbers3 (Amount Paid)
+            mirror_value = ""   # Mirror Ap or Cv (lookup)
+            
             for col_val in item.get("column_values", []):
                 try:
                     col_id = col_val.get("id", "")
                     text = (col_val.get("text") or "").strip()
                     value = col_val.get("value", "")
                     
+                    # FIRST PRIORITY: Check formula columns for "Amount Paid or Contract Value"
+                    if not formula_value:  # Only check if we haven't found a formula value yet
+                        if col_id in ["formula_mktj2qh2", "formula_mktk2rgx", "formula_mktks5te", 
+                                     "formula_mktknqy9", "formula_mktkwnyh", "formula_mktq5ahq",
+                                     "formula_mktt5nty", "formula_mkv0r139"]:
+                            # Formula columns can store value in text or value field
+                            if text:
+                                formula_value = text
+                            elif value:
+                                # Try to extract from value field (might be JSON or string)
+                                try:
+                                    if isinstance(value, dict):
+                                        # If value is a dict, try common keys
+                                        formula_value = str(value.get("number", value.get("text", value)))
+                                    elif isinstance(value, str):
+                                        # Try to parse as JSON
+                                        try:
+                                            value_parsed = json.loads(value)
+                                            if isinstance(value_parsed, dict):
+                                                formula_value = str(value_parsed.get("number", value_parsed.get("text", value)))
+                                            else:
+                                                formula_value = str(value_parsed)
+                                        except:
+                                            formula_value = str(value)
+                                    else:
+                                        formula_value = str(value)
+                                except:
+                                    pass
+                    
+                    # Collect contract_amt and numbers3 for fallback
+                    if col_id == "contract_amt" and text:
+                        contract_amt_value = text
+                    elif col_id == "numbers3" and text:
+                        numbers3_value = text
+                    elif col_id == "lookup_mkx8jk3h":
+                        # Mirror Ap or Cv: try text, then parse value/additional_info
+                        if text:
+                            mirror_value = text
+                        else:
+                            extra = col_val.get("additional_info")
+                            raw_val = col_val.get("value")
+                            # Try to parse additional_info first (often contains mirrored value)
+                            parsed = None
+                            for candidate in [extra, raw_val]:
+                                if not candidate:
+                                    continue
+                                try:
+                                    if isinstance(candidate, str):
+                                        parsed = json.loads(candidate)
+                                    else:
+                                        parsed = candidate
+                                except Exception:
+                                    parsed = None
+                                if isinstance(parsed, dict):
+                                    # Common keys that may carry display text or number
+                                    for key in ["display_value", "text", "value", "number"]:
+                                        if key in parsed and parsed[key]:
+                                            mirror_value = str(parsed[key])
+                                            break
+                                if mirror_value:
+                                    break
+                        
+                except Exception as e:
+                    continue
+            
+            # Store raw values in record for post-processing
+            record["_contract_amt"] = contract_amt_value
+            record["_numbers3"] = numbers3_value
+            record["_mirror"] = mirror_value
+            record["_formula"] = formula_value
+            
+            # SECOND PASS: Set initial Value field - prioritize formula, then sum available fields
+            if formula_value:
+                record["Value"] = formula_value
+            elif contract_amt_value and numbers3_value and mirror_value:
+                try:
+                    contract_amt_num = float(str(contract_amt_value).replace('$', '').replace(',', '').strip())
+                    numbers3_num = float(str(numbers3_value).replace('$', '').replace(',', '').strip())
+                    mirror_num = float(str(mirror_value).replace('$', '').replace(',', '').strip())
+                    record["Value"] = str(contract_amt_num + numbers3_num + mirror_num)
+                except:
+                    record["Value"] = contract_amt_value or numbers3_value or mirror_value or ""
+            elif (contract_amt_value and numbers3_value) or (contract_amt_value and mirror_value) or (numbers3_value and mirror_value):
+                # Sum available values as fallback
+                try:
+                    nums = []
+                    for v in [contract_amt_value, numbers3_value, mirror_value]:
+                        if v:
+                            nums.append(float(str(v).replace('$', '').replace(',', '').strip()))
+                    record["Value"] = str(sum(nums))
+                except:
+                    record["Value"] = contract_amt_value or numbers3_value or mirror_value or ""
+            elif contract_amt_value:
+                record["Value"] = contract_amt_value
+            elif numbers3_value:
+                record["Value"] = numbers3_value
+            
+            # Extract other column values (Status, Channel, Dates, etc.)
+            for col_val in item.get("column_values", []):
+                try:
+                    col_id = col_val.get("id", "")
+                    text = (col_val.get("text") or "").strip()
+                    value = col_val.get("value", "")
                     
                     # Map specific column IDs based on the actual Monday.com structure
                     # Status field - using the color column that shows "Sales Qualified"
@@ -353,27 +462,6 @@ def format_sales_data(data):
                         record["Channel"] = text
                     elif col_id == "source":  # Fallback to source column
                         record["Channel"] = text
-                    # Amount Paid or Contract Value field (prioritize numbers3 over contract_amt)
-                    elif col_id == "numbers3":  # This contains the actual amount paid (10550 for Kimberly)
-                        record["Value"] = text
-                    elif col_id == "contract_amt":
-                        record["Value"] = text if text else record.get("Value", "")
-                    elif col_id == "formula_mktj2qh2":  # Try first formula column
-                        record["Value"] = text if text else record.get("Value", "")
-                    elif col_id == "formula_mktk2rgx":  # Try second formula column
-                        record["Value"] = text if text else record.get("Value", "")
-                    elif col_id == "formula_mktks5te":  # Try third formula column
-                        record["Value"] = text if text else record.get("Value", "")
-                    elif col_id == "formula_mktknqy9":  # Try fourth formula column
-                        record["Value"] = text if text else record.get("Value", "")
-                    elif col_id == "formula_mktkwnyh":  # Try fifth formula column
-                        record["Value"] = text if text else record.get("Value", "")
-                    elif col_id == "formula_mktq5ahq":  # Try sixth formula column
-                        record["Value"] = text if text else record.get("Value", "")
-                    elif col_id == "formula_mktt5nty":  # Try seventh formula column
-                        record["Value"] = text if text else record.get("Value", "")
-                    elif col_id == "formula_mkv0r139":  # Try eighth formula column
-                        record["Value"] = text if text else record.get("Value", "")
                     # Date Created field - using date7 column (Jan 14 for Ashley Miles)
                     elif col_id == "date7":
                         record["Date Created"] = text
@@ -404,6 +492,74 @@ def format_sales_data(data):
     
     df = pd.DataFrame(records)
     
+    # Post-processing: Calculate correct Value using formula: contract_amt + numbers3 + mirror (mirror = sum of copies)
+    if not df.empty:
+        # Helper function to normalize name (remove "(copy)" suffixes)
+        def normalize_name(name):
+            if not isinstance(name, str):
+                return ""
+            base = name
+            while base.endswith(" (copy)"):
+                base = base[:-len(" (copy)")]
+            return base.strip()
+        
+        # Normalize names and identify copies
+        df["_BaseName"] = df["Item Name"].apply(normalize_name)
+        df["_IsCopy"] = df["Item Name"].astype(str).str.contains("(copy)", na=False)
+        
+        # Convert raw values to numeric
+        def to_num(val):
+            if not val or val == "":
+                return 0.0
+            try:
+                return float(str(val).replace('$', '').replace(',', '').strip())
+            except:
+                return 0.0
+        
+        df["_contract_num"] = df["_contract_amt"].apply(to_num)
+        df["_numbers3_num"] = df["_numbers3"].apply(to_num)
+        df["_mirror_num"] = df["_mirror"].apply(to_num)
+        
+        # For copy items: Value = contract_amt + numbers3 (mirror not needed for copies)
+        copy_mask = df["_IsCopy"]
+        df.loc[copy_mask, "Value"] = (df.loc[copy_mask, "_contract_num"] + df.loc[copy_mask, "_numbers3_num"]).apply(lambda x: str(x) if x > 0 else "")
+        
+        # For base items: calculate mirror as sum of all copies' (contract_amt + numbers3) for same base name
+        base_mask = ~df["_IsCopy"]
+        if base_mask.any():
+            # Calculate sum of copies per base name
+            copy_totals = df[copy_mask].groupby("_BaseName").apply(
+                lambda g: (g["_contract_num"] + g["_numbers3_num"]).sum()
+            ).to_dict()
+            
+            # For each base item, if mirror is missing, use sum of copies as mirror
+            for idx in df[base_mask].index:
+                base_name = df.loc[idx, "_BaseName"]
+                mirror_val = df.loc[idx, "_mirror_num"]
+                
+                # If no mirror value, calculate from copies
+                if mirror_val == 0 and base_name in copy_totals:
+                    mirror_val = copy_totals[base_name]
+                
+                # Calculate final value: contract_amt + numbers3 + mirror
+                contract = df.loc[idx, "_contract_num"]
+                numbers3 = df.loc[idx, "_numbers3_num"]
+                total = contract + numbers3 + mirror_val
+                
+                # For base items: always recalculate if formula is missing (mirror needs to be included)
+                # If formula exists and was used, keep it; otherwise calculate from parts
+                current_formula = df.loc[idx, "_formula"]
+                if not current_formula or current_formula == "":
+                    # No formula available, calculate from contract_amt + numbers3 + mirror
+                    if total > 0:
+                        df.loc[idx, "Value"] = str(total)
+                    elif contract + numbers3 > 0:
+                        # At least use contract + numbers3 if available
+                        df.loc[idx, "Value"] = str(contract + numbers3)
+        
+        # Cleanup helper columns
+        df.drop(columns=[c for c in df.columns if c.startswith("_")], inplace=True)
+
     # Convert date columns
     df['Date Created'] = pd.to_datetime(df['Date Created'], errors='coerce')
     df['Date Closed'] = pd.to_datetime(df['Date Closed'], errors='coerce')

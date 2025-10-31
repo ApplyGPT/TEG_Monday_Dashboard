@@ -194,6 +194,7 @@ def refresh_monday_database(config):
                                             text
                                             value
                                             type
+                                            additional_info
                                         }}
                                     }}
                                 }}
@@ -214,6 +215,7 @@ def refresh_monday_database(config):
                                             text
                                             value
                                             type
+                                            additional_info
                                         }}
                                     }}
                                 }}

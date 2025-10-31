@@ -201,6 +201,7 @@ def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
                                 text
                                 value
                                 type
+                                additional_info
                             }}
                         }}
                     }}
@@ -221,6 +222,7 @@ def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
                                 text
                                 value
                                 type
+                                additional_info
                             }}
                         }}
                     }}
