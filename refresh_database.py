@@ -448,13 +448,15 @@ def refresh_calendly_database(config):
 def generate_new_leads_cache():
     """Generate the new leads month cache by running the cache generation script."""
     try:
-        script_path = os.path.join("scripts", "generate_new_leads_month_cache.py")
+        # Get absolute path to script directory to handle cron job working directory issues
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        script_path = os.path.join(script_dir, "scripts", "generate_new_leads_month_cache.py")
         if os.path.exists(script_path):
             result = subprocess.run(
                 [sys.executable, script_path],
                 capture_output=True,
                 text=True,
-                cwd=os.path.dirname(os.path.abspath(__file__))
+                cwd=script_dir
             )
             if result.returncode == 0:
                 print(result.stdout)
@@ -466,6 +468,8 @@ def generate_new_leads_cache():
                 return False
         else:
             print(f"⚠️ Cache script not found at {script_path}")
+            print(f"   Script directory: {script_dir}")
+            print(f"   Current working directory: {os.getcwd()}")
             return False
     except Exception as e:
         print(f"❌ Error generating cache: {str(e)}")
