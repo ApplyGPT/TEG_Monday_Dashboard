@@ -3,6 +3,8 @@ import requests
 import pandas as pd
 import sqlite3
 import os
+import sys
+import subprocess
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
@@ -383,6 +385,27 @@ def refresh_monday_database():
     
     return success_count, errors, detailed_results
 
+def generate_new_leads_cache():
+    """Generate the new leads month cache by running the cache generation script."""
+    try:
+        script_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "generate_new_leads_month_cache.py")
+        if os.path.exists(script_path):
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            )
+            if result.returncode == 0:
+                return True, result.stdout
+            else:
+                error_msg = result.stderr if result.stderr else "Unknown error"
+                return False, error_msg
+        else:
+            return False, f"Cache script not found at {script_path}"
+    except Exception as e:
+        return False, f"Error generating cache: {str(e)}"
+
 def refresh_calendly_database():
     """Refresh Calendly data from API"""
     credentials = load_calendly_credentials()
@@ -585,6 +608,17 @@ def main():
         if st.button("🔄 Refresh All Monday Data", type="primary", use_container_width=True):
             with st.spinner("Refreshing Monday.com database..."):
                 success_count, errors, detailed_results = refresh_monday_database()
+            
+            # Generate new leads cache after successful Monday refresh
+            cache_success = False
+            cache_message = ""
+            if success_count > 0:
+                with st.spinner("Generating New Leads cache..."):
+                    cache_success, cache_message = generate_new_leads_cache()
+                if cache_success:
+                    st.success(f"✅ New Leads cache generated successfully")
+                else:
+                    st.warning(f"⚠️ Cache generation: {cache_message}")
             
             if success_count > 0:
                 st.markdown(f"""

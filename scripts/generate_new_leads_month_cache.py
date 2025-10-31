@@ -92,14 +92,33 @@ def main():
     # Filter to current month
     df_current = df[(df["Effective Date Date"] >= month_start) & (df["Effective Date Date"] <= today)].copy()
 
+    # Pre-calculate daily counts for instant access
+    daily_counts = df_current.groupby("Effective Date Date").size().to_dict()
+    # Convert date objects to strings for JSON serialization
+    daily_counts_str = {str(k): int(v) for k, v in daily_counts.items()}
+
     # Serialize to JSON records for fast load
+    # Convert datetime columns to strings for JSON serialization
+    df_current["Effective Date"] = df_current["Effective Date"].astype(str)
+    df_current["Effective Date Date"] = df_current["Effective Date Date"].astype(str)
+    
     records = df_current.to_dict(orient="records")
     cache_path = _cache_file_path()
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    
+    # Create cache structure with pre-calculated counts
+    cache_data = {
+        "records": records,
+        "daily_counts": daily_counts_str,
+        "month_start": str(month_start),
+        "cached_date": str(today),
+        "total_records": len(records)
+    }
+    
     with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(records, f, ensure_ascii=False)
+        json.dump(cache_data, f, ensure_ascii=False)
 
-    print(f"Wrote {len(records)} records to {cache_path}")
+    print(f"Cached {len(records)} records with {len(daily_counts_str)} daily counts to {cache_path}")
 
 
 if __name__ == "__main__":

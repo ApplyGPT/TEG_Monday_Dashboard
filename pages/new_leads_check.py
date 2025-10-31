@@ -94,24 +94,46 @@ def _cache_file_path() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inputs", "new_leads_current_month.json")
 
 
-def try_load_cached_current_month_df() -> pd.DataFrame:
-    """Load precomputed current-month leads dataframe from JSON cache if available."""
-    cache_path = _cache_file_path()
+@st.cache_data(ttl=300, show_spinner=False)
+def try_load_cached_current_month_df(_cache_path: str) -> tuple[pd.DataFrame, dict]:
+    """Load precomputed current-month leads dataframe and daily counts from JSON cache if available.
+    
+    Args:
+        _cache_path: Cache file path (prefixed with _ to prevent Streamlit from treating it as a parameter)
+    
+    Returns:
+        tuple: (dataframe, daily_counts_dict) or (empty_df, empty_dict) if cache not available
+    """
     try:
-        if os.path.exists(cache_path):
-            with open(cache_path, "r", encoding="utf-8") as f:
-                records = json.load(f)
-            if isinstance(records, list) and records:
-                df = pd.DataFrame.from_records(records)
-                # Ensure date columns are proper types
-                if "Effective Date" in df.columns:
-                    df["Effective Date"] = pd.to_datetime(df["Effective Date"], errors="coerce")
-                if "Effective Date Date" in df.columns:
-                    df["Effective Date Date"] = pd.to_datetime(df["Effective Date Date"], errors="coerce").dt.date
-                return df
+        if os.path.exists(_cache_path):
+            with open(_cache_path, "r", encoding="utf-8") as f:
+                cache_data = json.load(f)
+            
+            # Handle both old and new cache formats
+            if isinstance(cache_data, dict) and "records" in cache_data:
+                # New format with pre-calculated daily counts
+                records = cache_data["records"]
+                daily_counts = cache_data.get("daily_counts", {})
+                if records:
+                    df = pd.DataFrame.from_records(records)
+                    # Ensure date columns are proper types
+                    if "Effective Date" in df.columns:
+                        df["Effective Date"] = pd.to_datetime(df["Effective Date"], errors="coerce")
+                    if "Effective Date Date" in df.columns:
+                        df["Effective Date Date"] = pd.to_datetime(df["Effective Date Date"], errors="coerce").dt.date
+                    return df, daily_counts
+            elif isinstance(cache_data, list):
+                # Old format - just records list
+                if cache_data:
+                    df = pd.DataFrame.from_records(cache_data)
+                    if "Effective Date" in df.columns:
+                        df["Effective Date"] = pd.to_datetime(df["Effective Date"], errors="coerce")
+                    if "Effective Date Date" in df.columns:
+                        df["Effective Date Date"] = pd.to_datetime(df["Effective Date Date"], errors="coerce").dt.date
+                    return df, {}
     except Exception:
         pass
-    return pd.DataFrame()
+    return pd.DataFrame(), {}
 
 
 @st.cache_data(ttl=600)
@@ -162,7 +184,32 @@ def filter_leads_by_date(df, selected_date):
     return df[df["Effective Date Date"] == selected_date].copy()
 
 
-def get_daily_counts(df, selected_date):
+def get_daily_counts(df, selected_date, precalculated_daily_counts=None):
+    """Get daily counts for the selected date's month.
+    
+    Args:
+        df: DataFrame with leads data
+        selected_date: Selected date
+        precalculated_daily_counts: Pre-calculated daily counts dict from cache (optional)
+    
+    Returns:
+        pd.Series with daily counts
+    """
+    # If pre-calculated counts are available and we're viewing current month, use them
+    if precalculated_daily_counts and _is_current_month(selected_date):
+        # Filter to only dates up to selected_date
+        filtered_counts = {
+            date_str: count
+            for date_str, count in precalculated_daily_counts.items()
+            if pd.to_datetime(date_str).date() <= selected_date
+        }
+        # Convert to Series with proper date index
+        if filtered_counts:
+            dates = [pd.to_datetime(k).date() for k in filtered_counts.keys()]
+            counts = pd.Series(list(filtered_counts.values()), index=dates).sort_index()
+            return counts
+    
+    # Fallback to calculating from dataframe
     if df.empty:
         return pd.Series(dtype=int)  # explicit dtype to avoid warnings
 
@@ -247,8 +294,10 @@ def main():
 
     # Speed optimization: If user is viewing current month, try cached JSON first
     df = pd.DataFrame()
+    daily_counts_cache = {}
     if _is_current_month(selected_date):
-        df = try_load_cached_current_month_df()
+        cache_path = _cache_file_path()
+        df, daily_counts_cache = try_load_cached_current_month_df(cache_path)
 
     # Fallback to database if cache not present or if viewing past months
     if df.empty:
@@ -263,7 +312,8 @@ def main():
         return
 
     st.subheader("Monthly Calendar View")
-    daily_counts = get_daily_counts(df, selected_date)
+    # Use pre-calculated daily counts if available for near-instantaneous load
+    daily_counts = get_daily_counts(df, selected_date, daily_counts_cache)
     display_calendar_html(daily_counts, selected_date)
     st.markdown("---")
 

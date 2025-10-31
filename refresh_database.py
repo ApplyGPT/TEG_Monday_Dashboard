@@ -8,6 +8,7 @@ import sqlite3
 import os
 import toml
 import sys
+import subprocess
 from datetime import datetime
 
 # Database paths
@@ -444,6 +445,33 @@ def refresh_calendly_database(config):
         print(f"❌ Error refreshing Calendly database: {str(e)}")
         return False
 
+def generate_new_leads_cache():
+    """Generate the new leads month cache by running the cache generation script."""
+    try:
+        script_path = os.path.join("scripts", "generate_new_leads_month_cache.py")
+        if os.path.exists(script_path):
+            result = subprocess.run(
+                [sys.executable, script_path],
+                capture_output=True,
+                text=True,
+                cwd=os.path.dirname(os.path.abspath(__file__))
+            )
+            if result.returncode == 0:
+                print(result.stdout)
+                return True
+            else:
+                print(f"⚠️ Cache generation returned non-zero exit code")
+                if result.stderr:
+                    print(result.stderr)
+                return False
+        else:
+            print(f"⚠️ Cache script not found at {script_path}")
+            return False
+    except Exception as e:
+        print(f"❌ Error generating cache: {str(e)}")
+        return False
+
+
 def main():
     """Main function"""
     print("=" * 80)
@@ -470,12 +498,16 @@ def main():
     print("\n🔄 Step 3: Refreshing Calendly database...")
     calendly_success = refresh_calendly_database(config)
     
+    print("\n🔄 Step 4: Generating New Leads month cache...")
+    cache_success = generate_new_leads_cache()
+    
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
     print(f"QuickBooks Token: {'✅ Success' if qb_success else '⚠️ Skipped'}")
     print(f"Monday.com DB: {'✅ Success' if monday_success else '❌ Failed'}")
     print(f"Calendly DB: {'✅ Success' if calendly_success else '❌ Failed'}")
+    print(f"New Leads Cache: {'✅ Success' if cache_success else '⚠️ Skipped'}")
     print("=" * 80)
     
     if monday_success and calendly_success:
