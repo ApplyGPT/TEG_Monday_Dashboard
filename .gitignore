@@ -112,7 +112,12 @@ venv.bak/
 credentials.txt
 calendly_data.db
 monday_data.db
-new_leads_current_month.json
+
+# New leads current month
+inputs/new_leads_current_month.json
+
+# Generated merged contract
+processed_documents/merged_contract_terms.docx
 
 # Spyder project settings
 .spyderproject

@@ -195,7 +195,6 @@ def refresh_monday_database(config):
                                             text
                                             value
                                             type
-                                            additional_info
                                         }}
                                     }}
                                 }}
@@ -216,7 +215,6 @@ def refresh_monday_database(config):
                                             text
                                             value
                                             type
-                                            additional_info
                                         }}
                                     }}
                                 }}
@@ -234,6 +232,8 @@ def refresh_monday_database(config):
                     data = response.json()
                     
                     if "errors" in data:
+                        print(f"❌ GraphQL errors for {table_name}: {data['errors']}")
+                        all_items = []
                         break
                     
                     boards = data.get("data", {}).get("boards", [])
@@ -252,29 +252,34 @@ def refresh_monday_database(config):
                     if not cursor:
                         break
                 
-                # Save to database
-                conn = sqlite3.connect(MONDAY_DB_PATH)
-                cursor = conn.cursor()
-                
-                # Clear existing data
-                cursor.execute(f"DELETE FROM {table_name}")
-                
-                # Insert new data
-                for item in all_items:
-                    item_id = item.get("id", "")
-                    name = item.get("name", "")
-                    column_values = str(item.get("column_values", []))
+                # If no items and we hit an error earlier, skip saving empty set
+                if not all_items:
+                    print(f"⚠️ {table_name}: No items to save (skipping table write)")
+                else:
+                    # Save to database
+                    conn = sqlite3.connect(MONDAY_DB_PATH)
+                    cursor = conn.cursor()
                     
-                    cursor.execute(f'''
-                        INSERT INTO {table_name} (id, name, board_type, column_values, updated_at)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (item_id, name, table_name, column_values, datetime.now()))
+                    # Clear existing data
+                    cursor.execute(f"DELETE FROM {table_name}")
+                    
+                    # Insert new data
+                    for item in all_items:
+                        item_id = item.get("id", "")
+                        name = item.get("name", "")
+                        column_values = str(item.get("column_values", []))
+                        
+                        cursor.execute(f''' 
+                            INSERT INTO {table_name} (id, name, board_type, column_values, updated_at)
+                            VALUES (?, ?, ?, ?, ?)
+                        ''', (item_id, name, table_name, column_values, datetime.now()))
+                    
+                    conn.commit()
+                    conn.close()
                 
-                conn.commit()
-                conn.close()
-                
-                print(f"✅ {table_name}: {len(all_items)} items saved")
-                success_count += 1
+                print(f"✅ {table_name}: {len(all_items)} items processed")
+                if all_items:
+                    success_count += 1
                 
             except Exception as e:
                 print(f"❌ {table_name}: Error - {str(e)}")

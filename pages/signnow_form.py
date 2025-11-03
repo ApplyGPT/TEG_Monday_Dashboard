@@ -442,126 +442,53 @@ def main():
                             if not signnow_api.authenticate():
                                 st.error("❌ Failed to authenticate with SignNow. Check credentials.")
                                 return
-                        
-                        document_ids = []
-                        
-                        # Prepare contract document for upload
-                        with open(preview_paths['contract'], 'rb') as contract_file:
-                            contract_content = contract_file.read()
-                        
-                        contract_filename = os.path.basename(preview_paths['contract'])
-                        contract_files = {
-                            'file': (contract_filename, contract_content, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-                        }
-                        
-                        contract_data = {
-                            'name': f'{selected_document} - Contract - {client_name}'
-                        }
-                        
-                        headers = {
-                            "Authorization": f"Bearer {signnow_api.access_token}"
-                        }
-                        
-                        # Create contract document in SignNow with retry logic
-                        contract_uploaded = False
-                        contract_document_id = None
-                        
-                        for attempt in range(3):  # Try up to 3 times
+
+                        # Build highlight values similar to preview for better fidelity
+                        highlight_values = [v for v in [client_name, email, tegmade_for] if v]
+                        if template_type == 'development_pair' and contract_amount:
                             try:
-                                if attempt == 0:  # Only show message on first attempt
-                                    st.info("📋 Uploading Contract document...")
-                                contract_response = requests.post(
-                                    f"{signnow_api.base_url}/document",
-                                    files=contract_files,
-                                    data=contract_data,
-                                    headers=headers,
-                                    timeout=180  # Increased timeout to 3 minutes
-                                )
-                                contract_response.raise_for_status()
-                                
-                                contract_create_response = contract_response.json()
-                                contract_document_id = contract_create_response.get("id")
-                                contract_uploaded = True
-                                st.success("✅ Contract document uploaded successfully!")
-                                break
-                                
-                            except requests.exceptions.Timeout:
-                                if attempt < 2:  # Not the last attempt
-                                    continue  # Silent retry
-                                else:
-                                    st.error("❌ Contract upload failed after 3 attempts due to timeout")
-                                    raise
-                            except Exception as e:
-                                st.error(f"❌ Contract upload failed: {str(e)}")
-                                raise
-                        
-                        if not contract_uploaded:
-                            st.error("❌ Failed to upload contract document")
-                            return
-                        
-                        # Prepare terms document for upload
-                        with open(preview_paths['terms'], 'rb') as terms_file:
-                            terms_content = terms_file.read()
-                        
-                        terms_filename = os.path.basename(preview_paths['terms'])
-                        terms_files = {
-                            'file': (terms_filename, terms_content, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-                        }
-                        
-                        terms_data = {
-                            'name': f'{selected_document} - Terms - {client_name}'
-                        }
-                        
-                        # Create terms document in SignNow with retry logic
-                        terms_uploaded = False
-                        terms_document_id = None
-                        
-                        for attempt in range(3):  # Try up to 3 times
-                            try:
-                                if attempt == 0:  # Only show message on first attempt
-                                    st.info("📋 Uploading Terms document...")
-                                terms_response = requests.post(
-                                    f"{signnow_api.base_url}/document",
-                                    files=terms_files,
-                                    data=terms_data,
-                                    headers=headers,
-                                    timeout=180  # Increased timeout to 3 minutes
-                                )
-                                terms_response.raise_for_status()
-                                
-                                terms_create_response = terms_response.json()
-                                terms_document_id = terms_create_response.get("id")
-                                terms_uploaded = True
-                                st.success("✅ Terms document uploaded successfully!")
-                                break
-                                
-                            except requests.exceptions.Timeout:
-                                if attempt < 2:  # Not the last attempt
-                                    continue  # Silent retry
-                                else:
-                                    st.error("❌ Terms upload failed after 3 attempts due to timeout")
-                                    raise
-                            except Exception as e:
-                                st.error(f"❌ Terms upload failed: {str(e)}")
-                                raise
-                        
-                        if not terms_uploaded:
-                            st.error("❌ Failed to upload terms document")
-                            return
-                        
-                        # Send both documents for signing
-                        for doc_id, doc_type in [(contract_document_id, "Contract"), (terms_document_id, "Terms")]:
-                            send_url = f"{signnow_api.base_url}/document/{doc_id}/invite"
-                            send_data = {
-                                "to": email,
-                                "from": signnow_api.user_email
-                            }
-                            
-                            send_response = requests.post(send_url, json=send_data, headers=headers)
-                            send_response.raise_for_status()
-                        
-                        st.success(f"✅ Both documents sent successfully to {email}!")
-                        st.balloons()
+                                amt_clean = contract_amount.replace('$', '').replace(',', '')
+                                amt_formatted = f"${float(amt_clean):,.2f}"
+                                highlight_values.append(amt_formatted)
+                            except Exception:
+                                pass
+                            highlight_values.append(contract_amount)
+                        elif template_type == 'production_pair':
+                            production_amounts = [total_contract_amount, sewing_cost, pre_production_fee, total_due_at_signing]
+                            for amount in production_amounts:
+                                if amount:
+                                    amt_clean = amount.replace('$', '').replace(',', '')
+                                    try:
+                                        amt_formatted = f"${float(amt_clean):,.2f}"
+                                        highlight_values.append(amt_formatted)
+                                    except Exception:
+                                        pass
+                                    highlight_values.append(amount)
+                        if contract_date_str:
+                            highlight_values.append(contract_date_str)
+
+                        # Merge Contract + Terms into a single document and send once
+                        # Build filename like: development_contract_terms_Estevao_Cavalcante_October_31_2025
+                        if template_type == 'development_pair':
+                            prefix = 'development_contract_terms'
+                        else:
+                            prefix = 'production_contract_terms'
+                        client_part = (client_name or '').replace(' ', '_')
+                        date_part = (contract_date_str or '').replace(',', '').replace(' ', '_')
+                        doc_name = f"{prefix}_{client_part}_{date_part}".strip('_')
+                        # Use DOCX merge path to preserve original images/logos/content
+                        ok, msg = signnow_api.create_and_send_merged_pair_docx(
+                            pair_type=template_type,
+                            contract_docx_path=preview_paths['contract'],
+                            terms_docx_path=preview_paths['terms'],
+                            document_name=doc_name,
+                            email=email,
+                        )
+                        if ok:
+                            st.success(f"✅ {msg}")
+                            st.balloons()
+                        else:
+                            st.error(f"❌ {msg}")
                         
                         # Clean up processed documents
                         for path in preview_paths.values():

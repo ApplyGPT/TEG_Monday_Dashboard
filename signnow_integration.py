@@ -415,6 +415,121 @@ class SignNowAPI:
             st.error(f"Error converting .docx to PDF: {str(e)}")
             # Fallback to simple PDF
             return b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n%%EOF"
+
+    def _merge_pdfs(self, pdf_bytes_list: list[bytes]) -> bytes:
+        """Merge multiple PDF byte streams into a single PDF bytes using PyPDF2."""
+        try:
+            from PyPDF2 import PdfReader, PdfWriter
+            from io import BytesIO
+
+            writer = PdfWriter()
+            for pdf_bytes in pdf_bytes_list:
+                reader = PdfReader(BytesIO(pdf_bytes))
+                for page in reader.pages:
+                    writer.add_page(page)
+
+            out = BytesIO()
+            writer.write(out)
+            out.seek(0)
+            return out.getvalue()
+        except Exception as e:
+            st.error(f"Failed to merge PDFs: {str(e)}")
+            # Return first PDF as fallback
+            return pdf_bytes_list[0] if pdf_bytes_list else b""
+
+    def upload_pdf(self, document_name: str, pdf_bytes: bytes) -> str | None:
+        """Upload a single PDF to SignNow and return document id."""
+        if not self.access_token:
+            if not self.authenticate():
+                return None
+        try:
+            files = {
+                'file': (f'{document_name}.pdf', pdf_bytes, 'application/pdf')
+            }
+            data = { 'name': document_name }
+            headers = { "Authorization": f"Bearer {self.access_token}" }
+            response = requests.post(f"{self.base_url}/document", files=files, data=data, headers=headers, timeout=90)
+            response.raise_for_status()
+            doc_id = response.json().get("id")
+            return doc_id
+        except Exception as e:
+            st.error(f"Failed to upload merged PDF: {str(e)}")
+            return None
+
+    def create_and_send_merged_pair(self, pair_type: str, contract_docx_path: str, terms_docx_path: str,
+                                    document_name: str, email: str, highlight_values: list | None = None) -> tuple[bool, str]:
+        """Convert both DOCX to PDFs, merge into one, upload, and send invite."""
+        try:
+            # Convert to PDFs
+            contract_pdf = self._convert_docx_to_pdf(contract_docx_path, highlight_values=highlight_values)
+            terms_pdf = self._convert_docx_to_pdf(terms_docx_path, highlight_values=highlight_values)
+            # Merge PDFs: contract first, then terms
+            merged_pdf = self._merge_pdfs([contract_pdf, terms_pdf])
+            if not merged_pdf:
+                return False, "Failed to generate merged PDF"
+            # Upload merged PDF with provided document_name (already formatted by caller)
+            doc_id = self.upload_pdf(document_name, merged_pdf)
+            if not doc_id:
+                return False, "Failed to upload merged document"
+            # Send for signing
+            if self.send_document_for_signing(doc_id, email, document_name, ""):
+                return True, f"Merged document sent successfully to {email}. Document ID: {doc_id}"
+            return False, "Merged document uploaded but failed to send for signing"
+        except Exception as e:
+            return False, f"Error creating/sending merged pair: {str(e)}"
+
+    def _merge_docx(self, first_path: str, second_path: str) -> str:
+        """Merge two DOCX files into one DOCX (simple append of body content). Returns merged path."""
+        from docx import Document as Docx
+        import os
+        merged = Docx(first_path)
+        second = Docx(second_path)
+
+        # Append paragraphs and tables from second into merged
+        for element in second.element.body:
+            merged.element.body.append(element)
+
+        out_dir = os.path.join(os.getcwd(), 'processed_documents')
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, 'merged_contract_terms.docx')
+        merged.save(out_path)
+        return out_path
+
+    def upload_docx(self, document_name: str, docx_path: str) -> str | None:
+        """Upload a DOCX to SignNow (let SignNow convert). Returns document id."""
+        if not self.access_token:
+            if not self.authenticate():
+                return None
+        try:
+            with open(docx_path, 'rb') as f:
+                content = f.read()
+            files = {
+                'file': (f"{document_name}.docx", content, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+            }
+            data = { 'name': document_name }
+            headers = { "Authorization": f"Bearer {self.access_token}" }
+            resp = requests.post(f"{self.base_url}/document", files=files, data=data, headers=headers, timeout=180)
+            resp.raise_for_status()
+            return resp.json().get('id')
+        except Exception as e:
+            st.error(f"Failed to upload DOCX: {str(e)}")
+            return None
+
+    def create_and_send_merged_pair_docx(self, pair_type: str, contract_docx_path: str, terms_docx_path: str,
+                                          document_name: str, email: str) -> tuple[bool, str]:
+        """Merge two processed DOCX files into one DOCX, upload, and send for signing."""
+        try:
+            merged_docx = self._merge_docx(contract_docx_path, terms_docx_path)
+            if not merged_docx or not os.path.exists(merged_docx):
+                return False, "Failed to merge DOCX documents"
+            doc_id = self.upload_docx(document_name, merged_docx)
+            if not doc_id:
+                return False, "Failed to upload merged DOCX"
+            if self.send_document_for_signing(doc_id, email, document_name, ""):
+                return True, f"Merged document sent successfully to {email}. Document ID: {doc_id}"
+            return False, "Merged DOCX uploaded but failed to send for signing"
+        except Exception as e:
+            return False, f"Error creating/sending merged DOCX: {str(e)}"
     
     def _docx_to_html(self, doc):
         """

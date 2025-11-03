@@ -195,8 +195,8 @@ def get_daily_counts(df, selected_date, precalculated_daily_counts=None):
     Returns:
         pd.Series with daily counts
     """
-    # If pre-calculated counts are available and we're viewing current month, use them
-    if precalculated_daily_counts and _is_current_month(selected_date):
+    # If pre-calculated counts are available from cache, prefer them
+    if precalculated_daily_counts:
         # Filter to only dates up to selected_date
         filtered_counts = {
             date_str: count
@@ -292,12 +292,11 @@ def main():
         help="Select the date to filter leads by their creation date",
     )
 
-    # Speed optimization: If user is viewing current month, try cached JSON first
+    # Try cached JSON first (fast path), regardless of selected month
     df = pd.DataFrame()
     daily_counts_cache = {}
-    if _is_current_month(selected_date):
-        cache_path = _cache_file_path()
-        df, daily_counts_cache = try_load_cached_current_month_df(cache_path)
+    cache_path = _cache_file_path()
+    df, daily_counts_cache = try_load_cached_current_month_df(cache_path)
 
     # Fallback to database if cache not present or if viewing past months
     if df.empty:
