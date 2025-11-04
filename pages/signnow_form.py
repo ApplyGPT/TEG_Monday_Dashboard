@@ -132,7 +132,7 @@ def main():
         
         # Signature Name field
         tegmade_for = st.text_input(
-            "Signature Name (Company or Person Name)",
+            "Client Company Name",
             value="",
             help="Enter the name that will replace VITALINA GHINZELLI in the document"
         )
