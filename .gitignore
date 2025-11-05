@@ -115,6 +115,7 @@ monday_data.db
 
 # New leads current month
 inputs/new_leads_current_month.json
+new_leads_current_month.json
 
 # Generated merged contract
 processed_documents/merged_contract_terms.docx
@@ -149,3 +150,4 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+inputs/new_leads_current_month.json

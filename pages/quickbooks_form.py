@@ -65,13 +65,13 @@ def main():
         client_secret=credentials['client_secret'],
         refresh_token=credentials['refresh_token'],
         company_id=credentials['company_id'],
-        sandbox=credentials.get('sandbox', True)  # Default to sandbox
+        sandbox=credentials.get('sandbox', False)  # Default to False for production
     )
     
     # Sidebar for configuration
     with st.sidebar:
         st.header("⚙️ QuickBooks Settings")
-        environment = "Sandbox" if credentials.get('sandbox', True) else "Production"
+        environment = "Sandbox" if credentials.get('sandbox', False) else "Production"
         st.info(f"Environment: {environment}")
         
         # Test connection button
@@ -81,6 +81,17 @@ def main():
                     st.success("✅ Connection successful!")
                 else:
                     st.error("❌ Connection failed!")
+        
+        # Verify production credentials button
+        st.divider()
+        if st.button("🔍 Verify Production Credentials"):
+            with st.spinner("Verifying production credentials..."):
+                from quickbooks_integration import verify_production_credentials
+                is_production, message = verify_production_credentials(quickbooks_api)
+                if is_production:
+                    st.success(message)
+                else:
+                    st.error(message)
     
     # Main form
     st.subheader("Invoice Information")

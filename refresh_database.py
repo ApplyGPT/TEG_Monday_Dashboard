@@ -122,7 +122,7 @@ def update_quickbooks_refresh_token(config):
             auth_url,
             data=data,
             headers=headers,
-            auth=(client_id, client_secret),
+            auth=requests.auth.HTTPBasicAuth(client_id, client_secret),
             timeout=30
         )
         
@@ -131,20 +131,39 @@ def update_quickbooks_refresh_token(config):
             new_refresh_token = auth_response.get("refresh_token")
             
             if new_refresh_token and new_refresh_token != current_refresh_token:
-                # Update the secrets.toml file
-                qb_config['refresh_token'] = new_refresh_token
+                # Update the secrets.toml file using absolute path
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                secrets_path = os.path.join(script_dir, '.streamlit', 'secrets.toml')
                 
-                secrets_path = os.path.join('.streamlit', 'secrets.toml')
-                with open(secrets_path, 'w') as f:
-                    toml.dump(config, f)
+                # Read current secrets to preserve all sections
+                with open(secrets_path, 'r') as f:
+                    secrets_config = toml.load(f)
                 
-                print(f"✅ QuickBooks refresh_token updated successfully")
-                return True
+                # Update only the refresh token
+                if 'quickbooks' in secrets_config:
+                    secrets_config['quickbooks']['refresh_token'] = new_refresh_token
+                    
+                    # Write back to file
+                    with open(secrets_path, 'w') as f:
+                        toml.dump(secrets_config, f)
+                    
+                    print(f"✅ QuickBooks refresh_token updated successfully")
+                    return True
+                else:
+                    print("⚠️ QuickBooks section not found in secrets.toml")
+                    return False
             else:
                 print("ℹ️ Refresh token is up to date")
                 return True
         else:
-            print(f"⚠️ Could not refresh QuickBooks token: {response.status_code}")
+            error_msg = "Unknown error"
+            try:
+                error_details = response.json()
+                error_msg = error_details.get('error_description', error_details.get('error', 'Unknown error'))
+            except:
+                error_msg = response.text[:200]
+            
+            print(f"⚠️ Could not refresh QuickBooks token: {response.status_code} - {error_msg}")
             return False
             
     except Exception as e:
