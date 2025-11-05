@@ -890,7 +890,6 @@ class QuickBooksAPI:
             bool: True if cluster URL was discovered and updated, False otherwise
         """
         # Refresh token first - tokens can be cluster-specific
-        st.info("🔄 Refreshing access token before cluster discovery...")
         if not self.authenticate(force_refresh=True):
             st.error("❌ Failed to refresh access token")
             return False
@@ -910,10 +909,6 @@ class QuickBooksAPI:
         # Add current one at the end as fallback
         cluster_urls_to_try.append(self.base_url)
         
-        st.info(f"🔍 Current cluster URL: `{self.base_url}`")
-        st.info(f"🔍 Company ID: `{self.company_id}`")
-        st.info(f"🔄 Will try alternative cluster URLs: {', '.join(cluster_urls_to_try)}")
-        
         headers = {
             "Authorization": f"Bearer {self.access_token}",
             "Accept": "application/json",
@@ -923,8 +918,6 @@ class QuickBooksAPI:
         # Try each cluster URL
         for cluster_url in cluster_urls_to_try:
             try:
-                st.info(f"🔍 Trying cluster URL: `{cluster_url}`")
-                
                 # Try companyinfo endpoint with redirects enabled
                 # Normalize cluster URL to prevent DNS resolution errors
                 normalized_cluster_url = self._normalize_quickbooks_url(cluster_url)
@@ -943,12 +936,10 @@ class QuickBooksAPI:
                 # Check if URL changed (redirect happened)
                 final_url = response.url
                 if final_url != discovery_url:
-                    st.info(f"🔍 Request was redirected: `{discovery_url}` → `{final_url}`")
                     # Extract base URL from final URL
                     if '/v3/company/' in final_url:
                         redirected_base_url = final_url.split('/v3/company/')[0]
                         if redirected_base_url != cluster_url and redirected_base_url in all_cluster_urls:
-                            st.info(f"🔍 Redirected to different cluster: `{cluster_url}` → `{redirected_base_url}`")
                             cluster_url = redirected_base_url
                             discovery_url = f"{cluster_url}/v3/company/{self.company_id}/companyinfo/{self.company_id}"
                             # Retry with the redirected cluster URL
@@ -957,7 +948,6 @@ class QuickBooksAPI:
                 # Check Location header (even for 401 responses)
                 location_header = response.headers.get('Location', '')
                 if location_header and location_header != discovery_url:
-                    st.info(f"🔍 Location header found: `{location_header}`")
                     # Extract base URL from location
                     if '/v3/company/' in location_header:
                         new_base_url = location_header.split('/v3/company/')[0]
@@ -987,14 +977,11 @@ class QuickBooksAPI:
                         discovered_base_url = cluster_url
                     
                     if discovered_base_url != self.base_url:
-                        old_url = self.base_url
                         self.base_url = discovered_base_url
                         self.base_url_verified = True
-                        st.success(f"✅ Discovered correct QuickBooks cluster URL: `{old_url}` → `{discovered_base_url}`")
                         return True
                     else:
                         self.base_url_verified = True
-                        st.success(f"✅ Cluster URL verified: `{self.base_url}`")
                         return True
                 
                 # Check for Wrong Cluster error specifically
@@ -1014,24 +1001,17 @@ class QuickBooksAPI:
                                     
                                     # Check for Wrong Cluster error (code 130)
                                     if error_code == '130' or 'WrongCluster' in error_msg:
-                                        st.warning(f"⚠️ Wrong Cluster error detected with cluster `{cluster_url}`")
-                                        
                                         # Try preferences endpoint first (sometimes works when companyinfo fails)
                                         # This is the PRIMARY method - preferences endpoint is more reliable
-                                        st.info(f"🔄 Trying preferences endpoint as fallback...")
                                         try:
                                             prefs_response = requests.get(preferences_url, headers=headers, allow_redirects=True, timeout=10)
                                             if prefs_response.status_code == 200:
                                                 # Preferences endpoint works - verify with main production URL only
-                                                old_url = self.base_url
                                                 # CRITICAL: Don't switch to regional cluster - use main production URL
                                                 # Regional clusters can't be resolved via DNS, but main URL works
                                                 self.base_url = "https://quickbooks.api.intuit.com"
                                                 self.base_url_verified = True
                                                 self.verified_via_preferences = True  # Mark that we verified via preferences
-                                                st.success(f"✅ Preferences endpoint works - cluster verified! Using main production URL: `{self.base_url}`")
-                                                st.info("💡 Note: Using preferences endpoint for cluster verification (companyinfo endpoint has cluster issues)")
-                                                st.info("💡 Will ignore companyinfo Wrong Cluster errors and use main production URL only")
                                                 return True
                                             elif prefs_response.status_code == 401:
                                                 # Check if preferences endpoint also has Wrong Cluster error
@@ -1050,23 +1030,19 @@ class QuickBooksAPI:
                                                                     self.base_url = "https://quickbooks.api.intuit.com"
                                                                     self.base_url_verified = True
                                                                     self.verified_via_preferences = True
-                                                                    st.warning("⚠️ Both endpoints show Wrong Cluster, but using main production URL with DNS patch")
-                                                                    st.info("💡 DNS patch will redirect regional cluster DNS lookups to main production domain")
                                                                     return True
                                                 except:
                                                     pass
                                         except Exception as e:
-                                            st.warning(f"⚠️ Error trying preferences endpoint: {str(e)}")
+                                            pass
                                         
                                         # Only try to extract cluster URL if preferences endpoint didn't work
                                         # and we haven't verified via preferences yet
                                         if not self.verified_via_preferences:
                                             extracted_cluster_url = self._extract_cluster_url(response)
                                             if extracted_cluster_url:
-                                                st.info(f"✅ Found cluster URL in error response: `{extracted_cluster_url}`")
                                                 # Don't try to use extracted cluster URL - it can't be resolved via DNS
                                                 # Instead, verify that main production URL works via preferences
-                                                st.info("💡 Ignoring extracted cluster URL (DNS resolution issues) - verifying main production URL instead")
                                                 try:
                                                     main_prefs_url = f"https://quickbooks.api.intuit.com/v3/company/{self.company_id}/preferences"
                                                     main_prefs_response = requests.get(main_prefs_url, headers=headers, allow_redirects=True, timeout=10)
@@ -1074,10 +1050,9 @@ class QuickBooksAPI:
                                                         self.base_url = "https://quickbooks.api.intuit.com"
                                                         self.base_url_verified = True
                                                         self.verified_via_preferences = True
-                                                        st.success(f"✅ Verified main production URL via preferences endpoint")
                                                         return True
                                                 except Exception as e:
-                                                    st.warning(f"⚠️ Could not verify main production URL: {str(e)}")
+                                                    pass
                                         
                                         # If we get here, preferences endpoint didn't work and we couldn't extract cluster
                                         # Use main production URL anyway - DNS patch will handle it
@@ -1232,11 +1207,8 @@ class QuickBooksAPI:
         # If we already verified via preferences, we know the cluster is correct
         # Refresh token again after cluster verification to ensure we have a cluster-specific token
         if self.verified_via_preferences and self.base_url_verified:
-            st.info("✅ Cluster already verified via preferences endpoint - skipping companyinfo check")
             # Refresh token one more time to ensure we have a cluster-specific token
-            st.info("🔄 Refreshing token after cluster verification...")
-            if self.authenticate(force_refresh=True):
-                st.info("✅ Token refreshed after cluster verification")
+            self.authenticate(force_refresh=True)
             return True
         
         # If cluster hasn't been verified, try to discover it first
@@ -1290,13 +1262,10 @@ class QuickBooksAPI:
                             for error in errors:
                                 if error.get('code') == '130' or 'WrongCluster' in error.get('Message', ''):
                                     # Try preferences endpoint instead
-                                    st.info("🔄 Companyinfo endpoint has cluster issue, trying preferences endpoint...")
                                     prefs_response = requests.get(preferences_url, headers=headers, allow_redirects=True)
                                     if prefs_response.status_code == 200:
-                                        st.info("✅ Preferences endpoint works - cluster verified!")
                                         self.base_url_verified = True
                                         self.verified_via_preferences = True  # Mark that we verified via preferences
-                                        st.info("💡 Cluster verified via preferences - will ignore companyinfo Wrong Cluster errors")
                                         return True
                 except:
                     pass
@@ -1310,9 +1279,7 @@ class QuickBooksAPI:
                         if '/v3/company/' in final_url:
                             new_base_url = final_url.split('/v3/company/')[0]
                             if new_base_url != self.base_url:
-                                old_url = self.base_url
                                 self.base_url = new_base_url
-                                st.info(f"🔄 QuickBooks cluster URL updated: {old_url} → {new_base_url}")
                         
                         self.base_url_verified = True
                         return True
@@ -1320,8 +1287,6 @@ class QuickBooksAPI:
                 # Check for cluster error in response
                 try:
                     error_data = response.json()
-                    st.info(f"🔍 401 Error response details:")
-                    st.json(error_data)
                     
                     if 'Fault' in error_data:
                         fault = error_data['Fault']

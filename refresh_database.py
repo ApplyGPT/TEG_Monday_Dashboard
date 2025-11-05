@@ -9,6 +9,7 @@ import os
 import toml
 import sys
 import subprocess
+import time
 from datetime import datetime
 
 # Database paths
@@ -214,6 +215,21 @@ def refresh_monday_database(config):
                                             text
                                             value
                                             type
+                                            ... on BoardRelationValue {{
+                                                linked_item_ids
+                                                display_value
+                                                linked_items {{
+                                                    id
+                                                    name
+                                                }}
+                                            }}
+                                            ... on FormulaValue {{
+                                                display_value
+                                                value
+                                            }}
+                                            ... on MirrorValue {{
+                                                display_value
+                                            }}
                                         }}
                                     }}
                                 }}
@@ -234,6 +250,21 @@ def refresh_monday_database(config):
                                             text
                                             value
                                             type
+                                            ... on BoardRelationValue {{
+                                                linked_item_ids
+                                                display_value
+                                                linked_items {{
+                                                    id
+                                                    name
+                                                }}
+                                            }}
+                                            ... on FormulaValue {{
+                                                display_value
+                                                value
+                                            }}
+                                            ... on MirrorValue {{
+                                                display_value
+                                            }}
                                         }}
                                     }}
                                 }}
@@ -247,11 +278,61 @@ def refresh_monday_database(config):
                         "Content-Type": "application/json",
                     }
                     
-                    response = requests.post(url, json={"query": query}, headers=headers, timeout=120)
-                    data = response.json()
+                    # Retry logic for rate limit errors
+                    max_retries = 5
+                    retry_count = 0
+                    data = None
                     
-                    if "errors" in data:
-                        print(f"❌ GraphQL errors for {table_name}: {data['errors']}")
+                    while retry_count < max_retries:
+                        try:
+                            response = requests.post(url, json={"query": query}, headers=headers, timeout=120)
+                            data = response.json()
+                            
+                            if "errors" in data:
+                                errors = data['errors']
+                                # Check if it's a rate limit error
+                                is_rate_limit = False
+                                retry_seconds = 0
+                                
+                                for error in errors:
+                                    extensions = error.get('extensions', {})
+                                    status_code = extensions.get('status_code')
+                                    code = extensions.get('code')
+                                    
+                                    if status_code == 429 or 'RATE_LIMIT' in str(code) or 'LIMIT_EXCEEDED' in str(code):
+                                        is_rate_limit = True
+                                        retry_seconds = max(retry_seconds, extensions.get('retry_in_seconds', 10))
+                                
+                                if is_rate_limit and retry_count < max_retries - 1:
+                                    retry_count += 1
+                                    wait_time = retry_seconds + (retry_count * 2)  # Add some buffer
+                                    print(f"⏳ Rate limit hit for {table_name}, waiting {wait_time}s before retry {retry_count}/{max_retries-1}...")
+                                    time.sleep(wait_time)
+                                    continue
+                                else:
+                                    # Not a rate limit error, or max retries reached
+                                    print(f"❌ GraphQL errors for {table_name}: {errors}")
+                                    all_items = []
+                                    break
+                            else:
+                                # Success - break out of retry loop
+                                break
+                                
+                        except Exception as e:
+                            if retry_count < max_retries - 1:
+                                retry_count += 1
+                                wait_time = (retry_count * 2) + 5  # Exponential backoff
+                                print(f"⏳ Request error for {table_name}, waiting {wait_time}s before retry {retry_count}/{max_retries-1}: {str(e)}")
+                                time.sleep(wait_time)
+                                continue
+                            else:
+                                print(f"❌ {table_name}: Error after {max_retries} retries - {str(e)}")
+                                all_items = []
+                                break
+                    
+                    if data is None or "errors" in data:
+                        if retry_count >= max_retries:
+                            print(f"❌ {table_name}: Max retries reached, skipping...")
                         all_items = []
                         break
                     
@@ -270,6 +351,9 @@ def refresh_monday_database(config):
                     
                     if not cursor:
                         break
+                    
+                    # Small delay between pages to avoid rate limits
+                    time.sleep(0.5)
                 
                 # If no items and we hit an error earlier, skip saving empty set
                 if not all_items:
@@ -302,6 +386,11 @@ def refresh_monday_database(config):
                 
             except Exception as e:
                 print(f"❌ {table_name}: Error - {str(e)}")
+            
+            # Add delay between boards to avoid concurrency limits
+            if table_name != boards_config[-1][1]:  # Don't delay after last board
+                print(f"⏸️  Waiting 2s before next board...")
+                time.sleep(2)
         
         print(f"\n✅ Monday.com refresh complete: {success_count}/5 boards updated")
         return True

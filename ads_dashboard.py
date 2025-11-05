@@ -325,9 +325,14 @@ def format_sales_data(data):
     
     # Convert to DataFrame
     records = []
+    item_id_to_record = {}  # Map item_id to record index for linking
+    linked_items_map = {}  # Map item_id to list of linked item IDs
+    
     for item in items:
         try:
+            item_id = item.get("id", "")
             record = {
+                "Item ID": item_id,  # Store item ID for linking
                 "Item Name": item.get("name", ""),
                 "Status": "",
                 "Channel": "",
@@ -410,6 +415,15 @@ def format_sales_data(data):
                                             break
                                 if mirror_value:
                                     break
+                    
+                    # Extract linked items from Connect boards columns (board_relation type)
+                    elif col_val.get("type") == "board_relation":
+                        linked_item_ids = col_val.get("linked_item_ids", [])
+                        if linked_item_ids:
+                            # Store linked items for this item
+                            if item_id not in linked_items_map:
+                                linked_items_map[item_id] = []
+                            linked_items_map[item_id].extend(linked_item_ids)
                         
                 except Exception as e:
                     continue
@@ -486,6 +500,7 @@ def format_sales_data(data):
                     continue
             
             records.append(record)
+            item_id_to_record[item_id] = len(records) - 1  # Store index for this item_id
         except Exception as e:
             # Skip problematic items
             continue
@@ -568,9 +583,40 @@ def format_sales_data(data):
     df['Value'] = df['Value'].astype(str).str.replace('$', '').str.replace(',', '').str.replace(' ', '')
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
     
+    # Add linked items' revenue to items with Connect boards columns
+    if not df.empty and linked_items_map:
+        # Create mapping of item_id -> Value for quick lookup
+        item_id_to_value = dict(zip(df['Item ID'], df['Value']))
+        
+        # For each item with linked items, add their revenues
+        for item_id, linked_item_ids in linked_items_map.items():
+            if item_id in item_id_to_record:
+                record_idx = item_id_to_record[item_id]
+                if record_idx < len(df):
+                    base_value = df.loc[df['Item ID'] == item_id, 'Value'].values[0]
+                    if pd.isna(base_value):
+                        base_value = 0.0
+                    
+                    # Sum revenue from linked items
+                    linked_revenue = 0.0
+                    for linked_id in linked_item_ids:
+                        if linked_id in item_id_to_value:
+                            linked_val = item_id_to_value[linked_id]
+                            if not pd.isna(linked_val):
+                                linked_revenue += linked_val
+                    
+                    # Update Value with sum of base + linked items
+                    if linked_revenue > 0:
+                        total_value = base_value + linked_revenue
+                        df.loc[df['Item ID'] == item_id, 'Value'] = total_value
+    
     # Create Month/Year column based on Date Created
     df['Month Year'] = df['Date Created'].dt.strftime('%B %Y')
     df['Year'] = df['Date Created'].dt.year
+    
+    # Remove Item ID column (only used for internal calculations)
+    if 'Item ID' in df.columns:
+        df.drop(columns=['Item ID'], inplace=True)
     
     return df
 
