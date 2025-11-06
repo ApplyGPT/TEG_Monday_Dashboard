@@ -103,17 +103,19 @@ def get_calendar_url(score, lead_data):
     
     Args:
         score (int): Qualification score (0, 1, 2, or 3)
-        lead_data (dict): Lead information for pre-filling
+        lead_data (dict): Lead information for pre-filling (not used with new URLs)
         
     Returns:
-        str: Calendar URL with pre-filled data
+        str: Calendar URL
     """
     if score == 0 or score == 1:
         return "https://tegmade.com/thank-you/"
     elif score == 2:
-        return generate_calendly_url_lets_chat(lead_data)
+        # Burki's link
+        return "https://tegmade.com/lets-chat"
     elif score == 3:
-        return generate_calendly_url_introductory_call(lead_data)
+        # Salesman's link
+        return "https://tegmade.com/introductory-call/"
     else:
         return "https://tegmade.com/thank-you/"  # Default fallback
 
