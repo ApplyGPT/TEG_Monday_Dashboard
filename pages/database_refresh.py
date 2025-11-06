@@ -5,6 +5,7 @@ import sqlite3
 import os
 import sys
 import subprocess
+import time
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
@@ -203,6 +204,14 @@ def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
                                 text
                                 value
                                 type
+                                ... on BoardRelationValue {{
+                                    linked_item_ids
+                                    display_value
+                                    linked_items {{
+                                        id
+                                        name
+                                    }}
+                                }}
                             }}
                         }}
                     }}
@@ -223,6 +232,14 @@ def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
                                 text
                                 value
                                 type
+                                ... on BoardRelationValue {{
+                                    linked_item_ids
+                                    display_value
+                                    linked_items {{
+                                        id
+                                        name
+                                    }}
+                                }}
                             }}
                         }}
                     }}
@@ -230,40 +247,97 @@ def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
             }}
             """
         
-        try:
-            response = requests.post(url, json={"query": query}, headers=headers, timeout=timeout)
-            
-            if response.status_code == 401:
-                return None, f"401 Unauthorized: Check API token for {board_name}"
-            
-            response.raise_for_status()
-            data = response.json()
-            
-            if "errors" in data:
-                return None, f"GraphQL errors for {board_name}: {data['errors']}"
-            
-            boards = data.get("data", {}).get("boards", [])
-            if not boards:
-                break
-            
-            items_page = boards[0].get("items_page", {})
-            items = items_page.get("items", [])
-            
-            if not items:
-                break
-            
-            all_items.extend(items)
-            cursor = items_page.get("cursor")
-            
-            if not cursor:
-                break
+        # Retry logic for rate limit and concurrency errors
+        # Use same max_retries as refresh_database.py which is working
+        max_retries = 5
+        retry_count = 0
+        data = None
+        
+        while retry_count < max_retries:
+            try:
+                response = requests.post(url, json={"query": query}, headers=headers, timeout=timeout)
                 
-        except requests.exceptions.Timeout:
-            return None, f"Request timed out for {board_name} (page {page_count}, {len(all_items)} items so far)"
-        except requests.exceptions.RequestException as e:
-            return None, f"Error fetching data from {board_name}: {str(e)}"
-        except Exception as e:
-            return None, f"Unexpected error for {board_name}: {str(e)}"
+                if response.status_code == 401:
+                    return None, f"401 Unauthorized: Check API token for {board_name}"
+                
+                # Parse JSON response (same as refresh_database.py)
+                data = response.json()
+                
+                if "errors" in data:
+                    errors = data['errors']
+                    # Check if it's a rate limit, concurrency limit, or server error
+                    # Use same logic as refresh_database.py which is working
+                    is_retryable_error = False
+                    retry_seconds = 0
+                    
+                    for error in errors:
+                        extensions = error.get('extensions', {})
+                        status_code = extensions.get('status_code')
+                        code = extensions.get('code', '')
+                        error_code = extensions.get('error_code', '')
+                        
+                        # Check for retryable errors: 429 (rate limit), LIMIT_EXCEEDED, or 500 (server error)
+                        # Option 4: Also retry on 500 Internal Server Errors
+                        if (status_code == 429 or 
+                            status_code == 500 or
+                            'RATE_LIMIT' in str(code) or 
+                            'LIMIT_EXCEEDED' in str(code) or
+                            'INTERNAL_SERVER_ERROR' in str(error_code)):
+                            is_retryable_error = True
+                            # Get retry_in_seconds from error, default based on error type
+                            if status_code == 500:
+                                retry_seconds = max(retry_seconds, extensions.get('retry_in_seconds', 10))
+                            else:
+                                retry_seconds = max(retry_seconds, extensions.get('retry_in_seconds', 15))
+                    
+                    if is_retryable_error and retry_count < max_retries - 1:
+                        retry_count += 1
+                        # Option 2: Increased exponential backoff multiplier from 2 to 5
+                        # This gives more backpressure: if Monday says "retry in 15s", we wait 15 + (retry_count * 5)
+                        # Example: retry_in_seconds=15, retry_count=1 → wait 20s, retry_count=2 → wait 25s, etc.
+                        wait_time = retry_seconds + (retry_count * 5)
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        # Not a retryable error, or max retries reached
+                        return None, f"GraphQL errors for {board_name}: {errors}"
+                else:
+                    # Success - break out of retry loop
+                    break
+                    
+            except Exception as e:
+                if retry_count < max_retries - 1:
+                    retry_count += 1
+                    # Use same exponential backoff as refresh_database.py
+                    wait_time = (retry_count * 2) + 5
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    return None, f"Error fetching data from {board_name}: {str(e)}"
+        
+        if data is None or "errors" in data:
+            return None, f"Failed to fetch data for {board_name} after {max_retries} retries"
+        
+        boards = data.get("data", {}).get("boards", [])
+        if not boards:
+            break
+        
+        items_page = boards[0].get("items_page", {})
+        items = items_page.get("items", [])
+        
+        if not items:
+            break
+        
+        all_items.extend(items)
+        cursor = items_page.get("cursor")
+        
+        if not cursor:
+            break
+        
+        # Small delay between pages to avoid rate limits
+        # Longer delay for Sales board due to its size
+        delay = 1.0 if board_name.lower() == "sales" else 0.5
+        time.sleep(delay)
     
     return all_items, None
 
@@ -345,7 +419,10 @@ def refresh_monday_database():
     errors = []
     detailed_results = []
     
-    for board_id, table_name, board_name in boards_config:
+    # Add initial delay before starting to avoid immediate concurrency limits
+    time.sleep(2)
+    
+    for idx, (board_id, table_name, board_name) in enumerate(boards_config):
         try:
             # Special progress indicator for Sales board
             if board_name.lower() == "sales":
@@ -364,18 +441,28 @@ def refresh_monday_database():
             if error:
                 errors.append(f"{board_name}: {error}")
                 detailed_results.append(f"{board_name}: ERROR - {error}")
+                # Add delay after errors to avoid compounding issues
+                if idx < len(boards_config) - 1:
+                    time.sleep(10)
                 continue
             
             # Check if we got data
             if not data:
                 errors.append(f"{board_name}: No data returned from API")
                 detailed_results.append(f"{board_name}: WARNING - No data returned from API")
+                if idx < len(boards_config) - 1:
+                    time.sleep(10)
                 continue
             
             # Save to database
             save_board_data_to_db(data, table_name, board_name)
             success_count += 1
             detailed_results.append(f"{board_name}: SUCCESS - {len(data)} items saved")
+            
+            # Option 1: Stagger board fetches - wait 10 seconds between boards
+            # This alone often eliminates FIELD_LIMIT_EXCEEDED errors
+            if idx < len(boards_config) - 1:
+                time.sleep(10)
             
         except Exception as e:
             errors.append(f"{board_name}: {str(e)}")

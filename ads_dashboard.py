@@ -584,9 +584,15 @@ def format_sales_data(data):
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
     
     # Add linked items' revenue to items with Connect boards columns
+    # Track which items are linked items so we can exclude them from display
+    linked_item_ids_set = set()
     if not df.empty and linked_items_map:
         # Create mapping of item_id -> Value for quick lookup
         item_id_to_value = dict(zip(df['Item ID'], df['Value']))
+        
+        # Collect all linked item IDs to exclude them from display
+        for linked_item_ids in linked_items_map.values():
+            linked_item_ids_set.update(linked_item_ids)
         
         # For each item with linked items, add their revenues
         for item_id, linked_item_ids in linked_items_map.items():
@@ -614,7 +620,11 @@ def format_sales_data(data):
     df['Month Year'] = df['Date Created'].dt.strftime('%B %Y')
     df['Year'] = df['Date Created'].dt.year
     
+    # Mark linked items so we can exclude them from display to prevent double-counting
+    df['_is_linked_item'] = df['Item ID'].isin(linked_item_ids_set)
+    
     # Remove Item ID column (only used for internal calculations)
+    # Keep _is_linked_item flag for filtering out linked items later
     if 'Item ID' in df.columns:
         df.drop(columns=['Item ID'], inplace=True)
     
@@ -633,6 +643,11 @@ def filter_roas_data(df, raw_data=None):
         (df['Status'].str.lower().isin(['closed', 'win'])) &
         (df['Channel'].str.lower() == 'paid search')
     ].copy()
+    
+    # Filter out linked items to prevent double-counting in ROAS calculations
+    # Linked items' revenue is already included in their base items
+    if '_is_linked_item' in df_roas.columns:
+        df_roas = df_roas[~df_roas['_is_linked_item']].copy()
     
     return df_roas, closed_statuses, paid_search_channels
 
@@ -825,14 +840,25 @@ def main():
                     # Filter sales data for selected month (using same criteria as ROAS calculation)
                     month_sales = qualifying_sales[qualifying_sales['Month Year'] == selected_month]
                     
+                    # Filter out linked items to prevent double-counting
+                    # Linked items' revenue is already included in their base items
+                    if '_is_linked_item' in month_sales.columns:
+                        month_sales_display = month_sales[~month_sales['_is_linked_item']].copy()
+                    else:
+                        # Fallback: if _is_linked_item column doesn't exist, use all items
+                        month_sales_display = month_sales.copy()
                     
-                    # Display total revenue for selected month
-                    month_revenue = month_sales['Value'].sum()
+                    # Display total revenue for selected month (only from non-linked items)
+                    month_revenue = month_sales_display['Value'].sum()
                     st.metric(f"Total Revenue ({selected_month})", f"${month_revenue:,.2f}")
                     
-                    if not month_sales.empty:
+                    if not month_sales_display.empty:
                         # Prepare data for display
-                        display_data = month_sales.copy()
+                        display_data = month_sales_display.copy()
+                        
+                        # Remove internal columns before display
+                        if '_is_linked_item' in display_data.columns:
+                            display_data = display_data.drop(columns=['_is_linked_item'])
                         
                         # Format Date Created to YYYY-MM-DD
                         display_data['Date Created'] = display_data['Date Created'].dt.strftime('%Y-%m-%d')

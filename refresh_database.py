@@ -223,13 +223,6 @@ def refresh_monday_database(config):
                                                     name
                                                 }}
                                             }}
-                                            ... on FormulaValue {{
-                                                display_value
-                                                value
-                                            }}
-                                            ... on MirrorValue {{
-                                                display_value
-                                            }}
                                         }}
                                     }}
                                 }}
@@ -257,13 +250,6 @@ def refresh_monday_database(config):
                                                     id
                                                     name
                                                 }}
-                                            }}
-                                            ... on FormulaValue {{
-                                                display_value
-                                                value
-                                            }}
-                                            ... on MirrorValue {{
-                                                display_value
                                             }}
                                         }}
                                     }}
