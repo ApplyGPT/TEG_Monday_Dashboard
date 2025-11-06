@@ -103,19 +103,17 @@ def get_calendar_url(score, lead_data):
     
     Args:
         score (int): Qualification score (0, 1, 2, or 3)
-        lead_data (dict): Lead information for pre-filling (not used with new URLs)
+        lead_data (dict): Lead information for pre-filling
         
     Returns:
-        str: Calendar URL
+        str: Calendar URL with pre-filled data
     """
     if score == 0 or score == 1:
         return "https://tegmade.com/thank-you/"
     elif score == 2:
-        # Burki's link
-        return "https://tegmade.com/lets-chat"
+        return generate_calendly_url_lets_chat(lead_data)
     elif score == 3:
-        # Salesman's link
-        return "https://tegmade.com/introductory-call/"
+        return generate_calendly_url_introductory_call(lead_data)
     else:
         return "https://tegmade.com/thank-you/"  # Default fallback
 
@@ -219,12 +217,12 @@ def format_phone_for_calendly(phone_number):
 
 def generate_calendly_url_lets_chat(lead_data):
     """
-    Generate Calendly URL for 'let's chat' (score 2) with pre-filled data
+    Generate URL for 'let's chat' (score 2) with pre-filled data
     
     Pre-fills: Name (Full Name), Email, Phone Number, Send text messages to (same as Phone Number), 
     and About Project
     """
-    base_url = "https://calendly.com/jamie-the-evans-group/teg-let-s-chat"
+    base_url = "https://tegmade.com/lets-chat"
     
     # Prepare parameters
     params = {}
@@ -263,11 +261,11 @@ def generate_calendly_url_lets_chat(lead_data):
 
 def generate_calendly_url_introductory_call(lead_data):
     """
-    Generate Calendly URL for 'introductory call' (score 3) with pre-filled data
+    Generate URL for 'introductory call' (score 3) with pre-filled data
     
     Pre-fills: Name, Email, and About Project
     """
-    base_url = "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call"
+    base_url = "https://tegmade.com/introductory-call/"
     
     # Prepare parameters
     params = {}
