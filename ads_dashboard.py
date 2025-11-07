@@ -327,6 +327,7 @@ def format_sales_data(data):
     records = []
     item_id_to_record = {}  # Map item_id to record index for linking
     linked_items_map = {}  # Map item_id to list of linked item IDs
+    item_id_to_name = {}  # Map item_id to item name for display
     
     for item in items:
         try:
@@ -339,8 +340,10 @@ def format_sales_data(data):
                 "Value": "",
                 "Date Created": "",
                 "Date Closed": "",
-                "Assigned Person": ""
+                "Assigned Person": "",
+                "Linked Items": ""
             }
+            item_id_to_name[item_id] = record["Item Name"]
             
             # Extract column values - FIRST PASS: collect all relevant values
             formula_value = ""  # Amount Paid or Contract Value from formula column
@@ -589,6 +592,7 @@ def format_sales_data(data):
     if not df.empty and linked_items_map:
         # Create mapping of item_id -> Value for quick lookup
         item_id_to_value = dict(zip(df['Item ID'], df['Value']))
+        df['Linked Items'] = df['Linked Items'].fillna('')
         
         # Collect all linked item IDs to exclude them from display
         for linked_item_ids in linked_items_map.values():
@@ -603,18 +607,27 @@ def format_sales_data(data):
                     if pd.isna(base_value):
                         base_value = 0.0
                     
-                    # Sum revenue from linked items
+                    # Sum revenue from linked items and capture their names
                     linked_revenue = 0.0
+                    linked_names = []
+                    seen_linked_names = set()
                     for linked_id in linked_item_ids:
                         if linked_id in item_id_to_value:
                             linked_val = item_id_to_value[linked_id]
                             if not pd.isna(linked_val):
                                 linked_revenue += linked_val
+                        linked_name = item_id_to_name.get(linked_id, "")
+                        if linked_name and linked_name not in seen_linked_names:
+                            linked_names.append(linked_name)
+                            seen_linked_names.add(linked_name)
                     
                     # Update Value with sum of base + linked items
                     if linked_revenue > 0:
                         total_value = base_value + linked_revenue
                         df.loc[df['Item ID'] == item_id, 'Value'] = total_value
+
+                    if linked_names:
+                        df.loc[df['Item ID'] == item_id, 'Linked Items'] = ", ".join(linked_names)
     
     # Create Month/Year column based on Date Created
     df['Month Year'] = df['Date Created'].dt.strftime('%B %Y')
@@ -867,6 +880,10 @@ def main():
                         display_data['Date Closed'] = display_data['Date Closed'].dt.strftime('%Y-%m-%d')
                         display_data['Date Closed'] = display_data['Date Closed'].fillna('')
                         
+                        if 'Linked Items' not in display_data.columns:
+                            display_data['Linked Items'] = ''
+                        display_data['Linked Items'] = display_data['Linked Items'].fillna('').astype(str)
+
                         # Format Value with commas for thousands, handle NaN values
                         display_data['Formatted Value'] = display_data['Value'].apply(
                             lambda x: f"${x:,.2f}" if pd.notna(x) and x != 0 else " "
@@ -874,9 +891,9 @@ def main():
                         
                         # Add Assigned Person column if it exists
                         if 'Assigned Person' in display_data.columns:
-                            display_columns = ['Item Name', 'Formatted Value', 'Assigned Person', 'Date Created', 'Date Closed']
+                            display_columns = ['Item Name', 'Formatted Value', 'Assigned Person', 'Date Created', 'Date Closed', 'Linked Items']
                         else:
-                            display_columns = ['Item Name', 'Formatted Value', 'Date Created', 'Date Closed']
+                            display_columns = ['Item Name', 'Formatted Value', 'Date Created', 'Date Closed', 'Linked Items']
                         
                         st.dataframe(
                             display_data[display_columns],
@@ -885,7 +902,8 @@ def main():
                             column_config={
                                 "Formatted Value": "Revenue ($)",
                                 "Date Created": "Date Created",
-                                "Date Closed": "Date Closed"
+                                "Date Closed": "Date Closed",
+                                "Linked Items": "Linked Items"
                             }
                         )
                     else:

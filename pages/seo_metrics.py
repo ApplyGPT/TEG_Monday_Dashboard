@@ -82,6 +82,17 @@ def main():
         sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox">
     </iframe>
     """, height=920)
+    st.components.v1.html("""
+    <iframe 
+        src="https://docs.google.com/spreadsheets/d/11ZymjS8bUognebcbbXLTgr9vViXTWk6yrct0HOLBTCQ/edit?usp=sharing&embedded=true" 
+        width="100%" 
+        height="800" 
+        frameborder="0" 
+        marginheight="0" 
+        marginwidth="0">
+        Loading...
+    </iframe>
+    """, height=820)
     
     st.markdown("---")
 
