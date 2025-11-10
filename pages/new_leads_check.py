@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import calendar
 import sys, os
 import json
+import plotly.express as px
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database_utils import (
@@ -280,56 +281,235 @@ def main():
         refresh = st.button("🔄 Refresh Data")
         st.info(f"Last Updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
 
+    if "nlc_selected_date" not in st.session_state:
+        st.session_state["nlc_selected_date"] = date.today()
+    selected_date = st.session_state["nlc_selected_date"]
+
     # If user requested refresh, clear cache BEFORE calling cached function
     if refresh:
         st.cache_data.clear()
 
-    # Date filter stays as-is (confirmed requirement)
-    st.subheader("📅 Select Date")
-    selected_date = st.date_input(
-        "Choose a date to view leads created on that day:",
-        value=date.today(),
-        help="Select the date to filter leads by their creation date",
-    )
-
-    # Try cached JSON first (fast path), regardless of selected month
-    df = pd.DataFrame()
-    daily_counts_cache = {}
     cache_path = _cache_file_path()
-    df, daily_counts_cache = try_load_cached_current_month_df(cache_path)
+    cached_df, cached_daily_counts = try_load_cached_current_month_df(cache_path)
 
-    # Fallback to database if cache not present or if viewing past months
-    if df.empty:
-        with st.spinner("Loading leads data from database..."):
-            leads_data = get_all_leads_data_from_db()
-            df = format_leads_data(leads_data)
+    with st.spinner("Loading leads data from database..."):
+        leads_data = get_all_leads_data_from_db()
+    df_full = format_leads_data(leads_data)
 
-    if df.empty:
+    if df_full.empty:
         st.warning(
             "No leads data found. Please refresh the database from the 'Database Refresh' page."
         )
         return
 
-    st.subheader("Monthly Calendar View")
-    # Use pre-calculated daily counts if available for near-instantaneous load
-    daily_counts = get_daily_counts(df, selected_date, daily_counts_cache)
-    display_calendar_html(daily_counts, selected_date)
-    st.markdown("---")
-
-    filtered_df = filter_leads_by_date(df, selected_date)
-    if filtered_df.empty:
-        st.info(f"No leads were created on {selected_date:%B %d, %Y}.")
+    use_cached_calendar = False
+    if _is_current_month(selected_date) and not cached_df.empty:
+        df_calendar = cached_df.copy()
+        daily_counts_cache = cached_daily_counts
+        use_cached_calendar = True
     else:
-        st.metric("Leads Found", len(filtered_df))
-        st.dataframe(
-            filtered_df[["Item Name", "Current Board"]],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Item Name": "Item Name",
-                "Current Board": "Current Board",
-            },
+        df_calendar = df_full.copy()
+        daily_counts_cache = {}
+
+    # Prepare aggregated data for charts using full dataset
+    chart_df = df_full.dropna(subset=["Effective Date"]).copy()
+    if not chart_df.empty:
+        chart_df["Date"] = chart_df["Effective Date"].dt.date
+        last_date = max(chart_df["Date"])
+
+        # Daily counts for the past two weeks from the latest date
+        two_weeks_ago = last_date - timedelta(days=14)
+        mask_daily = (chart_df["Date"] >= two_weeks_ago) & (chart_df["Date"] <= last_date)
+        daily_counts_chart = (
+            chart_df.loc[mask_daily]
+            .groupby("Date")
+            .size()
+            .reset_index(name="Leads")
         )
+        full_daily_range = pd.date_range(two_weeks_ago, last_date, freq="D")
+        daily_counts_chart = (
+            pd.DataFrame({"Date": full_daily_range.date})
+            .merge(daily_counts_chart, on="Date", how="left")
+            .fillna({"Leads": 0})
+        )
+        daily_counts_chart["Leads"] = daily_counts_chart["Leads"].astype(int)
+        daily_counts_chart["Date"] = pd.to_datetime(daily_counts_chart["Date"])
+
+        # Weekly counts since the beginning of the current year
+        start_of_year = date(last_date.year, 1, 1)
+        mask_year = chart_df["Date"] >= start_of_year
+        chart_df_year = chart_df.loc[mask_year].copy()
+        if not chart_df_year.empty:
+            date_times = pd.to_datetime(chart_df_year["Date"])
+            chart_df_year["Week Start"] = date_times - pd.to_timedelta(date_times.dt.weekday, unit="d")
+            weekly_counts = (
+                chart_df_year.groupby("Week Start")
+                .size()
+                .reset_index(name="Leads")
+                .sort_values("Week Start")
+            )
+            first_week_start = min(weekly_counts["Week Start"])
+            week_range = pd.date_range(first_week_start, pd.to_datetime(last_date), freq="W-MON")
+            weekly_counts = (
+                pd.DataFrame({"Week Start": week_range})
+                .merge(weekly_counts, on="Week Start", how="left")
+                .fillna({"Leads": 0})
+            )
+            weekly_counts["Leads"] = weekly_counts["Leads"].astype(int)
+            weekly_counts["Week Start"] = pd.to_datetime(weekly_counts["Week Start"])
+            weekly_counts["Week End"] = weekly_counts["Week Start"] + pd.Timedelta(days=6)
+            weekly_counts["Week Label"] = weekly_counts.apply(
+                lambda row: f"{row['Week Start'].strftime('%b %d')} - {row['Week End'].strftime('%b %d')}",
+                axis=1,
+            )
+        else:
+            weekly_counts = pd.DataFrame()
+
+        # Monthly counts since January of the current year
+        chart_df_year["Month Start"] = pd.to_datetime(chart_df_year["Date"]).dt.to_period("M").dt.to_timestamp()
+        monthly_counts = (
+            chart_df_year.groupby("Month Start")
+            .size()
+            .reset_index(name="Leads")
+            .sort_values("Month Start")
+        )
+        month_range = pd.date_range(
+            start=start_of_year,
+            end=last_date,
+            freq="MS",
+        )
+        monthly_counts = (
+            pd.DataFrame({"Month Start": month_range})
+            .merge(monthly_counts, on="Month Start", how="left")
+            .fillna({"Leads": 0})
+        )
+        monthly_counts["Leads"] = monthly_counts["Leads"].astype(int)
+        monthly_counts["Month Label"] = monthly_counts["Month Start"].dt.strftime("%B %Y")
+    else:
+        daily_counts_chart = pd.DataFrame()
+        weekly_counts = pd.DataFrame()
+        monthly_counts = pd.DataFrame()
+
+    tab_calendar, tab_daily, tab_weekly, tab_monthly = st.tabs(
+        ["📅 Calendar View", "📅 Daily View", "📊 Weekly View", "📊 Monthly View"]
+    )
+
+    with tab_calendar:
+        st.subheader("📅 Select Date")
+        selected_date_input = st.date_input(
+            "Choose a date to view leads created on that day:",
+            value=st.session_state["nlc_selected_date"],
+            help="Select the date to filter leads by their creation date",
+        )
+        if selected_date_input != st.session_state["nlc_selected_date"]:
+            st.session_state["nlc_selected_date"] = selected_date_input
+        selected_date = st.session_state["nlc_selected_date"]
+
+        calendar_df = df_calendar
+        calendar_cache = daily_counts_cache
+        use_cache_for_selected = use_cached_calendar and _is_current_month(selected_date)
+        if not use_cache_for_selected:
+            calendar_df = df_full
+            calendar_cache = {}
+
+        calendar_counts = get_daily_counts(calendar_df, selected_date, calendar_cache)
+        filtered_df = filter_leads_by_date(calendar_df, selected_date)
+
+        st.subheader("Monthly Calendar View")
+        display_calendar_html(calendar_counts, selected_date)
+        st.markdown("---")
+
+        if filtered_df.empty:
+            st.info(f"No leads were created on {selected_date:%B %d, %Y}.")
+        else:
+            st.metric("Leads Found", len(filtered_df))
+            st.dataframe(
+                filtered_df[["Item Name", "Current Board"]],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Item Name": "Item Name",
+                    "Current Board": "Current Board",
+                },
+            )
+
+    with tab_daily:
+        if chart_df.empty or daily_counts_chart.empty:
+            st.info("No daily lead activity to display.")
+        else:
+            fig_daily = px.bar(
+                daily_counts_chart,
+                x="Date",
+                y="Leads",
+                title="Calls by Day (Past 2 Weeks)",
+                labels={"Date": "Date", "Leads": "Calls"},
+                color_discrete_sequence=["#1f77b4"],
+            )
+            fig_daily.update_layout(height=600, showlegend=False)
+            fig_daily.update_traces(
+                text=daily_counts_chart["Leads"],
+                textposition="outside",
+                textfont=dict(color="black"),
+            )
+            fig_daily.update_xaxes(
+                tickformat="%b %d",
+                tickmode="linear",
+                dtick=86400000,
+                tickangle=45,
+            )
+            st.plotly_chart(fig_daily, use_container_width=True)
+
+    with tab_weekly:
+        if chart_df.empty or weekly_counts.empty:
+            st.info("No weekly lead activity to display.")
+        else:
+            fig_weekly = px.bar(
+                weekly_counts,
+                x="Week Label",
+                y="Leads",
+                title="Calls by Week (Year to Date)",
+                labels={"Week Label": "Week", "Leads": "Calls"},
+                color_discrete_sequence=["#2ca02c"],
+            )
+            fig_weekly.update_layout(height=600, showlegend=False)
+            fig_weekly.update_traces(
+                text=weekly_counts["Leads"],
+                textposition="outside",
+                textfont=dict(color="black"),
+            )
+            fig_weekly.update_xaxes(tickangle=45)
+            st.plotly_chart(fig_weekly, use_container_width=True)
+
+    with tab_monthly:
+        if chart_df.empty or monthly_counts.empty:
+            st.info("No monthly lead activity to display.")
+        else:
+            fig_monthly = px.bar(
+                monthly_counts,
+                x="Month Label",
+                y="Leads",
+                title="Calls by Month (Year to Date)",
+                labels={"Month Label": "Month", "Leads": "Calls"},
+                color_discrete_sequence=["#ff7f0e"],
+            )
+            fig_monthly.update_layout(height=600, showlegend=False)
+            fig_monthly.update_traces(
+                text=monthly_counts["Leads"],
+                textposition="outside",
+                textfont=dict(color="black"),
+            )
+            month_order = ["January", "February", "March", "April", "May", "June",
+                           "July", "August", "September", "October", "November", "December"]
+            fig_monthly.update_xaxes(
+                categoryorder="array",
+                categoryarray=[
+                    label
+                    for label in [f"{m} {last_date.year}" for m in month_order]
+                    if label in monthly_counts["Month Label"].tolist()
+                ],
+                tickangle=45,
+            )
+            st.plotly_chart(fig_monthly, use_container_width=True)
 
 
 if __name__ == "__main__":

@@ -727,6 +727,7 @@ def main():
     with st.spinner("Loading leads data..."):
         all_leads = get_all_leads_for_sales_chart()
     
+    leads_with_dates = pd.DataFrame()
     if all_leads:
         # Convert to DataFrame
         leads_df = pd.DataFrame(all_leads)
@@ -739,14 +740,16 @@ def main():
         leads_with_dates = leads_with_dates[leads_with_dates['stage_date'].dt.year == 2025]
         
         if not leads_with_dates.empty:
-            # Add month-year column for grouping
-            leads_with_dates['Month Year'] = leads_with_dates['stage_date'].dt.to_period('M').astype(str)
+            # Add month columns for grouping and ordering
+            leads_with_dates['Month'] = leads_with_dates['stage_date'].dt.month
+            leads_with_dates['Month_Name'] = leads_with_dates['stage_date'].dt.strftime('%B')
             
             # Count leads by category and month
-            category_counts = leads_with_dates.groupby(['Month Year', 'category']).size().reset_index(name='count')
+            category_counts = leads_with_dates.groupby(['Month', 'Month_Name', 'category']).size().reset_index(name='count')
+            category_counts = category_counts.sort_values('Month')
             
             # Create pivot table for easier charting
-            category_pivot = category_counts.pivot(index='Month Year', columns='category', values='count').fillna(0)
+            category_pivot = category_counts.pivot(index='Month_Name', columns='category', values='count').fillna(0)
             
             # Ensure we have the main categories
             main_categories = ['New Leads', 'Discovery Call', 'Design Review Call', 'Deck Call']
@@ -756,6 +759,12 @@ def main():
             
             # Reorder columns
             category_pivot = category_pivot[main_categories]
+            
+            # Ensure consistent month order on x-axis
+            month_order = ['January', 'February', 'March', 'April', 'May', 'June',
+                           'July', 'August', 'September', 'October', 'November', 'December']
+            available_months = [month for month in month_order if month in category_pivot.index]
+            category_pivot = category_pivot.reindex(available_months).fillna(0)
             
             # Create bar chart using go.Figure for better control
             fig_leads = go.Figure()
@@ -796,6 +805,10 @@ def main():
                 barmode='group',  # Side-by-side bars
                 height=500,
                 showlegend=True,
+                xaxis=dict(
+                    categoryorder='array',
+                    categoryarray=available_months
+                ),
                 legend=dict(
                     orientation="h",   # horizontal
                     yanchor="top",
@@ -810,6 +823,72 @@ def main():
             st.info("No leads data with valid dates available.")
     else:
         st.info("No leads data available.")
+    
+    st.markdown("---")
+    st.subheader("Close Rate by Month - 2025")
+    
+    sales_leads_df = pd.DataFrame()
+    if not leads_with_dates.empty:
+        sales_leads_df = leads_with_dates[leads_with_dates['board'] == 'Sales'].copy()
+    
+    if not df_2025.empty and not sales_leads_df.empty:
+        # Prepare leads per month from Sales board
+        sales_leads_df['Month Year'] = sales_leads_df['stage_date'].dt.to_period('M').astype(str)
+        leads_per_month = sales_leads_df.groupby('Month Year').size().reset_index(name='Sales Leads')
+        
+        # Prepare closed deals per month
+        df_2025_close = df_2025.dropna(subset=['Close Date']).copy()
+        df_2025_close['Month Year'] = df_2025_close['Close Date'].dt.to_period('M').astype(str)
+        closed_per_month = df_2025_close.groupby('Month Year').size().reset_index(name='Closed Deals')
+        
+        # Merge and calculate close rate
+        close_rate_df = pd.merge(leads_per_month, closed_per_month, on='Month Year', how='outer').fillna(0)
+        close_rate_df['Month Year Date'] = pd.to_datetime(close_rate_df['Month Year'], format='%Y-%m')
+        close_rate_df['Month'] = close_rate_df['Month Year Date'].dt.month
+        close_rate_df['Month_Name'] = close_rate_df['Month Year Date'].dt.strftime('%B')
+        close_rate_df = close_rate_df.sort_values('Month')
+        close_rate_df['Sales Leads'] = close_rate_df['Sales Leads'].astype(int)
+        close_rate_df['Closed Deals'] = close_rate_df['Closed Deals'].astype(int)
+        close_rate_df['Close Rate'] = close_rate_df.apply(
+            lambda row: row['Closed Deals'] / row['Sales Leads'] if row['Sales Leads'] > 0 else 0,
+            axis=1
+        )
+        close_rate_df['Close Rate (%)'] = close_rate_df['Close Rate'] * 100
+        
+        month_order = ['January', 'February', 'March', 'April', 'May', 'June',
+                       'July', 'August', 'September', 'October', 'November', 'December']
+        available_months = [month for month in month_order if month in close_rate_df['Month_Name'].unique()]
+        close_rate_df = close_rate_df.sort_values('Month')
+        close_rate_df = close_rate_df.set_index('Month_Name').reindex(available_months).reset_index()
+        close_rate_df.rename(columns={'Month_Name': 'Month Label'}, inplace=True)
+        
+        # Plot close rate
+        fig_close_rate = go.Figure()
+        fig_close_rate.add_trace(go.Bar(
+            x=close_rate_df['Month Label'],
+            y=close_rate_df['Close Rate'],
+            marker_color='#1f77b4',
+            text=[f"{rate:.1%}" for rate in close_rate_df['Close Rate']],
+            textposition='outside',
+            textfont=dict(size=14, color='black'),
+            name='Close Rate'
+        ))
+        fig_close_rate.update_layout(
+            height=600,
+            xaxis_title='Month',
+            yaxis_title='Close Rate',
+            font=dict(size=14),
+            showlegend=False,
+            xaxis=dict(
+                categoryorder='array',
+                categoryarray=available_months
+            )
+        )
+        fig_close_rate.update_yaxes(tickformat='.0%')
+        st.plotly_chart(fig_close_rate, use_container_width=True)
+        
+    else:
+        st.info("Close rate data is unavailable. Ensure there are Sales board leads and closed deals for the selected period.")
 
 if __name__ == "__main__":
     main()

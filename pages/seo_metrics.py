@@ -64,7 +64,11 @@ def main():
     st.markdown('<div style="padding-bottom: 1rem;"><h1>📈 SEO Metrics Dashboard</h1></div>', unsafe_allow_html=True)
     
     # Display goal metrics image below the title and before the dashboard
-    st.image("inputs/goal_metrics.png", use_container_width=True)
+    col_img1, col_img2 = st.columns(2, gap="medium")
+    with col_img1:
+        st.image("inputs/goal_metrics.png", use_container_width=True)
+    with col_img2:
+        st.image("inputs/image (11).png", use_container_width=True)
     
     st.markdown("---")
     
