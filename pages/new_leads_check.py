@@ -441,7 +441,7 @@ def main():
                 daily_counts_chart,
                 x="Date",
                 y="Leads",
-                title="Calls by Day (Past 2 Weeks)",
+                title="Leads by Day (Past 2 Weeks)",
                 labels={"Date": "Date", "Leads": "Calls"},
                 color_discrete_sequence=["#1f77b4"],
             )
@@ -467,7 +467,7 @@ def main():
                 weekly_counts,
                 x="Week Label",
                 y="Leads",
-                title="Calls by Week (Year to Date)",
+                title="Leads by Week",
                 labels={"Week Label": "Week", "Leads": "Calls"},
                 color_discrete_sequence=["#2ca02c"],
             )
@@ -488,7 +488,7 @@ def main():
                 monthly_counts,
                 x="Month Label",
                 y="Leads",
-                title="Calls by Month (Year to Date)",
+                title="Leads by Month",
                 labels={"Month Label": "Month", "Leads": "Calls"},
                 color_discrete_sequence=["#ff7f0e"],
             )
