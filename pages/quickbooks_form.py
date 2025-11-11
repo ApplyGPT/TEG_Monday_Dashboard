@@ -374,19 +374,60 @@ def main():
             else:
                 st.warning("Please enter a credit amount greater than $0.00")
     
+    # Helper to build line items payload (used for preview and sending)
+    def build_line_items_payload(include_credits=True):
+        payload = []
+        base_subtotal = 0.0
+        
+        for item in st.session_state['line_items']:
+            quantity = item.get('quantity', 1) or 1
+            unit_price = float(item.get('amount', 0) or 0)
+            line_total = unit_price * quantity
+            base_subtotal += line_total
+            
+            payload.append({
+                'type': item.get('type', 'Line Item'),
+                'amount': line_total,
+                'quantity': quantity,
+                'unit_price': unit_price,
+                'description': item.get('type', 'Line Item'),
+                'line_description': item.get('name', '')
+            })
+        
+        cc_fee_amount = 0.0
+        if include_cc_fee and base_subtotal > 0:
+            cc_fee_amount = round(base_subtotal * 0.03, 2)
+            payload.append({
+                'type': 'Credit Card Processing Fee',
+                'amount': cc_fee_amount,
+                'quantity': 1,
+                'unit_price': cc_fee_amount,
+                'description': '3% Credit Card Processing Fee',
+                'line_description': 'Processing fee for credit card payments'
+            })
+        
+        credits_total = 0.0
+        if include_credits:
+            for credit in st.session_state.get('credits', []):
+                amount = float(credit.get('amount', 0) or 0)
+                credits_total += amount
+                payload.append({
+                    'type': 'Credits & Discounts',
+                    'amount': -amount,
+                    'quantity': 1,
+                    'unit_price': -amount,
+                    'description': credit.get('description', 'Discount'),
+                    'line_description': credit.get('description', 'Discount')
+                })
+        
+        return payload, base_subtotal, cc_fee_amount, credits_total
+    
+    # Build preview payload and totals
+    preview_line_items, base_subtotal, cc_fee_amount, credits_total = build_line_items_payload()
+    total_amount = round(base_subtotal + cc_fee_amount - credits_total, 2)
+    
     # Calculate and display total
     st.subheader("Invoice Summary")
-    
-    # Calculate totals from line items only
-    additional_items_total = sum(item['amount'] * item['quantity'] for item in st.session_state['line_items'])
-    credits_total = sum(credit['amount'] for credit in st.session_state.get('credits', []))
-    
-    # Calculate credit card fee if enabled
-    cc_fee = 0
-    if include_cc_fee and additional_items_total > 0:
-        cc_fee = additional_items_total * 0.03
-    
-    total_amount = additional_items_total + cc_fee - credits_total
     
     # Display breakdown
     col1, col2 = st.columns(2)
@@ -395,20 +436,22 @@ def main():
         st.markdown("**<span style='font-size: 18px'>Amount Breakdown:</span>**", unsafe_allow_html=True)
         if st.session_state['line_items']:
             for item in st.session_state['line_items']:
-                item_total = item['amount'] * item['quantity']
+                quantity = item.get('quantity', 1) or 1
+                unit_price = float(item.get('amount', 0) or 0)
+                line_total = unit_price * quantity
                 item_name = item.get('type', 'Line Item')
                 item_desc = item.get('name', '')
                 display_text = f"{item_name}" + (f" ({item_desc})" if item_desc else "")
                 if item['quantity'] > 1:
-                    st.write(f"• {display_text}: $ {item['amount']:,.2f} × {item['quantity']} = $ {item_total:,.2f}")
+                    st.write(f"• {display_text}: $ {unit_price:,.2f} × {item['quantity']} = $ {line_total:,.2f}")
                 else:
-                    st.write(f"• {display_text}: $ {item_total:,.2f}")
+                    st.write(f"• {display_text}: $ {unit_price:,.2f}")
         else:
             st.write("• No line items added yet")
         
         # Display credit card fee if enabled
-        if include_cc_fee and cc_fee > 0:
-            st.write(f"• Credit Card Processing Fee (3%): $ {cc_fee:,.2f}")
+        if include_cc_fee and cc_fee_amount > 0:
+            st.write(f"• Credit Card Processing Fee (3%): $ {cc_fee_amount:,.2f}")
         
         # Display credits
         for credit in st.session_state.get('credits', []):
@@ -429,7 +472,7 @@ def main():
     
     # Check if at least one line item is added
     if not st.session_state.get('line_items', []):
-        st.error("❌ Please add at least one line item to create an invoice.")
+        st.warning("⚠️ Please add at least one line item to create an invoice.")
         return
     
     # Action button
@@ -437,44 +480,8 @@ def main():
     
     if st.button("💰 Create & Send Invoice", type="primary", use_container_width=False):
         with st.spinner("Creating and sending invoice..."):
-            # Prepare line items data
-            line_items_data = []
-            
-            # Add line items from the form
-            for item in st.session_state['line_items']:
-                item_type = item.get('type', 'Line Item')  # Fee type (main name)
-                item_description = item.get('name', '')  # Optional description
-                line_items_data.append({
-                    'type': item_type,  # Fee type as the main item name
-                    'amount': item['amount'],
-                    'quantity': item['quantity'],
-                    'description': item_type,
-                    'line_description': item_description  # Optional description
-                })
-            
-            # Add credit card processing fee if enabled
-            if include_cc_fee:
-                # Calculate fee based on line items total
-                line_items_total = sum(item['amount'] * item['quantity'] for item in st.session_state['line_items'])
-                if line_items_total > 0:
-                    cc_fee_amount = line_items_total * 0.03
-                    line_items_data.append({
-                        'type': 'Credit Card Processing Fee',
-                        'amount': cc_fee_amount,
-                        'quantity': 1,
-                        'description': '3% Credit Card Processing Fee',
-                        'line_description': 'Processing fee for credit card payments'
-                    })
-            
-            # Add credits as negative line items
-            for credit in st.session_state.get('credits', []):
-                line_items_data.append({
-                    'type': 'Credits & Discounts',  # Item name
-                    'amount': -credit['amount'],  # Negative amount for credit
-                    'quantity': 1,
-                    'description': credit['description'],  # Credit description
-                    'line_description': credit['description']  # Shows as description on invoice
-                })
+            # Prepare line items data using the shared builder
+            line_items_data, _, _, _ = build_line_items_payload(include_credits=True)
             
             # Create and send invoice
             success, message = quickbooks_api.create_and_send_invoice(

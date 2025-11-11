@@ -76,6 +76,16 @@ class QuickBooksAPI:
         self.base_url_verified = False  # Track if we've verified the base URL
         self.verified_via_preferences = False  # Track if we verified via preferences endpoint (companyinfo has cluster issues)
         self.customer_cluster_url = None  # Track cluster URL specifically for customer endpoints (may differ from base_url)
+        self._discount_account_id = None  # Cache discount account for discounts
+        self.debug_logging_enabled = False  # Toggle verbose debug logs
+
+    def _debug(self, message: str):
+        """Log internal debug info when debug logging is enabled."""
+        if getattr(self, "debug_logging_enabled", False):
+            try:
+                st.info(message)
+            except Exception:
+                pass
     
     def _normalize_quickbooks_url(self, url: str) -> str:
         """
@@ -341,7 +351,7 @@ class QuickBooksAPI:
         # Try each cluster URL
         for cluster_url in all_cluster_urls:
             try:
-                st.info(f"🔄 Trying customer operation on cluster: {cluster_url}")
+                self._debug(f"Trying customer operation on cluster: {cluster_url}")
                 # Try the operation with this cluster URL (DNS patch will handle DNS resolution)
                 # But always keep base_url as main production URL
                 original_base_url = self.base_url
@@ -352,7 +362,7 @@ class QuickBooksAPI:
                     normalized_cluster = self._normalize_quickbooks_url(cluster_url)
                     result = operation_func(normalized_cluster, *args, **kwargs)
                     if result:
-                        st.success(f"✅ Customer operation succeeded (DNS patch handled cluster resolution)")
+                        self._debug(f"Customer operation succeeded (DNS patch handled cluster resolution)")
                         # Keep using main production URL - DNS patch handles cluster resolution
                         self.base_url = "https://quickbooks.api.intuit.com"
                         self.base_url_verified = True
@@ -484,7 +494,7 @@ class QuickBooksAPI:
                 ]
             }
             
-            st.info("🔄 Trying customer creation via batch operation as fallback...")
+            self._debug("Trying customer creation via batch operation as fallback...")
             response = requests.post(batch_url, json=batch_payload, headers=headers, allow_redirects=True)
             
             if response.status_code in [200, 201]:
@@ -537,7 +547,7 @@ class QuickBooksAPI:
         try:
             location = response.headers.get('Location', '')
             if location:
-                st.info(f"🔄 Found Location header, trying to follow redirect: {location}")
+                self._debug(f"Found Location header, trying to follow redirect: {location}")
                 # Try to GET the redirect URL
                 redirect_response = requests.get(location, headers=headers, allow_redirects=True)
                 if redirect_response.status_code == 200:
@@ -677,10 +687,10 @@ class QuickBooksAPI:
                             # QuickBooks will proxy requests internally from the main domain even if it says wrong cluster
                             if self.verified_via_preferences:
                                 st.info("💡 Ignoring Wrong Cluster error - preferences endpoint confirms production")
-                                st.info("💡 Using main production URL - QuickBooks will proxy internally")
+                                self._debug("Using main production URL - QuickBooks will proxy internally")
                                 st.info("💡 Regional cluster domains (like qbo-usw2.api.intuit.com) cannot be resolved via DNS")
                                 # Refresh token and retry with main URL
-                                st.info("🔄 Refreshing token and retrying with main production URL...")
+                                self._debug("Refreshing token and retrying with main production URL...")
                                 if self.authenticate(force_refresh=True):
                                     headers["Authorization"] = f"Bearer {self.access_token}"
                                     try:
@@ -694,7 +704,7 @@ class QuickBooksAPI:
                                 return None
                             
                             # Only try cluster discovery if we haven't verified via preferences yet
-                            st.info("🔄 QuickBooks cluster mismatch detected. Discovering correct cluster...")
+                            self._debug("QuickBooks cluster mismatch detected. Discovering correct cluster...")
                             if self._discover_cluster_url():
                                 # Retry with discovered cluster URL
                                 try:
@@ -708,7 +718,7 @@ class QuickBooksAPI:
             pass
         
         # If not a cluster error, try to refresh the token
-        st.info("🔄 Access token expired, refreshing...")
+        self._debug("Access token expired, refreshing...")
         if self.authenticate(force_refresh=True):
             # Verify we have a valid token
             if not self.access_token or len(self.access_token) < 10:
@@ -756,7 +766,7 @@ class QuickBooksAPI:
                                         return None
                                     
                                     # Only try cluster discovery if we haven't verified via preferences yet
-                                    st.info("🔄 QuickBooks cluster mismatch detected. Discovering correct cluster...")
+                                    self._debug("QuickBooks cluster mismatch detected. Discovering correct cluster...")
                                     if self._discover_cluster_url():
                                         # Retry with discovered cluster URL
                                         try:
@@ -862,7 +872,7 @@ class QuickBooksAPI:
                         with open(secrets_path, 'w') as f:
                             toml.dump(secrets_config, f)
                         
-                        st.success("🔄 QuickBooks refresh token automatically updated in secrets.toml")
+                        self._debug("QuickBooks refresh token automatically updated in secrets.toml")
                     else:
                         st.warning("⚠️ New refresh token received but could not update secrets.toml")
                         st.code(f"refresh_token = \"{new_refresh_token}\"", language="toml")
@@ -1060,7 +1070,7 @@ class QuickBooksAPI:
                                             self.base_url = "https://quickbooks.api.intuit.com"
                                             self.base_url_verified = True
                                             self.verified_via_preferences = True
-                                            st.info("💡 Using main production URL - DNS patch will handle regional cluster DNS lookups")
+                                            self._debug("Using main production URL - DNS patch will handle regional cluster DNS lookups")
                                             return True
                                         
                                         # Check if final URL is different (redirect happened)
@@ -1070,7 +1080,7 @@ class QuickBooksAPI:
                                             if '/v3/company/' in final_url:
                                                 redirected_base_url = final_url.split('/v3/company/')[0]
                                                 if redirected_base_url in all_cluster_urls:
-                                                    st.info(f"🔄 Trying redirected cluster URL: `{redirected_base_url}`")
+                                                    self._debug(f"Trying redirected cluster URL: `{redirected_base_url}`")
                                                     # Try the redirected cluster URL (normalize to prevent DNS errors)
                                                     normalized_redirected_base = self._normalize_quickbooks_url(redirected_base_url)
                                                     redirected_url = self._normalize_quickbooks_url(
@@ -1089,7 +1099,7 @@ class QuickBooksAPI:
                         pass
                     
                     # If it's a 401 but not a Wrong Cluster error, try refreshing token
-                    st.info("🔄 Got 401, refreshing token...")
+                    self._debug("Got 401, refreshing token...")
                     if self.authenticate():
                         headers["Authorization"] = f"Bearer {self.access_token}"
                         response = requests.get(discovery_url, headers=headers, allow_redirects=True, timeout=10)
@@ -1144,9 +1154,9 @@ class QuickBooksAPI:
         else:
             alternative_cluster = "https://quickbooks.api.intuit.com"
         
-        st.info(f"🔄 Trying cluster URL with opposite sandbox setting: `{alternative_cluster}`")
+        self._debug(f"Trying cluster URL with opposite sandbox setting: `{alternative_cluster}`")
         # Refresh token again as tokens might be cluster-specific
-        st.info("🔄 Refreshing token for alternative cluster...")
+        self._debug("Refreshing token for alternative cluster...")
         if self.authenticate(force_refresh=True):
             headers["Authorization"] = f"Bearer {self.access_token}"
         
@@ -1243,7 +1253,7 @@ class QuickBooksAPI:
                     if new_base_url != self.base_url:
                         old_url = self.base_url
                         self.base_url = new_base_url
-                        st.info(f"🔄 QuickBooks cluster URL updated: {old_url} → {new_base_url}")
+                        self._debug(f"QuickBooks cluster URL updated: {old_url} → {new_base_url}")
                 
                 self.base_url_verified = True
                 return True
@@ -1312,7 +1322,7 @@ class QuickBooksAPI:
                                         return True  # Return True since cluster is already verified
                                     
                                     # Try to discover cluster URL
-                                    st.info("🔄 QuickBooks cluster mismatch detected. Discovering correct cluster...")
+                                    self._debug("QuickBooks cluster mismatch detected. Discovering correct cluster...")
                                     if self._discover_cluster_url():
                                         # Retry verification with new cluster URL
                                         company_url = self._normalize_quickbooks_url(
@@ -1370,7 +1380,7 @@ class QuickBooksAPI:
             st.info("✅ Cluster already verified via preferences - proceeding with customer creation")
         
         # Always refresh token before customer operations
-        st.info("🔄 Refreshing token for customer operations...")
+        self._debug("Refreshing token for customer operations...")
         self.authenticate(force_refresh=True)
         
         # FORCE use of main production URL - ignore Wrong Cluster errors
@@ -1378,8 +1388,8 @@ class QuickBooksAPI:
         # QuickBooks will proxy requests internally from the main domain even if it says wrong cluster
         self.base_url = "https://quickbooks.api.intuit.com"
         self.customer_cluster_url = None  # Don't use regional clusters (DNS resolution issues)
-        st.info("💡 Using main production URL: https://quickbooks.api.intuit.com")
-        st.info("💡 Ignoring Wrong Cluster errors - QuickBooks will proxy internally")
+        self._debug("Using main production URL: https://quickbooks.api.intuit.com")
+        self._debug("Ignoring Wrong Cluster errors - QuickBooks will proxy internally")
         if self.sandbox:
             st.info("🔧 Sandbox Mode: Using existing customer for testing")
             return self._get_or_create_sandbox_customer(first_name, last_name, email, company_name)
@@ -1460,7 +1470,7 @@ class QuickBooksAPI:
                     # IGNORE Wrong Cluster errors - just use main production URL
                     if self.verified_via_preferences:
                         st.info("💡 Verified via preferences but got 401 - refreshing token and retrying with main URL...")
-                        st.info("💡 Ignoring Wrong Cluster errors - QuickBooks will proxy internally")
+                        self._debug("Ignoring Wrong Cluster errors - QuickBooks will proxy internally")
                         if self.authenticate(force_refresh=True):
                             headers["Authorization"] = f"Bearer {self.access_token}"
                             try:
@@ -1505,7 +1515,7 @@ class QuickBooksAPI:
                                                 return customer_id
                                         
                                         # Try batch operations as fallback
-                                        st.info("🔄 Trying batch operations as fallback...")
+                                        self._debug("Trying batch operations as fallback...")
                                         customer_id = self._try_create_customer_via_batch(first_name, last_name, email, company_name)
                                         if customer_id:
                                             return customer_id
@@ -1572,7 +1582,7 @@ class QuickBooksAPI:
                         return customer_id
                     
                     # Try batch operations as fallback
-                    st.info("🔄 Trying batch operations as fallback...")
+                    self._debug("Trying batch operations as fallback...")
                     customer_id = self._try_create_customer_via_batch(first_name, last_name, email, company_name)
                     if customer_id:
                         return customer_id
@@ -1650,7 +1660,7 @@ class QuickBooksAPI:
             
             # If we get a 401, try to refresh the token and retry
             if response.status_code == 401:
-                st.info("🔄 Access token expired, refreshing...")
+                self._debug("Access token expired, refreshing...")
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
                     response = requests.get(query_url, headers=headers)
@@ -2130,73 +2140,19 @@ class QuickBooksAPI:
                                                  payment_terms, enable_payment_link, invoice_date)
         
         try:
-            # Use line items if provided, otherwise use contract amount
-            if line_items:
-                total_amount = sum(item['amount'] * item.get('quantity', 1) for item in line_items)
-                invoice_lines = []
-                
-                for item in line_items:
-                    quantity = item.get('quantity', 1)
-                    unit_price = item['amount']
-                    line_total = unit_price * quantity
-                    
-                    # Get line item details
-                    line_item_type = item.get('type', item.get('description', 'Service'))  # Fee type (main item name)
-                    line_item_description = item.get('line_description', item.get('name', ''))  # Optional description
-                    
-                    # Determine what to show based on the line item type
-                    if line_item_type == "Contract Services":
-                        # Main contract: Use "Contract Services" as item, show custom description
-                        item_id = self._find_best_item_match(line_item_type, show_match_info=False)
-                        full_description = line_item_description if line_item_description else ""  # "Summer Collection"
-                    elif line_item_type == "Credit Card Processing Fee":
-                        # CC Fee: Use "Credit Card Processing Fee" as item, add description
-                        item_id = self._find_best_item_match(line_item_type, show_match_info=False)
-                        full_description = "3% processing fee for credit card payments"
-                    elif line_item_type == "Credits & Discounts":
-                        # Credits: Use "Credits & Discounts" as item, credit description in description field
-                        item_id = self._find_best_item_match(line_item_type, show_match_info=False)
-                        full_description = line_item_description if line_item_description else item.get('description', '')
-                    else:
-                        # Additional line items: Use fee type as item, optional description
-                        item_id = self._find_best_item_match(line_item_type, show_match_info=False)
-                        full_description = line_item_description if line_item_description else ""
-                    
-                    invoice_lines.append({
-                        "Amount": line_total,
-                        "DetailType": "SalesItemLineDetail",
-                        "Description": full_description,  # Fee type only
-                        "SalesItemLineDetail": {
-                            "Qty": quantity,
-                            "UnitPrice": unit_price,
-                            "ItemRef": {
-                                "value": item_id  # Use "-" item
-                            }
-                        }
-                    })
-            else:
-                # Convert contract amount to float
-                amount_str = contract_amount.replace('$', '').replace(',', '')
-                amount = float(amount_str)
-                total_amount = amount
-                
-                # Find or create item for the description (e.g., "Contract Services")
-                item_id = self._find_best_item_match(description, show_match_info=False)
-                
-                invoice_lines = [
-                    {
-                        "DetailType": "SalesItemLineDetail",
-                        "Amount": amount,
-                        "SalesItemLineDetail": {
-                            "ItemRef": {
-                                "value": item_id  # Use matched or created item
-                            },
-                            "Qty": 1,
-                            "UnitPrice": amount
-                        },
-                        "Description": ""  # No additional description needed
-                    }
-                ]
+            payload = self._build_invoice_payload(
+                customer_id=customer_id,
+                email=email,
+                company_name=company_name,
+                client_address=client_address,
+                contract_amount=contract_amount,
+                description=description,
+                line_items=line_items,
+                payment_terms=payment_terms,
+                enable_payment_link=enable_payment_link,
+                invoice_date=invoice_date,
+                invoice_number=None
+            )
             
             invoice_url = self._normalize_quickbooks_url(
                 f"{self.base_url}/v3/company/{self.company_id}/invoice"
@@ -2209,54 +2165,11 @@ class QuickBooksAPI:
                 "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
-            # Set invoice date - this shows in the DATE column for each line
-            if invoice_date:
-                txn_date = invoice_date.strftime("%Y-%m-%d") if hasattr(invoice_date, 'strftime') else str(invoice_date)
-            else:
-                txn_date = datetime.now().strftime("%Y-%m-%d")
-            
-            # Create invoice data using correct format
-            invoice_data = {
-                "CustomerRef": {
-                    "value": customer_id
-                },
-                "TxnDate": txn_date,
-                "DueDate": txn_date,  # Due in Full means due immediately
-                "Line": invoice_lines,
-                "EmailStatus": "NotSet",
-                "AllowOnlinePayment": enable_payment_link,
-                "AllowOnlineCreditCardPayment": enable_payment_link,
-                "AllowOnlineACHPayment": enable_payment_link
-            }
-            
-            # Add company name and address to BillToAddr so it appears between person's name and address on invoice
-            if company_name or client_address:
-                bill_to = {}
-                if company_name:
-                    bill_to["CompanyName"] = company_name
-                if client_address:
-                    # Parse the address - assume single line format
-                    bill_to["Line1"] = client_address
-                invoice_data["BillToAddr"] = bill_to
-            
-            # Add payment terms - always set them explicitly
-            if payment_terms == "Due in Full":
-                # For "Due in Full", we don't set SalesTermRef (defaults to Due on Receipt)
-                pass
-            else:
-                # For Net terms, set the appropriate term
-                invoice_data["SalesTermRef"] = {
-                    "value": self._get_payment_term_id(payment_terms)
-                }
-            
-            # Invoice object should be at root level, not wrapped
-            payload = invoice_data
-            
             response = requests.post(invoice_url, json=payload, headers=headers)
             
             # If we get a 401, try to refresh the token and retry
             if response.status_code == 401:
-                st.info("🔄 Access token expired, refreshing...")
+                self._debug("Access token expired, refreshing...")
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
                     response = requests.post(invoice_url, json=payload, headers=headers)
@@ -2268,6 +2181,11 @@ class QuickBooksAPI:
             if response.status_code != 200:
                 st.error(f"❌ QuickBooks API Error (Status {response.status_code})")
                 st.error(f"Response: {response.text[:500]}")
+                try:
+                    st.info("📦 Invoice payload sent to QuickBooks:")
+                    st.code(json.dumps(self._scrub_invoice_payload_for_logging(payload), indent=2))
+                except Exception:
+                    pass
                 return None
             
             invoice_response = response.json()
@@ -2288,6 +2206,200 @@ class QuickBooksAPI:
         except Exception as e:
             st.error(f"Unexpected error creating invoice: {str(e)}")
             return None
+
+    def _build_invoice_payload(
+        self,
+        customer_id: str,
+        email: Optional[str],
+        company_name: Optional[str],
+        client_address: Optional[str],
+        contract_amount: str,
+        description: str,
+        line_items: Optional[list],
+        payment_terms: str,
+        enable_payment_link: bool,
+        invoice_date: Optional[str],
+        invoice_number: Optional[str] = None
+    ) -> Dict:
+        """
+        Build the QuickBooks invoice payload that will be sent to the API.
+
+        This helper keeps payload construction testable and avoids including
+        unsupported fields such as AllowOnlinePayment.
+        """
+
+        if line_items:
+            invoice_lines = []
+
+            for item in line_items:
+                quantity = item.get('quantity', 1) or 1
+                total_amount = float(item.get('amount', 0) or 0)
+                line_item_type = item.get('type', item.get('description', 'Service'))
+                type_lower = (line_item_type or "").lower()
+                line_item_description = item.get('line_description', item.get('name', ''))
+
+                # Use DiscountLineDetail for discounts/negative entries
+                if total_amount < 0 or 'discount' in type_lower:
+                    discount_amount = abs(total_amount)
+                    description = line_item_description or item.get('description', 'Discount')
+
+                    invoice_lines.append({
+                        "Amount": round(discount_amount, 2),
+                        "DetailType": "DiscountLineDetail",
+                        "Description": description,
+                        "DiscountLineDetail": {
+                            "PercentBased": False,
+                            "DiscountAccountRef": {
+                                "value": self._get_discount_account_id()
+                            }
+                        }
+                    })
+                    continue
+
+                # Normalize quantity to positive values; adjust amount sign accordingly
+                if quantity == 0:
+                    quantity = 1
+                if quantity < 0:
+                    quantity = abs(quantity)
+                    total_amount = -total_amount
+
+                unit_price = float(item.get('unit_price', total_amount / quantity if quantity else total_amount))
+                unit_price = round(unit_price, 2)
+                line_total = round(unit_price * quantity, 2)
+
+                if line_item_type == "Contract Services":
+                    item_id = self._find_best_item_match(line_item_type, show_match_info=False)
+                    full_description = line_item_description if line_item_description else ""
+                elif line_item_type == "Credit Card Processing Fee":
+                    item_id = self._find_best_item_match(line_item_type, show_match_info=False)
+                    full_description = "3% processing fee for credit card payments"
+                elif line_item_type == "Credits & Discounts":
+                    item_id = self._find_best_item_match(line_item_type, show_match_info=False)
+                    full_description = line_item_description if line_item_description else item.get('description', '')
+                else:
+                    item_id = self._find_best_item_match(line_item_type, show_match_info=False)
+                    full_description = line_item_description if line_item_description else ""
+
+                invoice_lines.append({
+                    "Amount": line_total,
+                    "DetailType": "SalesItemLineDetail",
+                    "Description": full_description,
+                    "SalesItemLineDetail": {
+                        "Qty": quantity,
+                        "UnitPrice": unit_price,
+                        "ItemRef": {
+                            "value": item_id
+                        }
+                    }
+                })
+        else:
+            amount_str = contract_amount.replace('$', '').replace(',', '')
+            amount = float(amount_str)
+            item_id = self._find_best_item_match(description, show_match_info=False)
+            invoice_lines = [
+                {
+                    "DetailType": "SalesItemLineDetail",
+                    "Amount": amount,
+                    "SalesItemLineDetail": {
+                        "ItemRef": {
+                            "value": item_id
+                        },
+                        "Qty": 1,
+                        "UnitPrice": amount
+                    },
+                    "Description": ""
+                }
+            ]
+
+        if invoice_date:
+            txn_date = invoice_date.strftime("%Y-%m-%d") if hasattr(invoice_date, 'strftime') else str(invoice_date)
+        else:
+            txn_date = datetime.now().strftime("%Y-%m-%d")
+
+        invoice_data = {
+            "CustomerRef": {"value": customer_id},
+            "TxnDate": txn_date,
+            "DueDate": txn_date,
+            "Line": invoice_lines,
+            "EmailStatus": "NotSet"
+        }
+
+        if invoice_number:
+            invoice_data["DocNumber"] = str(invoice_number)
+        else:
+            invoice_data["AutoDocNumber"] = True
+
+        # QuickBooks does not accept online payment toggles on invoice creation.
+        # These must be configured in company preferences instead.
+
+        if email:
+            invoice_data["BillEmail"] = {"Address": email}
+
+        bill_addr = self._parse_bill_address(company_name, client_address)
+        if bill_addr:
+            invoice_data["BillAddr"] = bill_addr
+
+        if payment_terms != "Due in Full":
+            invoice_data["SalesTermRef"] = {
+                "value": self._get_payment_term_id(payment_terms)
+            }
+
+        return invoice_data
+
+    def _parse_bill_address(self, company_name: Optional[str], client_address: Optional[str]) -> Optional[Dict[str, str]]:
+        """
+        Convert company/address strings into QuickBooks BillAddr structure (Line1-Line5).
+        """
+        lines: list[str] = []
+
+        if company_name:
+            lines.append(company_name.strip())
+
+        if client_address:
+            parts = [part.strip() for part in client_address.split(",") if part.strip()]
+            lines.extend(parts)
+
+        if not lines:
+            return None
+
+        bill_addr: Dict[str, str] = {}
+        for idx, value in enumerate(lines[:5]):
+            bill_addr[f"Line{idx + 1}"] = value
+
+        return bill_addr
+
+    def _get_discount_account_id(self) -> str:
+        """
+        Retrieve (and cache) an account ID to use for DiscountLineDetail entries.
+        """
+        if self._discount_account_id:
+            return self._discount_account_id
+
+        # Default to the primary income account if a dedicated discount account isn't specified.
+        self._discount_account_id = self._get_default_income_account()
+        return self._discount_account_id
+
+    def _scrub_invoice_payload_for_logging(self, payload: Dict) -> Dict:
+        """
+        Prepare a sanitized copy of the invoice payload for debugging output.
+        Ensures all values are JSON-serializable and removes potentially sensitive data.
+        """
+        def scrub(value):
+            if isinstance(value, dict):
+                return {k: scrub(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [scrub(v) for v in value]
+            if isinstance(value, (datetime,)):
+                return value.isoformat()
+            if isinstance(value, float):
+                # Use standard two-decimal formatting for readability
+                return float(f"{value:.2f}")
+            return value
+
+        safe_payload = scrub(payload)
+
+        # Remove or mask anything that shouldn't be logged (currently none, but placeholder for future)
+        return safe_payload
     
     def _simulate_invoice_creation(self, customer_id: str, first_name: str, last_name: str, 
                                  email: str, company_name: str = None, client_address: str = None,
@@ -2444,7 +2556,7 @@ class QuickBooksAPI:
             
             # If we get a 401, try to refresh the token and retry
             if response.status_code == 401:
-                st.info("🔄 Access token expired, refreshing...")
+                self._debug("Access token expired, refreshing...")
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
                     response = requests.post(send_url, headers=headers)
