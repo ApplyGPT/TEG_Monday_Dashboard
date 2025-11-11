@@ -116,6 +116,9 @@ class DocxTemplateProcessor:
         doc = Document(output_path)
         
         # Prepare replacement values
+        clean_company_name = tegmade_for.strip() if tegmade_for else ''
+        has_company_name = bool(clean_company_name)
+
         replacement_values = {
             'CLIENT_NAME': client_name,
             'CONTRACT_DATE': contract_date,
@@ -124,11 +127,30 @@ class DocxTemplateProcessor:
             'SEWING_COST': self._format_contract_amount(sewing_cost) if sewing_cost else '$0.00',
             'PRE_PRODUCTION_FEE': self._format_contract_amount(pre_production_fee) if pre_production_fee else '$0.00',
             'TOTAL_DUE_AT_SIGNING': self._format_contract_amount(total_due_at_signing) if total_due_at_signing else '$0.00',
-            'TEGMADE_FOR': tegmade_for if tegmade_for else 'VITALINA GHINZELLI'
+            'TEGMADE_FOR': clean_company_name if has_company_name else ''
         }
         
         # Process replacements
         replacements_made = self._replace_text_in_document(doc, template_config['replacements'], replacement_values, template_config.get('multiple_replacements', {}))
+
+        # Remove company phrases when no company name provided
+        if not has_company_name:
+            self._remove_company_name_phrases(doc)
+
+        # Ensure key values remain bold after any removals or adjustments
+        bold_targets = [client_name]
+        if contract_amount:
+            bold_targets.append(replacement_values['CONTRACT_AMOUNT'])
+        if total_contract_amount:
+            bold_targets.append(replacement_values['TOTAL_CONTRACT_AMOUNT'])
+        if sewing_cost:
+            bold_targets.append(replacement_values['SEWING_COST'])
+        if pre_production_fee:
+            bold_targets.append(replacement_values['PRE_PRODUCTION_FEE'])
+        if total_due_at_signing:
+            bold_targets.append(replacement_values['TOTAL_DUE_AT_SIGNING'])
+
+        self._ensure_bold_values(doc, bold_targets)
         
         # Insert PDF (converted to image) after first paragraph for contract documents
         if uploaded_pdf and template_type in ['development_contract', 'production_contract']:
@@ -384,6 +406,132 @@ class DocxTemplateProcessor:
         self._process_images_and_logos(doc)
         
         return replacements_made
+
+    def _remove_company_name_phrases(self, doc):
+        """Remove 'and on behalf of' company text when no company name is provided."""
+
+        def process_paragraph(paragraph):
+            if not paragraph.runs:
+                return
+
+            phrase_pattern = re.compile(r'[\s,]*and\s+on\s+behalf\s+of', re.IGNORECASE)
+            placeholder_pattern = re.compile(r'\s*client\s+company\s+name', re.IGNORECASE)
+            while True:
+                combined_text = ''.join(run.text for run in paragraph.runs)
+
+                match_phrase = phrase_pattern.search(combined_text)
+                if match_phrase:
+                    start, end = match_phrase.span()
+                    self._remove_text_range_from_runs(paragraph.runs, start, end)
+                    continue
+
+                match_placeholder = placeholder_pattern.search(combined_text)
+                if match_placeholder:
+                    start, end = match_placeholder.span()
+                    self._remove_text_range_from_runs(paragraph.runs, start, end)
+                    continue
+
+                break
+
+        for paragraph in doc.paragraphs:
+            process_paragraph(paragraph)
+
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        process_paragraph(paragraph)
+
+        for section in doc.sections:
+            if section.header:
+                for paragraph in section.header.paragraphs:
+                    process_paragraph(paragraph)
+            if section.footer:
+                for paragraph in section.footer.paragraphs:
+                    process_paragraph(paragraph)
+
+    def _ensure_bold_values(self, doc, values):
+        """Ensure specified values remain bold within the document."""
+        clean_values = [v for v in values if isinstance(v, str) and v.strip()]
+        if not clean_values:
+            return
+
+        for paragraph in doc.paragraphs:
+            self._apply_bold_to_values(paragraph.runs, clean_values)
+
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    for paragraph in cell.paragraphs:
+                        self._apply_bold_to_values(paragraph.runs, clean_values)
+
+        for section in doc.sections:
+            if section.header:
+                for paragraph in section.header.paragraphs:
+                    self._apply_bold_to_values(paragraph.runs, clean_values)
+            if section.footer:
+                for paragraph in section.footer.paragraphs:
+                    self._apply_bold_to_values(paragraph.runs, clean_values)
+
+    def _apply_bold_to_values(self, runs, values):
+        """Apply bold formatting to all occurrences of the provided values within the given runs."""
+        if not runs:
+            return
+
+        combined_text = ''.join(run.text for run in runs)
+        if not combined_text:
+            return
+
+        for value in values:
+            start_idx = 0
+            value_len = len(value)
+            while True:
+                idx = combined_text.find(value, start_idx)
+                if idx == -1:
+                    break
+                self._set_bold_range_in_runs(runs, idx, idx + value_len)
+                start_idx = idx + value_len
+
+    def _set_bold_range_in_runs(self, runs, start, end):
+        """Set bold formatting for characters between the specified indexes across runs."""
+        if start >= end:
+            return
+
+        position = 0
+        for run in runs:
+            text = run.text
+            length = len(text)
+            run_start = position
+            run_end = position + length
+
+            if run_end <= start or run_start >= end:
+                position += length
+                continue
+
+            run.bold = True
+            position += length
+
+    def _remove_text_range_from_runs(self, runs, start, end):
+        """Remove text from a list of runs between absolute character indexes."""
+        if start >= end:
+            return
+
+        position = 0
+        for run in runs:
+            text = run.text
+            length = len(text)
+            run_start = position
+            run_end = position + length
+
+            if run_end <= start or run_start >= end:
+                position += length
+                continue
+
+            relative_start = max(start - run_start, 0)
+            relative_end = min(end - run_start, length)
+
+            run.text = text[:relative_start] + text[relative_end:]
+            position += length
     
     def _replace_multiple_texts_with_bold(self, paragraph, replacements):
         """Replace multiple texts in a paragraph and make all replacements bold"""

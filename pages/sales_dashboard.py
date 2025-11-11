@@ -727,23 +727,126 @@ def main():
     else:
         st.info(f"No sales data available for {selected_year_category}.")
     
-    # Leads by Category Over Time Chart
     st.markdown("---")
-    st.subheader("Leads by Category Over Time - 2025")
+    st.subheader("Close Rate by Month - 2025")
     
-    # Get leads data for the chart
     with st.spinner("Loading leads data..."):
         all_leads = get_all_leads_for_sales_chart()
     
     leads_with_dates = pd.DataFrame()
     if all_leads:
-        # Convert to DataFrame
         leads_df = pd.DataFrame(all_leads)
-        
-        # Parse dates and filter for valid dates
         leads_df['stage_date'] = pd.to_datetime(leads_df['stage_date'], errors='coerce')
         leads_with_dates = leads_df.dropna(subset=['stage_date'])
+    else:
+        leads_df = pd.DataFrame()
+    
+    sales_leads_df = pd.DataFrame()
+    if not leads_with_dates.empty:
+        sales_leads_df = leads_with_dates[leads_with_dates['board'] == 'Sales'].copy()
+    
+    if not sales_leads_df.empty:
+        sales_leads_df['stage_date'] = pd.to_datetime(sales_leads_df['stage_date'], errors='coerce')
+        sales_leads_df = sales_leads_df.dropna(subset=['stage_date'])
+        sales_leads_df = sales_leads_df[sales_leads_df['stage_date'].dt.year == 2025]
         
+        if not sales_leads_df.empty:
+            if 'status' in sales_leads_df.columns:
+                lead_status_series = sales_leads_df['status'].fillna('').astype(str)
+            else:
+                lead_status_series = pd.Series('', index=sales_leads_df.index)
+            sales_leads_df['Lead Status'] = lead_status_series
+            
+            if 'assigned_person' in sales_leads_df.columns:
+                assigned_series = sales_leads_df['assigned_person'].fillna('').astype(str)
+            else:
+                assigned_series = pd.Series('', index=sales_leads_df.index)
+            sales_leads_df['Assigned Person'] = assigned_series.replace('', 'Unassigned')
+            
+            sales_leads_df['Month'] = sales_leads_df['stage_date'].dt.month
+            sales_leads_df['Month Label'] = sales_leads_df['stage_date'].dt.strftime('%B')
+            
+            totals = (
+                sales_leads_df
+                .groupby(['Month', 'Month Label', 'Assigned Person'])
+                .size()
+                .reset_index(name='Total Leads')
+            )
+            
+            closed_mask = sales_leads_df['Lead Status'].str.strip().str.lower().isin(['closed', 'win'])
+            closed = (
+                sales_leads_df[closed_mask]
+                .groupby(['Month', 'Month Label', 'Assigned Person'])
+                .size()
+                .reset_index(name='Closed Leads')
+            )
+            
+            close_rate_df = totals.merge(
+                closed,
+                on=['Month', 'Month Label', 'Assigned Person'],
+                how='left'
+            ).fillna({'Closed Leads': 0})
+            
+            close_rate_df['Closed Leads'] = close_rate_df['Closed Leads'].astype(int)
+            close_rate_df['Close Rate'] = close_rate_df['Closed Leads'] / close_rate_df['Total Leads']
+            close_rate_df['Close Rate Text'] = close_rate_df['Close Rate'].apply(
+                lambda x: f"{x:.1%}" if x > 0 else ""
+            )
+            
+            month_order = ['January', 'February', 'March', 'April', 'May', 'June',
+                           'July', 'August', 'September', 'October', 'November', 'December']
+            close_rate_df['Month Label'] = pd.Categorical(
+                close_rate_df['Month Label'],
+                categories=month_order,
+                ordered=True
+            )
+            close_rate_df = close_rate_df.sort_values(['Month Label', 'Assigned Person'])
+            
+            fig_close_rate = px.bar(
+                close_rate_df,
+                x='Month Label',
+                y='Close Rate',
+                color='Assigned Person',
+                barmode='group',
+                labels={'Month Label': 'Month', 'Close Rate': 'Close Rate'},
+                text='Close Rate Text',
+                color_discrete_sequence=px.colors.qualitative.Bold
+            )
+            fig_close_rate.update_layout(
+                height=600,
+                xaxis_title='Month',
+                yaxis_title='Close Rate',
+                font=dict(size=14),
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.2,
+                    xanchor="center",
+                    x=0.5,
+                    title=''
+                )
+            )
+            fig_close_rate.update_traces(
+                textposition='outside',
+                textfont=dict(size=12, color='black')
+            )
+            fig_close_rate.update_yaxes(tickformat='.0%')
+            fig_close_rate.update_xaxes(
+                categoryorder='array',
+                categoryarray=[m for m in month_order if m in close_rate_df['Month Label'].cat.categories]
+            )
+            st.plotly_chart(fig_close_rate, use_container_width=True)
+        else:
+            st.info("No Sales board leads found for 2025 to calculate close rate.")
+    else:
+        st.info("Close rate data is unavailable. Ensure there are Sales board leads for the selected period.")
+    
+    # Leads by Category Over Time Chart
+    st.markdown("---")
+    st.subheader("Leads by Category Over Time - 2025")
+    
+    # Leads by Category Over Time Chart reuses leads_with_dates (already loaded)
+    if not leads_with_dates.empty:
         # Filter for 2025 data only
         leads_with_dates = leads_with_dates[leads_with_dates['stage_date'].dt.year == 2025]
         
@@ -831,108 +934,6 @@ def main():
             st.info("No leads data with valid dates available.")
     else:
         st.info("No leads data available.")
-    
-    st.markdown("---")
-    st.subheader("Close Rate by Month - 2025")
-    
-    sales_leads_df = pd.DataFrame()
-    if not leads_with_dates.empty:
-        sales_leads_df = leads_with_dates[leads_with_dates['board'] == 'Sales'].copy()
-    
-    if not sales_leads_df.empty:
-        sales_leads_df['stage_date'] = pd.to_datetime(sales_leads_df['stage_date'], errors='coerce')
-        sales_leads_df = sales_leads_df.dropna(subset=['stage_date'])
-        sales_leads_df = sales_leads_df[sales_leads_df['stage_date'].dt.year == 2025]
-        
-        if not sales_leads_df.empty:
-            if 'status' in sales_leads_df.columns:
-                lead_status_series = sales_leads_df['status'].fillna('').astype(str)
-            else:
-                lead_status_series = pd.Series('', index=sales_leads_df.index)
-            sales_leads_df['Lead Status'] = lead_status_series
-            
-            if 'assigned_person' in sales_leads_df.columns:
-                assigned_series = sales_leads_df['assigned_person'].fillna('').astype(str)
-            else:
-                assigned_series = pd.Series('', index=sales_leads_df.index)
-            sales_leads_df['Assigned Person'] = assigned_series.replace('', 'Unassigned')
-            
-            sales_leads_df['Month'] = sales_leads_df['stage_date'].dt.month
-            sales_leads_df['Month Label'] = sales_leads_df['stage_date'].dt.strftime('%B')
-            
-            totals = (
-                sales_leads_df
-                .groupby(['Month', 'Month Label', 'Assigned Person'])
-                .size()
-                .reset_index(name='Total Leads')
-            )
-            
-            closed_mask = sales_leads_df['Lead Status'].str.strip().str.lower().isin(['closed', 'win'])
-            closed = (
-                sales_leads_df[closed_mask]
-                .groupby(['Month', 'Month Label', 'Assigned Person'])
-                .size()
-                .reset_index(name='Closed Leads')
-            )
-            
-            close_rate_df = totals.merge(
-                closed,
-                on=['Month', 'Month Label', 'Assigned Person'],
-                how='left'
-            ).fillna({'Closed Leads': 0})
-            
-            close_rate_df['Closed Leads'] = close_rate_df['Closed Leads'].astype(int)
-            close_rate_df['Close Rate'] = close_rate_df['Closed Leads'] / close_rate_df['Total Leads']
-            close_rate_df['Close Rate Text'] = close_rate_df['Close Rate'].apply(
-                lambda x: f"{x:.1%}" if x > 0 else ""
-            )
-            
-            month_order = ['January', 'February', 'March', 'April', 'May', 'June',
-                           'July', 'August', 'September', 'October', 'November', 'December']
-            close_rate_df['Month Label'] = pd.Categorical(
-                close_rate_df['Month Label'],
-                categories=month_order,
-                ordered=True
-            )
-            close_rate_df = close_rate_df.sort_values(['Month Label', 'Assigned Person'])
-            
-            fig_close_rate = px.bar(
-                close_rate_df,
-                x='Month Label',
-                y='Close Rate',
-                color='Assigned Person',
-                barmode='group',
-                labels={'Month Label': 'Month', 'Close Rate': 'Close Rate'},
-                text='Close Rate Text',
-                color_discrete_sequence=px.colors.qualitative.Bold
-            )
-            fig_close_rate.update_layout(
-                height=600,
-                xaxis_title='Month',
-                yaxis_title='Close Rate',
-                font=dict(size=14),
-                legend=dict(
-                    orientation="h",
-                    yanchor="top",
-                    y=-0.2,
-                    xanchor="center",
-                    x=0.5
-                )
-            )
-            fig_close_rate.update_traces(
-                textposition='outside',
-                textfont=dict(size=12, color='black')
-            )
-            fig_close_rate.update_yaxes(tickformat='.0%')
-            fig_close_rate.update_xaxes(
-                categoryorder='array',
-                categoryarray=[m for m in month_order if m in close_rate_df['Month Label'].cat.categories]
-            )
-            st.plotly_chart(fig_close_rate, use_container_width=True)
-        else:
-            st.info("No Sales board leads found for 2025 to calculate close rate.")
-    else:
-        st.info("Close rate data is unavailable. Ensure there are Sales board leads for the selected period.")
 
 if __name__ == "__main__":
     main()

@@ -102,6 +102,12 @@ def main():
         client_name_default = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
         email_default = data.get('email', '')
         contract_amount_default = data.get('contract_amount', '')
+        company_name_default = (
+            data.get('company_name')
+            or data.get('client_company_name')
+            or data.get('client_company')
+            or ''
+        )
         st.success("✅ Data loaded from Monday.com")
     else:
         # Fallback to URL parameters
@@ -111,6 +117,11 @@ def main():
         client_name_default = f"{first_name_default} {last_name_default}".strip()
         email_default = query_params.get('email', '')
         contract_amount_default = query_params.get('contract_amount', '')
+        company_name_default = (
+            query_params.get('company_name')
+            or query_params.get('client_company_name')
+            or ''
+        )
     
     # Form fields with auto-filled values
     st.subheader("Client Information")
@@ -129,13 +140,23 @@ def main():
             value=email_default,
             help="Enter the client's email address"
         )
-        
-        # Signature Name field
-        tegmade_for = st.text_input(
-            "Client Company Name",
-            value="",
-            help="Enter the name that will replace VITALINA GHINZELLI in the document"
+
+        company_name_default = company_name_default.strip()
+        company_name_enabled = st.checkbox(
+            "Company Name?",
+            value=bool(company_name_default),
+            help="Check if the client has a company name to include in the documents."
         )
+
+        if company_name_enabled:
+            tegmade_for = st.text_input(
+                "Client Company Name",
+                value=company_name_default,
+                key="company_name_input",
+                help="Enter the company name to include in the contract."
+            )
+        else:
+            tegmade_for = ""
     
     with col2:
         # Contract amount field (only show for development contracts)
