@@ -13,11 +13,16 @@ import streamlit as st
 
 try:
     from openpyxl import load_workbook
-    from openpyxl.styles import Font, Alignment
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, NamedStyle
+    from openpyxl.styles.numbers import FORMAT_CURRENCY_USD_SIMPLE, FORMAT_PERCENTAGE
 except Exception:  # pragma: no cover - fallback if dependency missing at runtime
     load_workbook = None
     Font = None
     Alignment = None
+    PatternFill = None
+    Border = None
+    Side = None
+    NamedStyle = None
 
 
 # Pricing constants
@@ -56,6 +61,51 @@ def calculate_base_price(num_styles: int, is_activewear: bool) -> float:
         return BASE_PRICE_LESS_THAN_5
     else:
         return BASE_PRICE_5_OR_MORE
+
+
+def copy_cell_formatting(source_cell, target_cell) -> None:
+    """Copy formatting (fill, border, alignment) from source to target cell."""
+    if PatternFill is None or Border is None or Alignment is None:
+        return
+    
+    try:
+        # Copy fill (background color)
+        if source_cell.fill and source_cell.fill.start_color:
+            target_cell.fill = PatternFill(
+                start_color=source_cell.fill.start_color,
+                end_color=source_cell.fill.end_color,
+                fill_type=source_cell.fill.fill_type
+            )
+        
+        # Copy border
+        if source_cell.border:
+            target_cell.border = Border(
+                left=source_cell.border.left,
+                right=source_cell.border.right,
+                top=source_cell.border.top,
+                bottom=source_cell.border.bottom
+            )
+        
+        # Copy alignment
+        if source_cell.alignment:
+            target_cell.alignment = Alignment(
+                horizontal=source_cell.alignment.horizontal,
+                vertical=source_cell.alignment.vertical,
+                wrap_text=source_cell.alignment.wrap_text,
+                shrink_to_fit=source_cell.alignment.shrink_to_fit,
+                indent=source_cell.alignment.indent
+            )
+    except Exception:
+        pass  # Skip if copying fails
+
+
+def apply_arial_20_font(cell) -> None:
+    """Apply Arial font size 20 to a cell."""
+    if Font is not None:
+        try:
+            cell.font = Font(name="Arial", size=20)
+        except Exception:
+            pass
 
 
 def safe_set_cell_value(ws, cell_ref: str, value) -> None:
@@ -228,13 +278,25 @@ def apply_development_package(
         rows_to_insert = (num_styles - 5) * 2
         ws.insert_rows(20, amount=rows_to_insert)
 
-        # Unmerge cells in style rows area to avoid MergedCell errors (only for > 5 styles)
-        # Calculate max row needed (style rows + totals row)
-        max_row_needed = 10 + num_styles * 2 + 2  # Add buffer
+        # Copy formatting from template row 18 to new rows (preserve colors, borders, alignment)
+        # New rows start at 20, 22, 24, etc.
+        template_row = 18  # Use row 18 as template for formatting
+        for i in range(rows_to_insert):
+            new_row = 20 + i
+            for col_idx in range(2, 13):  # Columns B through L
+                source_cell = ws.cell(row=template_row, column=col_idx)
+                target_cell = ws.cell(row=new_row, column=col_idx)
+                copy_cell_formatting(source_cell, target_cell)
+
+        # Unmerge cells only in newly inserted rows (row 20+) to avoid MergedCell errors
+        # Don't touch existing template rows (10-18) to preserve formatting
+        first_new_row = 20
+        last_new_row = 20 + rows_to_insert - 1
         merged_ranges_to_unmerge = []
         for merged_range in list(ws.merged_cells.ranges):
-            # Check if merged range overlaps with style rows area (columns B-L)
-            if (merged_range.min_row <= max_row_needed and merged_range.max_row >= 10) and \
+            # Only unmerge if the merged range is entirely within the newly inserted rows
+            # and in columns B-L
+            if (merged_range.min_row >= first_new_row and merged_range.max_row <= last_new_row) and \
                merged_range.min_col >= 2 and merged_range.max_col <= 12:  # Columns B-L
                 merged_ranges_to_unmerge.append(merged_range)
         
@@ -251,8 +313,8 @@ def apply_development_package(
     clear_style_rows(ws, num_styles=num_styles)
 
     # Generate row indices dynamically based on actual number of styles
-    # Pattern: rows 10, 12, 14, 16, 18, 20, 22, etc. (every other row)
-    # For N styles, we use rows: 10, 12, 14, ..., 10 + (N-1)*2
+    # Each style uses 2 rows (merged): 10-11, 12-13, 14-15, 16-17, 18-19, 20-21, etc.
+    # We write to the first row of each pair (10, 12, 14, 16, 18, 20, 22, etc.)
     dynamic_row_indices = []
     start_row = 10
     for i in range(num_styles):
@@ -267,30 +329,138 @@ def apply_development_package(
         # Calculate base price based on tiered pricing and activewear
         base_price = calculate_base_price(num_styles, is_activewear)
 
-        safe_set_cell_value(ws, f"B{row_idx}", idx + 1)
-        safe_set_cell_value(ws, f"C{row_idx}", style_name.upper())
-        safe_set_cell_value(ws, f"D{row_idx}", base_price)
-        # Set complexity - leave blank if 0, otherwise set the percentage
-        if complexity_pct == 0:
-            safe_set_cell_value(ws, f"E{row_idx}", None)
-            # When complexity is 0, total = base price
-            safe_set_cell_value(ws, f"F{row_idx}", f"=D{row_idx}")
-        else:
-            safe_set_cell_value(ws, f"E{row_idx}", complexity_pct / 100.0)
-            safe_set_cell_value(ws, f"F{row_idx}", f"=D{row_idx}*(1+E{row_idx})")
+        # Check if this is a new row (row_idx > 18) that needs Arial 20 font
+        is_new_row = num_styles > 5 and row_idx > 18
+        
+        # Each style row spans 2 rows (merged cells)
+        row_second = row_idx + 1
 
-        # Optional add-ons per row
+        # Merge cells for style row (if new row, merge after writing)
+        if is_new_row:
+            # Merge columns that need merging (based on template pattern)
+            merge_ranges = [
+                (3, 3, row_idx, row_second),  # Column C (STYLE)
+                (5, 5, row_idx, row_second),  # Column E (COMPLEXITY) - if needed
+            ]
+            # Only merge complexity if it has a value
+            if complexity_pct == 0:
+                merge_ranges = [(3, 3, row_idx, row_second)]  # Only merge STYLE column
+
+        # Write style number (#) - merge if new row, left-aligned
+        cell_b = ws.cell(row=row_idx, column=2)
+        cell_b.value = idx + 1
+        if is_new_row:
+            apply_arial_20_font(cell_b)
+            try:
+                ws.merge_cells(f"B{row_idx}:B{row_second}")
+                cell_b.alignment = Alignment(horizontal="left", vertical="center")
+            except Exception:
+                pass
+        
+        # Write style name (merged across 2 rows, left-aligned)
+        cell_c = ws.cell(row=row_idx, column=3)
+        cell_c.value = style_name.upper()
+        if is_new_row:
+            apply_arial_20_font(cell_c)
+            try:
+                ws.merge_cells(f"C{row_idx}:C{row_second}")
+                cell_c.alignment = Alignment(horizontal="left", vertical="center")
+            except Exception:
+                pass
+        # For existing rows (10-18), template already has cells merged, don't touch
+        
+        # Write base price (currency format, integer)
+        cell_d = ws.cell(row=row_idx, column=4)
+        cell_d.value = int(base_price)
+        cell_d.number_format = '$#,##0'  # Currency format
+        if is_new_row:
+            apply_arial_20_font(cell_d)
+            # Merge and center column D
+            try:
+                ws.merge_cells(f"D{row_idx}:D{row_second}")
+                cell_d.alignment = Alignment(horizontal="center", vertical="center")
+            except Exception:
+                pass
+        
+        # Set complexity - leave blank if 0, otherwise set the percentage
+        cell_e = ws.cell(row=row_idx, column=5)
+        if complexity_pct == 0:
+            cell_e.value = None
+            # When complexity is 0, total = base price
+            cell_f = ws.cell(row=row_idx, column=6)
+            cell_f.value = f"=D{row_idx}"
+            cell_f.number_format = '$#,##0'  # Currency format
+            if is_new_row:
+                apply_arial_20_font(cell_f)
+                # Merge and center column F
+                try:
+                    ws.merge_cells(f"F{row_idx}:F{row_second}")
+                    cell_f.alignment = Alignment(horizontal="center", vertical="center")
+                except Exception:
+                    pass
+        else:
+            cell_e.value = complexity_pct / 100.0
+            cell_e.number_format = '0%'  # Percentage format
+            if is_new_row:
+                apply_arial_20_font(cell_e)
+                try:
+                    ws.merge_cells(f"E{row_idx}:E{row_second}")
+                    cell_e.alignment = Alignment(horizontal="center", vertical="center")
+                except Exception:
+                    pass
+            # For existing rows (10-18), template already has cells merged, don't touch
+            cell_f = ws.cell(row=row_idx, column=6)
+            cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
+            cell_f.number_format = '$#,##0'  # Currency format
+            if is_new_row:
+                apply_arial_20_font(cell_f)
+                # Merge and center column F
+                try:
+                    ws.merge_cells(f"F{row_idx}:F{row_second}")
+                    cell_f.alignment = Alignment(horizontal="center", vertical="center")
+                except Exception:
+                    pass
+
+        # Optional add-ons per row (columns H, I, J, K)
         row_options = entry.get("options", {}) or {}
         row_optional_sum = 0.0
         for col_letter, key in optional_cells.items():
-            cell_ref = f"{col_letter}{row_idx}"
+            col_num = ord(col_letter) - 64  # Convert letter to column number
+            cell_opt = ws.cell(row=row_idx, column=col_num)
             if row_options.get(key):
-                price = OPTIONAL_PRICES[key]
-                safe_set_cell_value(ws, cell_ref, price)
+                price = int(OPTIONAL_PRICES[key])  # Ensure integer
+                cell_opt.value = price
+                cell_opt.number_format = '$#,##0'  # Currency format
+                if is_new_row:
+                    apply_arial_20_font(cell_opt)
+                    # Merge and center columns H, I, J, K
+                    try:
+                        ws.merge_cells(f"{col_letter}{row_idx}:{col_letter}{row_second}")
+                        cell_opt.alignment = Alignment(horizontal="center", vertical="center")
+                    except Exception:
+                        pass
                 row_optional_sum += price
             else:
-                safe_set_cell_value(ws, cell_ref, None)
-        safe_set_cell_value(ws, f"L{row_idx}", f"=SUM(H{row_idx}:K{row_idx})")
+                cell_opt.value = None
+                if is_new_row:
+                    apply_arial_20_font(cell_opt)
+                    # Merge and center even if empty
+                    try:
+                        ws.merge_cells(f"{col_letter}{row_idx}:{col_letter}{row_second}")
+                        cell_opt.alignment = Alignment(horizontal="center", vertical="center")
+                    except Exception:
+                        pass
+        
+        cell_l = ws.cell(row=row_idx, column=12)
+        cell_l.value = f"=SUM(H{row_idx}:K{row_idx})"
+        cell_l.number_format = '$#,##0'  # Currency format
+        if is_new_row:
+            apply_arial_20_font(cell_l)
+            try:
+                ws.merge_cells(f"L{row_idx}:L{row_second}")
+                cell_l.alignment = Alignment(horizontal="center", vertical="center")
+            except Exception:
+                pass
 
         total_development += base_price * (1 + complexity_pct / 100.0)
         total_optional += row_optional_sum
@@ -307,18 +477,128 @@ def apply_development_package(
             # Totals row shifts down by the number of rows we inserted
             totals_row = 20 + (num_styles - 5) * 2
         
+        # Unmerge any merged cells in the totals row to avoid issues
+        merged_ranges_to_unmerge = []
+        for merged_range in list(ws.merged_cells.ranges):
+            if (merged_range.min_row <= totals_row <= merged_range.max_row):
+                merged_ranges_to_unmerge.append(merged_range)
+        
+        for merged_range in merged_ranges_to_unmerge:
+            try:
+                min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
+                ws.unmerge_cells(f"{min_cell.coordinate}:{max_cell.coordinate}")
+            except Exception:
+                pass
+        
         # Set totals row labels
-        safe_set_cell_value(ws, f"B{totals_row}", "TOTAL DEVELOPMENT")
-        safe_set_cell_value(ws, f"H{totals_row}", "TOTAL OPTIONAL ADD-ONS")
+        cell_b_totals = ws.cell(row=totals_row, column=2)
+        cell_b_totals.value = "TOTAL DEVELOPMENT"
+        if Font is not None:
+            cell_b_totals.font = Font(bold=True)
         
-        # Set totals formulas
-        safe_set_cell_value(ws, f"F{totals_row}", f"=SUM(F{first_style_row}:F{last_style_row})")
-        safe_set_cell_value(ws, f"L{totals_row}", f"=SUM(L{first_style_row}:L{last_style_row})")
+        cell_h_totals = ws.cell(row=totals_row, column=8)
+        cell_h_totals.value = "TOTAL OPTIONAL ADD-ONS"
+        if Font is not None:
+            cell_h_totals.font = Font(bold=True)
         
-        # Center align the totals row cells
+        # Set totals formulas - sum all style rows (dynamic based on actual style rows)
+        cell_f_totals = ws.cell(row=totals_row, column=6)
+        cell_f_totals.value = f"=SUM(F{first_style_row}:F{last_style_row})"
+        cell_f_totals.number_format = '$#,##0'  # Currency format
+        if Font is not None:
+            cell_f_totals.font = Font(bold=True)
         if Alignment is not None:
-            ws[f"F{totals_row}"].alignment = Alignment(horizontal="center", vertical="center")
-            ws[f"L{totals_row}"].alignment = Alignment(horizontal="center", vertical="center")
+            cell_f_totals.alignment = Alignment(horizontal="center", vertical="center")
+        # Apply cell color #709171 to TOTAL DEVELOPMENT
+        if PatternFill is not None:
+            cell_f_totals.fill = PatternFill(start_color="709171", end_color="709171", fill_type="solid")
+        
+        cell_l_totals = ws.cell(row=totals_row, column=12)
+        cell_l_totals.value = f"=SUM(L{first_style_row}:L{last_style_row})"
+        cell_l_totals.number_format = '$#,##0'  # Currency format
+        if Font is not None:
+            cell_l_totals.font = Font(bold=True)
+        if Alignment is not None:
+            cell_l_totals.alignment = Alignment(horizontal="center", vertical="center")
+        # Apply cell color #f0cfbb to TOTAL OPTIONAL ADD-ONS
+        if PatternFill is not None:
+            cell_l_totals.fill = PatternFill(start_color="F0CFBB", end_color="F0CFBB", fill_type="solid")
+        
+        # Make all cells in totals row bold
+        if Font is not None:
+            for col_idx in range(1, 17):  # Columns A through P
+                cell = ws.cell(row=totals_row, column=col_idx)
+                if cell.font:
+                    cell.font = Font(
+                        name=cell.font.name,
+                        size=cell.font.size,
+                        bold=True,
+                        color=cell.font.color
+                    )
+                else:
+                    cell.font = Font(bold=True)
+        
+        # Apply Arial 20 font to totals row if it's a new row (num_styles > 5)
+        if num_styles > 5:
+            for col_idx in [2, 6, 8, 12, 14, 16]:  # Columns B, F, H, L, N, P
+                cell = ws.cell(row=totals_row, column=col_idx)
+                apply_arial_20_font(cell)
+                # Ensure bold is maintained
+                if Font is not None:
+                    cell.font = Font(
+                        name=cell.font.name,
+                        size=cell.font.size,
+                        bold=True,
+                        color=cell.font.color
+                    )
+        
+        # Update P10 and P12 to use dynamic references (they reference F20 and L20 statically)
+        # P10 should reference F{totals_row}, P12 should reference L{totals_row}
+        cell_p10 = ws.cell(row=10, column=16)  # Column P, row 10
+        if cell_p10.value and isinstance(cell_p10.value, str) and cell_p10.value.startswith("="):
+            if "F20" in cell_p10.value:
+                cell_p10.value = f"=F{totals_row}"
+        
+        cell_p12 = ws.cell(row=12, column=16)  # Column P, row 12
+        if cell_p12.value and isinstance(cell_p12.value, str) and cell_p12.value.startswith("="):
+            if "L20" in cell_p12.value:
+                cell_p12.value = f"=L{totals_row}"
+        
+        # Find and update "TOTAL DUE AT SIGNING" formula
+        # The label is in column N (14) and the formula is in column P (16) of the totals row
+        cell_n_totals = ws.cell(row=totals_row, column=14)  # Column N
+        if cell_n_totals.value and "TOTAL DUE AT SIGNING" in str(cell_n_totals.value).upper():
+            # Update the formula in column P to reference the dynamic totals row
+            cell_p_totals = ws.cell(row=totals_row, column=16)  # Column P
+            cell_p_totals.value = f"=F{totals_row}+L{totals_row}"
+            cell_p_totals.number_format = '$#,##0'  # Currency format
+            # Apply font size 20 and bold to TOTAL DUE AT SIGNING formula
+            if Font is not None:
+                cell_p_totals.font = Font(bold=True, size=20)
+            if Alignment is not None:
+                cell_p_totals.alignment = Alignment(horizontal="center", vertical="center")
+            # Apply cell color #ffff00 to TOTAL DUE AT SIGNING
+            if PatternFill is not None:
+                cell_p_totals.fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+            # Also make the label bold with size 20
+            if Font is not None:
+                cell_n_totals.font = Font(bold=True, size=20)
+        
+        # Also update any other formulas in column P that reference F20 or L20 statically
+        # Check a few rows around the totals row
+        for check_row in range(totals_row - 2, totals_row + 3):
+            cell_p = ws.cell(row=check_row, column=16)  # Column P
+            if cell_p.value and isinstance(cell_p.value, str) and cell_p.value.startswith("="):
+                # Check if it references F20 or L20 (static references)
+                if "F20" in cell_p.value or "L20" in cell_p.value:
+                    # Replace with dynamic references
+                    formula = cell_p.value.replace("F20", f"F{totals_row}").replace("L20", f"L{totals_row}")
+                    cell_p.value = formula
+                    if Font is not None:
+                        cell_p.font = Font(bold=True)
+                    if Alignment is not None:
+                        cell_p.alignment = Alignment(horizontal="center", vertical="center")
     else:
         safe_set_cell_value(ws, "F20", None)
         safe_set_cell_value(ws, "L20", None)
