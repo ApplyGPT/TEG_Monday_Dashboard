@@ -204,10 +204,10 @@ def update_header_labels(ws, client_name: str) -> None:
 def clear_style_rows(ws, num_styles: int = 0) -> None:
     """Blank out style rows (B–L) and the totals row, preserving format for <= 5 styles."""
     if num_styles <= 5:
-        # For 5 or fewer styles, only clear the actual style rows and totals row values
-        # Use safe_set_cell_value to preserve merged cell formatting
+        # For 5 or fewer styles, clear ALL template style rows (10-18) so past values don't remain
+        # Use safe_set_cell_value to preserve formatting/merges
         style_rows = [10, 12, 14, 16, 18]
-        for row_idx in style_rows[:num_styles]:  # Only clear rows for actual styles
+        for row_idx in style_rows:
             for col_letter in ['B', 'C', 'D', 'E', 'F', 'H', 'I', 'J', 'K', 'L']:
                 safe_set_cell_value(ws, f"{col_letter}{row_idx}", None)
         
@@ -552,6 +552,45 @@ def apply_development_package(
                         bold=True,
                         color=cell.font.color
                     )
+        else:
+            # For <=5 styles (totals_row==20), ensure Arial size 20 bold for key cells
+            for col_idx in [2, 6, 8, 12, 14, 16]:
+                cell = ws.cell(row=totals_row, column=col_idx)
+                if Font is not None:
+                    cell.font = Font(name="Arial", size=20, bold=True, color=cell.font.color if cell.font else None)
+        # Ensure P (column 16) is also Arial size 20 for <=5 styles
+        if num_styles <= 5:
+            cell_p_totals = ws.cell(row=totals_row, column=16)
+            if Font is not None:
+                cell_p_totals.font = Font(name="Arial", size=20, bold=True, color=cell_p_totals.font.color if cell_p_totals.font else None)
+        # Apply inferior (bottom) border to entire totals row
+        if Border is not None and Side is not None:
+            bottom_side = Side(style="thin")
+            for col_idx in range(1, 17):  # Columns A through P
+                cell = ws.cell(row=totals_row, column=col_idx)
+                # Skip columns A, G, M for bottom borders
+                if col_idx in [1, 7, 13]:
+                    new_bottom = cell.border.bottom
+                else:
+                    new_bottom = bottom_side
+                cell.border = Border(
+                    left=cell.border.left,
+                    right=cell.border.right,
+                    top=cell.border.top,
+                    bottom=new_bottom,
+                )
+
+        # Apply full borders (top/bottom/left/right) to key totals cells (B, F, H, L, N, P)
+        if Border is not None and Side is not None:
+            full_border = Border(
+                left=Side(style="thin"),
+                right=Side(style="thin"),
+                top=Side(style="thin"),
+                bottom=Side(style="thin"),
+            )
+            for col_idx in [2, 6, 8, 12, 14, 16]:
+                cell = ws.cell(row=totals_row, column=col_idx)
+                cell.border = full_border
         
         # Update P10 and P12 to use dynamic references (they reference F20 and L20 statically)
         # P10 should reference F{totals_row}, P12 should reference L{totals_row}
@@ -575,7 +614,7 @@ def apply_development_package(
             cell_p_totals.number_format = '$#,##0'  # Currency format
             # Apply font size 20 and bold to TOTAL DUE AT SIGNING formula
             if Font is not None:
-                cell_p_totals.font = Font(bold=True, size=20)
+                cell_p_totals.font = Font(name="Arial", size=20, bold=True, color=cell_p_totals.font.color if cell_p_totals.font else None)
             if Alignment is not None:
                 cell_p_totals.alignment = Alignment(horizontal="center", vertical="center")
             # Apply cell color #ffff00 to TOTAL DUE AT SIGNING
@@ -583,7 +622,7 @@ def apply_development_package(
                 cell_p_totals.fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
             # Also make the label bold with size 20
             if Font is not None:
-                cell_n_totals.font = Font(bold=True, size=20)
+                cell_n_totals.font = Font(name="Arial", size=20, bold=True, color=cell_n_totals.font.color if cell_n_totals.font else None)
         
         # Also update any other formulas in column P that reference F20 or L20 statically
         # Check a few rows around the totals row
@@ -596,7 +635,13 @@ def apply_development_package(
                     formula = cell_p.value.replace("F20", f"F{totals_row}").replace("L20", f"L{totals_row}")
                     cell_p.value = formula
                     if Font is not None:
-                        cell_p.font = Font(bold=True)
+                        existing_font = cell_p.font
+                        cell_p.font = Font(
+                            name=existing_font.name if existing_font and existing_font.name else "Arial",
+                            size=existing_font.size if existing_font and existing_font.size else 20,
+                            bold=True,
+                            color=existing_font.color if existing_font else None
+                        )
                     if Alignment is not None:
                         cell_p.alignment = Alignment(horizontal="center", vertical="center")
     else:
@@ -821,10 +866,19 @@ def main() -> None:
     st.markdown("---")
     st.markdown("**Add New Style**")
     add_cols = st.columns([2, 0.8, 1.2, 1.2, 1, 1, 1.2, 1])
+    # Ensure default values exist (placeholders only) without pre-filling
+    default_new_style = st.session_state.get("new_style_name", "")
+    default_new_activewear = st.session_state.get("new_activewear", False)
+    default_new_complexity = st.session_state.get("new_complexity", 0)
+    default_new_wash = st.session_state.get("new_wash_dye", False)
+    default_new_design = st.session_state.get("new_design", False)
+    default_new_source = st.session_state.get("new_source", False)
+    default_new_treatment = st.session_state.get("new_treatment", False)
+
     with add_cols[0]:
         new_style_name = st.text_input(
             "Style Name",
-            value="",
+            value=default_new_style,
             key="new_style_name",
             label_visibility="collapsed",
             placeholder="e.g., Dress, Winter Coat",
@@ -832,7 +886,7 @@ def main() -> None:
     with add_cols[1]:
         new_activewear = st.checkbox(
             "",
-            value=False,
+            value=default_new_activewear,
             key="new_activewear",
             label_visibility="visible",
         )
@@ -841,7 +895,7 @@ def main() -> None:
             "Complexity (%)",
             min_value=0,
             max_value=200,
-            value=100,
+            value=default_new_complexity,
             step=5,
             format="%d",
             key="new_complexity",
@@ -850,28 +904,28 @@ def main() -> None:
     with add_cols[3]:
         new_wash_dye = st.checkbox(
             "",
-            value=False,
+            value=default_new_wash,
             key="new_wash_dye",
             label_visibility="visible",
         )
     with add_cols[4]:
         new_design = st.checkbox(
             "",
-            value=False,
+            value=default_new_design,
             key="new_design",
             label_visibility="visible",
         )
     with add_cols[5]:
         new_source = st.checkbox(
             "",
-            value=False,
+            value=default_new_source,
             key="new_source",
             label_visibility="visible",
         )
     with add_cols[6]:
         new_treatment = st.checkbox(
             "",
-            value=False,
+            value=default_new_treatment,
             key="new_treatment",
             label_visibility="visible",
         )
@@ -889,6 +943,18 @@ def main() -> None:
                         "treatment": new_treatment,
                     },
                 })
+                # Reset add-new-style inputs so the next style starts blank/default
+                for key in [
+                    "new_style_name",
+                    "new_activewear",
+                    "new_complexity",
+                    "new_wash_dye",
+                    "new_design",
+                    "new_source",
+                    "new_treatment",
+                ]:
+                    if key in st.session_state:
+                        del st.session_state[key]
                 st.rerun()
             else:
                 st.warning("Please enter a style name before adding.")
