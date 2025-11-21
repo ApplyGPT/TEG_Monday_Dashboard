@@ -58,6 +58,8 @@ def create_ssl_disabled_session():
 
 # === QuickBooks DNS Fix ===
 # Apply DNS patch immediately when module is imported, before any QuickBooks API logic runs
+# DISABLED: DNS patch causes issues in production deployment environments
+ENABLE_DNS_PATCH = False
 
 def fix_quickbooks_dns():
     """
@@ -85,7 +87,10 @@ def fix_quickbooks_dns():
         print(f"⚠️ Failed to patch QuickBooks DNS: {e}")
 
 # Apply DNS patch immediately at module import time
-fix_quickbooks_dns()
+if ENABLE_DNS_PATCH:
+    fix_quickbooks_dns()
+else:
+    print("💡 QuickBooks DNS patch disabled - using native DNS resolution")
 # === End of DNS Fix ===
 
 class QuickBooksAPI:
@@ -133,20 +138,24 @@ class QuickBooksAPI:
     
     def _normalize_quickbooks_url(self, url: str) -> str:
         """
-        Patch for 'Wrong Cluster' + NameResolutionError.
-        Rewrites regional cluster URLs (e.g., qbo-usw2.api.intuit.com)
-        back to the main QuickBooks production endpoint, which proxies internally.
+        Normalize QuickBooks URLs based on DNS patch setting.
+        When DNS patch is disabled, preserve regional cluster URLs for native DNS resolution.
+        When DNS patch is enabled, rewrite to main production endpoint.
         
         Args:
             url: The URL that may contain regional cluster domains
             
         Returns:
-            str: Normalized URL using main production endpoint
+            str: Normalized URL
         """
         if not url:
             return "https://quickbooks.api.intuit.com"
         
-        # Rewrite all regional cluster URLs to main production URL
+        # If DNS patch is disabled, preserve regional cluster URLs for native DNS resolution
+        if not ENABLE_DNS_PATCH:
+            return url
+        
+        # If DNS patch is enabled, rewrite all regional cluster URLs to main production URL
         # This prevents DNS resolution errors while QuickBooks proxies internally
         normalized = url.replace("qbo-usw2.api.intuit.com", "quickbooks.api.intuit.com") \
                         .replace("qbo-na1.api.intuit.com", "quickbooks.api.intuit.com") \
