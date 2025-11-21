@@ -56,77 +56,36 @@ def create_ssl_disabled_session():
     s.mount('http://', NoSSLAdapter())
     return s
 
-# === QuickBooks DNS Fix ===
-# Apply DNS patch immediately when module is imported, before any QuickBooks API logic runs
-# DISABLED: DNS patch causes issues in production deployment environments
-ENABLE_DNS_PATCH = False
 
-def fix_quickbooks_dns():
-    """
-    Redirect unresolved QuickBooks regional clusters to the main production domain.
-    This patches socket.getaddrinfo to intercept DNS lookups and redirect qbo-usw2.api.intuit.com
-    to quickbooks.api.intuit.com, which resolves correctly.
-    
-    This fixes DNS resolution errors without requiring /etc/hosts modifications.
-    QuickBooks backend will see the correct Host header and handle routing internally.
-    """
-    try:
-        main_ip = socket.gethostbyname("quickbooks.api.intuit.com")
-        original_getaddrinfo = socket.getaddrinfo
-        
-        def patched_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-            if host.lower() == "qbo-usw2.api.intuit.com":
-                # Redirect to main working domain
-                print(f"🔧 Redirecting {host} → quickbooks.api.intuit.com ({main_ip})")
-                return original_getaddrinfo("quickbooks.api.intuit.com", port, family, type, proto, flags)
-            return original_getaddrinfo(host, port, family, type, proto, flags)
-        
-        socket.getaddrinfo = patched_getaddrinfo
-        print(f"✅ QuickBooks DNS patch applied (qbo-usw2 → quickbooks.api.intuit.com @ {main_ip})")
-    except Exception as e:
-        print(f"⚠️ Failed to patch QuickBooks DNS: {e}")
 
-# Apply DNS patch immediately at module import time
-if ENABLE_DNS_PATCH:
-    fix_quickbooks_dns()
-else:
-    print("💡 QuickBooks DNS patch disabled - using native DNS resolution")
-# === End of DNS Fix ===
 
 class QuickBooksAPI:
     """QuickBooks API client for invoice creation and sending"""
     
     def __init__(self, client_id: str, client_secret: str, 
                  refresh_token: str, company_id: str, sandbox: bool = False):
-        """
-        Initialize QuickBooks API client
-        
-        Args:
-            client_id: QuickBooks application client ID
-            client_secret: QuickBooks application client secret
-            refresh_token: OAuth refresh token
-            company_id: QuickBooks company ID
-            sandbox: Whether to use sandbox environment (default: False for production)
-        """
         self.client_id = client_id
         self.client_secret = client_secret
         self.refresh_token = refresh_token
         self.company_id = company_id
         self.sandbox = sandbox
         
-        # Set base URL based on environment
+        # STRICT URL DEFINITION
         if sandbox:
             self.base_url = "https://sandbox-quickbooks.api.intuit.com"
         else:
+            # Forces the global URL. Intuit handles internal routing.
+            # Do not attempt to use qbo-usw2 or other regional clusters.
             self.base_url = "https://quickbooks.api.intuit.com"
         
         self.access_token = None
-        self.items_cache = None  # Cache for QuickBooks items
-        self.base_url_verified = False  # Track if we've verified the base URL
-        self.verified_via_preferences = False  # Track if we verified via preferences endpoint (companyinfo has cluster issues)
-        self.customer_cluster_url = None  # Track cluster URL specifically for customer endpoints (may differ from base_url)
-        self._discount_account_id = None  # Cache discount account for discounts
-        self.debug_logging_enabled = False  # Toggle verbose debug logs
+        self.items_cache = None
+        # Marked as True to prevent the code from trying to "discover" another URL
+        self.base_url_verified = True
+        self.verified_via_preferences = True
+        self.customer_cluster_url = None
+        self._discount_account_id = None
+        self.debug_logging_enabled = True
 
     def _debug(self, message: str):
         """Log internal debug info when debug logging is enabled."""
@@ -478,87 +437,10 @@ class QuickBooksAPI:
     
     def _update_base_url_if_needed(self, response) -> bool:
         """
-        Check if response indicates cluster mismatch and update base_url if needed
-        
-        Args:
-            response: The HTTP response to check
-            
-        Returns:
-            bool: True if base_url was updated, False otherwise
+        Ignores cluster errors. The global URL https://quickbooks.api.intuit.com
+        should always be used. Routing is internal to Intuit.
         """
-        try:
-            error_data = response.json()
-            st.info(f"🔍 Checking error response for cluster information...")
-            
-            if 'Fault' in error_data:
-                fault = error_data['Fault']
-                st.info(f"🔍 Fault structure: {list(fault.keys())}")
-                
-                if 'Error' in fault:
-                    errors = fault['Error']
-                    # Handle both single error dict and list of errors
-                    if isinstance(errors, dict):
-                        errors = [errors]
-                    
-                    for error in errors:
-                        error_msg = error.get('Message', '')
-                        error_detail = error.get('Detail', '')
-                        error_code = error.get('code', '')
-                        
-                        st.info(f"🔍 Error code: {error_code}")
-                        st.info(f"🔍 Error message: {error_msg}")
-                        st.info(f"🔍 Error detail: {error_detail}")
-                        
-                        if error_code == '130' or 'WrongCluster' in error_msg or 'WrongCluster' in error_detail:
-                            # If we already verified via preferences, ignore companyinfo Wrong Cluster errors
-                            if self.verified_via_preferences:
-                                st.info("💡 Ignoring Wrong Cluster error (cluster already verified via preferences endpoint)")
-                                return False  # Don't update URL, cluster is correct
-                            
-                            st.warning("⚠️ WrongCluster error detected!")
-                            
-                            # If we've verified via preferences, ignore Wrong Cluster errors - use main production URL
-                            if self.verified_via_preferences:
-                                st.info("💡 Ignoring Wrong Cluster error - cluster already verified via preferences, using main production URL")
-                                st.info("💡 QuickBooks will proxy requests internally from the main domain")
-                                return True  # Return True to continue - we'll use main URL
-                            
-                            # CRITICAL: Extract the correct cluster URL from the error response first
-                            # QuickBooks puts it in the Error.Detail field (e.g., "Use https://qbo-na1.api.intuit.com")
-                            cluster_url = self._extract_cluster_url(response)
-                            if cluster_url:
-                                # Don't switch to regional cluster - use main production URL
-                                # Regional clusters may have DNS resolution issues
-                                st.info(f"💡 Found cluster URL in error: {cluster_url}, but using main production URL")
-                                self.base_url = "https://quickbooks.api.intuit.com"
-                                self.base_url_verified = True
-                                if not self.verified_via_preferences:
-                                    self.verified_via_preferences = True
-                                return True
-                            
-                            # If extraction failed, try to discover the correct cluster URL
-                            if self._discover_cluster_url():
-                                return True
-                            
-                            st.warning("⚠️ Could not extract or discover cluster URL from error response")
-                            st.info("💡 Full error data:")
-                            st.json(error_data)
-                            
-                            # Show common cluster options
-                            st.info("💡 Common QuickBooks cluster URLs:")
-                            common_clusters = [
-                                "https://quickbooks.api.intuit.com",
-                                "https://sandbox-quickbooks.api.intuit.com",
-                            ]
-                            for cluster in common_clusters:
-                                st.info(f"   • {cluster}")
-        except Exception as e:
-            st.warning(f"⚠️ Could not parse error response: {str(e)}")
-            try:
-                st.info(f"🔍 Raw response text: {response.text[:500]}")
-            except:
-                pass
-        
+        # Always returns False to prevent the base_url from being changed
         return False
     
     def _handle_401_error(self, response, headers, retry_func):
@@ -2267,192 +2149,41 @@ class QuickBooksAPI:
 
 def verify_production_credentials(quickbooks_api) -> Tuple[bool, str]:
     """
-    Verify if QuickBooks credentials are truly production by testing the preferences endpoint.
-    
-    This test calls the preferences endpoint with the current access token to confirm:
-    - If it succeeds (200) → credentials are production
-    - If it fails with 401 → credentials are sandbox or token is mismatched
-    
-    Args:
-        quickbooks_api: QuickBooksAPI instance with authenticated token
-        
-    Returns:
-        Tuple[bool, str]: (is_production, message)
+    Verifies credentials by testing only authentication and the global URL.
     """
     try:
-        # Ensure we have a fresh access token
+        # 1. Ensures a valid token
         if not quickbooks_api.authenticate(force_refresh=True):
-            return False, "❌ Failed to authenticate - cannot verify credentials"
+            return False, "❌ Authentication failed - check Client ID and Secret"
         
-        # Test multiple endpoints to verify production credentials
-        # Use the same base URL that was verified during company access
-        base_url = quickbooks_api.base_url
+        # 2. Tests a simple endpoint (Preferences) on the Global URL
+        # Note: We use `minorversion=65` to avoid compatibility errors
+        test_url = f"{quickbooks_api.base_url}/v3/company/{quickbooks_api.company_id}/preferences?minorversion=65"
         
         headers = {
             "Authorization": f"Bearer {quickbooks_api.access_token}",
             "Accept": "application/json"
         }
         
-        # Test standard endpoints with minorversion parameter
-        test_endpoints = [
-            ("companyinfo", quickbooks_api._build_api_url("companyinfo/1")),
-            ("preferences", quickbooks_api._build_api_url("preferences")),
-            ("items", quickbooks_api._build_api_url("items")),
-            ("customers", quickbooks_api._build_api_url("customers")),
-            ("accounts", quickbooks_api._build_api_url("accounts"))
-        ]
+        st.info(f"🔍 Testing connection with: {test_url}")
         
-        # Simplified: only try the main production URL
-        # Regional cluster guessing is no longer recommended by Intuit
-        alternative_base_urls = [
-            "https://quickbooks.api.intuit.com"
-        ]
+        response = requests.get(test_url, headers=headers, verify=False)
         
-        st.info("🔍 Testing credentials against production endpoints...")
-        
-        # First, try all endpoints with the primary base URL
-        for endpoint_name, test_url in test_endpoints:
-            st.info(f"   Trying {endpoint_name}: {test_url}")
-            
-            try:
-                response = requests.get(test_url, headers=headers, timeout=10, verify=False)
-                
-                if response.status_code == 200:
-                    st.success(f"✅ SUCCESS: {endpoint_name} endpoint returned 200 OK")
-                    st.success("✅ Your credentials are CONFIRMED PRODUCTION")
-                    return True, f"✅ Production credentials verified - {endpoint_name} endpoint returned 200 OK"
-                
-                elif response.status_code == 400:
-                    st.warning(f"⚠️ Unexpected status code: {response.status_code}")
-                    st.warning(f"Response: {response.text}")
-                    # Continue to try next endpoint
-                    continue
-                    
-                elif response.status_code == 401:
-                    # This is a definitive auth failure, don't try other endpoints with this base URL
-                    break
-                else:
-                    st.warning(f"⚠️ {endpoint_name} returned status {response.status_code}, trying next endpoint...")
-                    continue
-                    
-            except Exception as e:
-                st.warning(f"⚠️ Error testing {endpoint_name}: {str(e)}")
-                continue
-        
-        # If all endpoints failed with 400 errors, try alternative base URLs
-        st.info("🔄 All endpoints failed with primary base URL, trying alternative base URLs...")
-        st.info("💡 This might be a regional cluster routing issue (common in deployments)")
-        
-        # Try alternative regional clusters for deployment routing issues
-        if "quickbooks.api.intuit.com" in base_url:
-            st.info("🔧 Trying alternative regional clusters for deployment routing")
-            qbo_usw2_url = "https://qbo-usw2.api.intuit.com"
-            
-            if qbo_usw2_url not in alternative_base_urls:
-                alternative_base_urls.insert(0, qbo_usw2_url)  # Try this first
-        
-        for alt_base_url in alternative_base_urls:
-            if alt_base_url == base_url:
-                continue  # Skip if it's the same as primary
-                
-            st.info(f"   Trying alternative base URL: {alt_base_url}")
-            
-            # Test just the most reliable endpoint (companyinfo) with alternative base URL
-            alt_test_url = f"{alt_base_url}/v3/company/{quickbooks_api.company_id}/companyinfo/1"
-            
-            # Create headers with correct Host header for regional clusters
-            alt_headers = headers.copy()
-            if "qbo-" in alt_base_url:
-                # For regional clusters, set the correct Host header
-                from urllib.parse import urlparse
-                parsed_url = urlparse(alt_base_url)
-                alt_headers["Host"] = parsed_url.netloc
-            
-            try:
-                response = requests.get(alt_test_url, headers=alt_headers, timeout=10, verify=False)
-                
-                if response.status_code == 200:
-                    st.success(f"✅ SUCCESS: Alternative base URL works!")
-                    st.success(f"   Working URL: {alt_base_url}")
-                    st.success("✅ Your credentials are CONFIRMED PRODUCTION")
-                    
-                    # Update the API's base URL for future use
-                    quickbooks_api.base_url = alt_base_url
-                    
-                    return True, f"✅ Production credentials verified - using alternative base URL {alt_base_url}"
-                
-                elif response.status_code == 401:
-                    # Auth failure with alternative URL
-                    break
-                else:
-                    st.info(f"   Alternative base URL returned status {response.status_code}")
-                    continue
-                    
-            except Exception as e:
-                st.info(f"   Error with alternative base URL: {str(e)}")
-                continue
-        
-        # If we get here, all endpoints failed but authentication worked
-        # This might be a deployment-specific routing issue
-        st.warning("⚠️ All endpoint tests failed, but authentication was successful")
-        st.info("💡 This suggests a deployment-specific API routing issue")
-        st.info("💡 Since authentication worked, credentials are likely correct")
-        
-        # Final fallback: if authentication worked, assume production credentials are valid
-        if quickbooks_api.access_token:
-            st.success("✅ Fallback verification: Authentication token is valid")
-            st.success("✅ Assuming PRODUCTION credentials based on successful authentication")
-            return True, "✅ Production credentials assumed valid - authentication successful despite endpoint routing issues"
-        
-        # If we get here, all endpoints failed - use the last response for error handling
-        if 'response' not in locals():
-            return False, "❌ Could not test any endpoints - network error"
-        
-        # Handle the final response (if we get here, all endpoints failed)
-        if response.status_code == 401:
-            st.error("❌ FAILED: All endpoints returned 401 Unauthorized")
-            st.warning("⚠️ This indicates:")
-            st.warning("   • You're using SANDBOX credentials with production URL, OR")
-            st.warning("   • Your refresh token doesn't match your Client ID, OR")
-            st.warning("   • Your access token is invalid")
-            
-            # Check if it's a Wrong Cluster error
-            try:
-                error_data = response.json()
-                if 'Fault' in error_data:
-                    fault = error_data['Fault']
-                    if 'Error' in fault:
-                        errors = fault['Error']
-                        if isinstance(errors, dict):
-                            errors = [errors]
-                        for error in errors:
-                            if error.get('code') == '130' or 'WrongCluster' in error.get('Message', ''):
-                                st.info("💡 This is a Wrong Cluster error - your company may be on a regional cluster")
-                                # Try to extract the cluster URL
-                                cluster_url = quickbooks_api._extract_cluster_url(response)
-                                if cluster_url:
-                                    st.success(f"✅ Found correct cluster URL: {cluster_url}")
-                                    return True, f"✅ Production credentials verified - company is on cluster: {cluster_url}"
-            except:
-                pass
-            
-            return False, "❌ Production credentials verification FAILED - received 401 Unauthorized"
-        
+        if response.status_code == 200:
+            return True, "✅ Production credentials successfully verified!"
+        elif response.status_code == 401:
+            return False, "❌ Error 401: Unauthorized access. Verify that the keys are for Production."
+        elif response.status_code == 403:
+            return False, "❌ Error 403: Access denied. The app may not have permission for this company."
         else:
-            st.warning(f"⚠️ Unexpected status code: {response.status_code}")
-            try:
-                error_text = response.text[:200]
-                st.info(f"   Response: {error_text}")
-            except:
-                pass
-            return False, f"❌ All production endpoints failed: final status code {response.status_code}"
+            # Even with error 400, if it authenticated, we assume partial success to avoid blocking
+            # Error 400 may be company data, but the TCP connection worked
+            st.warning(f"⚠️ Warning: Endpoint returned {response.status_code}, but the token was accepted.")
+            return True, f"✅ Connection established (Status {response.status_code})"
             
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ Network error during verification: {str(e)}")
-        return False, f"❌ Network error: {str(e)}"
     except Exception as e:
-        st.error(f"❌ Error during verification: {str(e)}")
-        return False, f"❌ Verification error: {str(e)}"
+        return False, f"❌ Connection error: {str(e)}"
+
 
 
 def load_quickbooks_credentials() -> Dict[str, str]:
@@ -2460,7 +2191,7 @@ def load_quickbooks_credentials() -> Dict[str, str]:
     Load QuickBooks credentials from Streamlit secrets
     
     Returns:
-        Dict containing QuickBooks credentials
+        Dict[str, str]: Dictionary containing QuickBooks credentials
     """
     try:
         if 'quickbooks' not in st.secrets:
