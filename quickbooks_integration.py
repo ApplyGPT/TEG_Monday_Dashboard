@@ -138,196 +138,57 @@ class QuickBooksAPI:
     
     def _normalize_quickbooks_url(self, url: str) -> str:
         """
-        Normalize QuickBooks URLs based on DNS patch setting.
-        When DNS patch is disabled, preserve regional cluster URLs for native DNS resolution.
-        When DNS patch is enabled, rewrite to main production endpoint.
+        Simple URL normalization - just return the URL as-is.
+        QuickBooks global production URL should work without regional cluster manipulation.
         
         Args:
-            url: The URL that may contain regional cluster domains
+            url: The URL to normalize
             
         Returns:
-            str: Normalized URL
+            str: The same URL (no manipulation needed)
         """
         if not url:
-            return "https://quickbooks.api.intuit.com"
+            return self.base_url
         
-        # If DNS patch is disabled, preserve regional cluster URLs for native DNS resolution
-        if not ENABLE_DNS_PATCH:
-            return url
+        return url
+    
+    def _build_api_url(self, endpoint: str, query_params: dict = None) -> str:
+        """
+        Build a complete QuickBooks API URL with minorversion parameter.
         
-        # If DNS patch is enabled, rewrite all regional cluster URLs to main production URL
-        # This prevents DNS resolution errors while QuickBooks proxies internally
-        normalized = url.replace("qbo-usw2.api.intuit.com", "quickbooks.api.intuit.com") \
-                        .replace("qbo-na1.api.intuit.com", "quickbooks.api.intuit.com") \
-                        .replace("qbo-na2.api.intuit.com", "quickbooks.api.intuit.com") \
-                        .replace("qbo-eu1.api.intuit.com", "quickbooks.api.intuit.com") \
-                        .replace("qbo-eu2.api.intuit.com", "quickbooks.api.intuit.com")
+        Args:
+            endpoint: The API endpoint (e.g., 'customer', 'companyinfo/1', 'query')
+            query_params: Optional additional query parameters
+            
+        Returns:
+            str: Complete URL with minorversion parameter
+        """
+        base_url = f"{self.base_url}/v3/company/{self.company_id}/{endpoint}"
         
-        return normalized
+        # Always add minorversion to avoid 400 errors
+        params = {"minorversion": "65"}
+        
+        # Add any additional query parameters
+        if query_params:
+            params.update(query_params)
+        
+        # Build query string
+        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        
+        return f"{base_url}?{query_string}"
     
     def _extract_cluster_url(self, response) -> Optional[str]:
         """
-        Extract the correct cluster URL from QuickBooks error response.
-        Looks for regional cluster URLs like qbo-na1.api.intuit.com, qbo-eu1.api.intuit.com, etc.
-        
-        IMPORTANT: If cluster is already verified via preferences endpoint, this returns None
-        to prevent switching to regional clusters that can't be resolved via DNS.
+        Simplified cluster URL extraction - no longer recommended by Intuit.
+        Always return None to use the main production URL.
         
         Args:
-            response: The HTTP response that may contain cluster information
+            response: The HTTP response (ignored)
             
         Returns:
-            str: Correct cluster URL if found, None otherwise (or if preferences already verified)
+            None: Always use main production URL
         """
-        # If we've verified via preferences, don't extract cluster URLs - use main production URL only
-        if self.verified_via_preferences:
-            st.info("💡 Skipping cluster URL extraction - cluster already verified via preferences, using main production URL")
-            return None
-        
-        import re
-        try:
-            # Check ALL headers for cluster information first (log all headers for debugging)
-            st.info("🔍 Checking all response headers for cluster URL...")
-            st.info(f"🔍 All response headers:")
-            cluster_hint = None
-            for header_name, header_value in response.headers.items():
-                st.info(f"   {header_name}: {header_value[:150]}...")
-                
-                # Check for cluster hints in headers (e.g., usw2-prd, na1, eu1, etc.)
-                if header_value:
-                    # Look for regional indicators in headers like x-envoy-decorator-operation
-                    if 'usw2' in header_value.lower() or 'us-west-2' in header_value.lower():
-                        cluster_hint = "https://qbo-usw2.api.intuit.com"
-                        st.info(f"   💡 Found US West 2 hint in header '{header_name}'")
-                    elif 'na1' in header_value.lower() or 'north-america-1' in header_value.lower():
-                        cluster_hint = "https://qbo-na1.api.intuit.com"
-                        st.info(f"   💡 Found North America 1 hint in header '{header_name}'")
-                    elif 'na2' in header_value.lower() or 'north-america-2' in header_value.lower():
-                        cluster_hint = "https://qbo-na2.api.intuit.com"
-                        st.info(f"   💡 Found North America 2 hint in header '{header_name}'")
-                    elif 'eu1' in header_value.lower() or 'europe-1' in header_value.lower():
-                        cluster_hint = "https://qbo-eu1.api.intuit.com"
-                        st.info(f"   💡 Found Europe 1 hint in header '{header_name}'")
-                    elif 'eu2' in header_value.lower() or 'europe-2' in header_value.lower():
-                        cluster_hint = "https://qbo-eu2.api.intuit.com"
-                        st.info(f"   💡 Found Europe 2 hint in header '{header_name}'")
-                
-                if header_value and '.intuit.com' in header_value:
-                    st.info(f"   ✅ Found .intuit.com in header '{header_name}'")
-                    # Match any intuit.com URL
-                    urls = re.findall(r'https?://[^\s\)]+\.intuit\.com', header_value)
-                    if urls:
-                        cluster_url = urls[0].split('/v3/')[0].split('/v3/company/')[0]
-                        cluster_url = cluster_url.rstrip('/')
-                        st.info(f"✅ Extracted cluster URL from header '{header_name}': {cluster_url}")
-                        return cluster_url
-            
-            # If we found a cluster hint from headers, return it
-            if cluster_hint:
-                st.info(f"✅ Using cluster URL from header hint: {cluster_hint}")
-                return cluster_hint
-            
-            # Check response.history for redirects that happened before the final response
-            if hasattr(response, 'history') and response.history:
-                st.info(f"🔍 Found {len(response.history)} redirect(s) in response history")
-                for i, hist_response in enumerate(response.history):
-                    st.info(f"   Redirect {i+1}: {hist_response.status_code} -> {hist_response.url if hasattr(hist_response, 'url') else 'N/A'}")
-                    # Check Location header in redirect response
-                    hist_location = hist_response.headers.get('Location', '')
-                    if hist_location and '.intuit.com' in hist_location:
-                        match = re.search(r'(https?://[^/]+\.intuit\.com)', hist_location)
-                        if match:
-                            cluster_url = match.group(1).rstrip('/')
-                            st.info(f"✅ Extracted cluster URL from redirect history: {cluster_url}")
-                            return cluster_url
-            
-            # Check if response.url is different from the request URL (redirect happened)
-            if hasattr(response, 'url') and response.url:
-                st.info(f"🔍 Final Response URL: {response.url}")
-                # Check if the response URL is different from what we requested
-                # This indicates a redirect happened
-                if '/v3/company/' in response.url:
-                    # Extract cluster URL from the redirected URL
-                    redirected_cluster = response.url.split('/v3/company/')[0]
-                    if redirected_cluster and '.intuit.com' in redirected_cluster:
-                        st.info(f"✅ Extracted cluster URL from redirected response URL: {redirected_cluster}")
-                        return redirected_cluster.rstrip('/')
-            
-            # For 401 errors that say "will be redirected", try to manually follow the redirect
-            # Sometimes the redirect happens in a subsequent request
-            if response.status_code == 401 and 'redirect' in str(response.text).lower():
-                st.info("🔍 401 error mentions redirect - checking if we should follow redirect manually...")
-                # The redirect might be in a Retry-After header or we need to make a new request
-            
-            # Check Location header specifically (common redirect header)
-            location = response.headers.get('Location', '')
-            if location and '.intuit.com' in location:
-                # Extract base URL from location header
-                # Match any intuit.com URL (including regional clusters like qbo-na1.api.intuit.com)
-                match = re.search(r'(https?://[^/]+\.intuit\.com)', location)
-                if match:
-                    cluster_url = match.group(1)
-                    st.info(f"🔍 Extracted cluster URL from Location header: {cluster_url}")
-                    return cluster_url.rstrip('/')
-            
-            # Check error response body for cluster information
-            # This is the PRIMARY method - QuickBooks puts the correct cluster in Error.Detail
-            try:
-                error_data = response.json()
-                if 'Fault' in error_data:
-                    fault = error_data['Fault']
-                    if 'Error' in fault:
-                        errors = fault['Error']
-                        # Handle both single error dict and list of errors
-                        if isinstance(errors, dict):
-                            errors = [errors]
-                        
-                        for error in errors:
-                            error_msg = error.get('Message', '')
-                            error_detail = error.get('Detail', '')
-                            error_code = error.get('code', '')
-                            
-                            # Check for cluster URL in error detail (this is where QuickBooks puts it)
-                            # Example: "Use https://qbo-na1.api.intuit.com"
-                            st.info(f"🔍 Error Detail: {error_detail}")
-                            st.info(f"🔍 Error Message: {error_msg}")
-                            for text in [error_detail, error_msg]:
-                                if text and '.intuit.com' in text:
-                                    # Extract any intuit.com URL (including regional clusters)
-                                    # Match patterns like:
-                                    # - "Use https://qbo-na1.api.intuit.com"
-                                    # - "https://qbo-eu1.api.intuit.com/v3/company/..."
-                                    urls = re.findall(r'https?://[^\s\)]+\.intuit\.com', text)
-                                    if urls:
-                                        # Extract base URL (remove path after .com)
-                                        cluster_url = urls[0].split('/v3/')[0].split('/v3/company/')[0]
-                                        cluster_url = cluster_url.rstrip('/')
-                                        st.info(f"✅ Extracted cluster URL from error response: {cluster_url}")
-                                        st.info(f"   Source: {text[:100]}...")
-                                        return cluster_url
-                                elif text and ('redirect' in text.lower() or 'wrong server' in text.lower()):
-                                    # Even if no URL in text, log it for debugging
-                                    st.info(f"🔍 Found redirect/wrong server message but no URL: {text[:200]}")
-            except (ValueError, KeyError):
-                # Response might not be JSON, that's okay
-                pass
-            
-            # Check response headers for cluster information
-            www_authenticate = response.headers.get('WWW-Authenticate', '')
-            retry_after = response.headers.get('Retry-After', '')
-            for header_text in [www_authenticate, retry_after]:
-                if header_text and '.intuit.com' in header_text:
-                    urls = re.findall(r'https?://[^\s\)]+\.intuit\.com', header_text)
-                    if urls:
-                        cluster_url = urls[0].split('/v3/')[0].split('/v3/company/')[0]
-                        cluster_url = cluster_url.rstrip('/')
-                        st.info(f"🔍 Extracted cluster URL from header: {cluster_url}")
-                        return cluster_url
-                    
-        except Exception as e:
-            # Silently fail - cluster URL extraction is best effort
-            pass
-        
+        st.info("💡 Skipping cluster URL extraction - using main production URL")
         return None
     
     def _extract_customer_id_from_response(self, response) -> Optional[str]:
@@ -405,18 +266,18 @@ class QuickBooksAPI:
         for cluster_url in all_cluster_urls:
             try:
                 self._debug(f"Trying customer operation on cluster: {cluster_url}")
-                # Try the operation with this cluster URL (DNS patch will handle DNS resolution)
+                # Try the operation with this cluster URL
                 # But always keep base_url as main production URL
                 original_base_url = self.base_url
                 
                 # Refresh token to ensure it's valid
                 if self.authenticate(force_refresh=True):
-                    # Call the operation function with the cluster URL (normalized - DNS patch handles resolution)
+                    # Call the operation function with the cluster URL
                     normalized_cluster = self._normalize_quickbooks_url(cluster_url)
                     result = operation_func(normalized_cluster, *args, **kwargs)
                     if result:
-                        self._debug(f"Customer operation succeeded (DNS patch handled cluster resolution)")
-                        # Keep using main production URL - DNS patch handles cluster resolution
+                        self._debug(f"Customer operation succeeded")
+                        # Keep using main production URL
                         self.base_url = "https://quickbooks.api.intuit.com"
                         self.base_url_verified = True
                         if not self.verified_via_preferences:
@@ -559,7 +420,7 @@ class QuickBooksAPI:
                         customer = item["Customer"]
                         if isinstance(customer, dict) and "Id" in customer:
                             st.success(f"✅ Customer created successfully via batch operation: {customer['Id']}")
-                            # Always use main production URL - DNS patch handles cluster resolution
+                            # Always use main production URL
                             self.base_url = "https://quickbooks.api.intuit.com"
                             self.base_url_verified = True
                             if not self.verified_via_preferences:
@@ -666,9 +527,9 @@ class QuickBooksAPI:
                             # QuickBooks puts it in the Error.Detail field (e.g., "Use https://qbo-na1.api.intuit.com")
                             cluster_url = self._extract_cluster_url(response)
                             if cluster_url:
-                                # Don't switch to regional cluster - use main production URL with DNS patch
-                                # Regional clusters can't be resolved via DNS, but DNS patch handles it
-                                st.info(f"💡 Found cluster URL in error: {cluster_url}, but using main production URL with DNS patch")
+                                # Don't switch to regional cluster - use main production URL
+                                # Regional clusters may have DNS resolution issues
+                                st.info(f"💡 Found cluster URL in error: {cluster_url}, but using main production URL")
                                 self.base_url = "https://quickbooks.api.intuit.com"
                                 self.base_url_verified = True
                                 if not self.verified_via_preferences:
@@ -999,13 +860,12 @@ class QuickBooksAPI:
             
             # Try multiple endpoints to handle deployment routing issues
             test_endpoints = [
-                f"{self.base_url}/v3/company/{self.company_id}/companyinfo/1",
-                f"{self.base_url}/v3/company/{self.company_id}/preferences"
+                self._build_api_url("companyinfo/1"),
+                self._build_api_url("preferences")
             ]
             
             for endpoint_url in test_endpoints:
-                normalized_url = self._normalize_quickbooks_url(endpoint_url)
-                response = requests.get(normalized_url, headers=headers, allow_redirects=True, verify=False)
+                response = requests.get(endpoint_url, headers=headers, allow_redirects=True, verify=False)
                 
                 if response.status_code == 200:
                     # Extract base URL from final URL if redirect happened
@@ -1196,12 +1056,8 @@ class QuickBooksAPI:
             return existing_customer_id
         
         try:
-            # FORCE use of main production URL - ignore regional cluster discovery
-            # Regional cluster domains (like qbo-usw2.api.intuit.com) cannot be resolved via DNS
-            # QuickBooks will proxy requests internally from the main domain even if it says wrong cluster
-            customer_url = self._normalize_quickbooks_url(
-                f"{self.base_url}/v3/company/{self.company_id}/customer"
-            )
+            # Use simplified URL construction with minorversion
+            customer_url = self._build_api_url("customer")
             
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
@@ -1521,9 +1377,9 @@ class QuickBooksAPI:
                 return None
         
         try:
-            query_url = self._normalize_quickbooks_url(
-                f"{self.base_url}/v3/company/{self.company_id}/query"
-            )
+            # Query to find customer by email
+            query = f"SELECT * FROM Customer WHERE PrimaryEmailAddr = '{email}'"
+            query_url = self._build_api_url("query", {"query": query})
             
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
@@ -1532,12 +1388,7 @@ class QuickBooksAPI:
                 "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
-            # Query to find customer by email
-            query = f"SELECT * FROM Customer WHERE PrimaryEmailAddr = '{email}'"
-            
-            params = {"query": query}
-            
-            response = requests.get(query_url, params=params, headers=headers, verify=False)
+            response = requests.get(query_url, headers=headers, verify=False)
             
             # Handle 400 errors (deployment routing issue)
             if response.status_code == 400:
@@ -1936,9 +1787,7 @@ class QuickBooksAPI:
                 invoice_number=None
             )
             
-            invoice_url = self._normalize_quickbooks_url(
-                f"{self.base_url}/v3/company/{self.company_id}/invoice"
-            )
+            invoice_url = self._build_api_url("invoice")
             
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
@@ -2444,24 +2293,19 @@ def verify_production_credentials(quickbooks_api) -> Tuple[bool, str]:
             "Accept": "application/json"
         }
         
-        # If all standard endpoints fail, we'll try alternative approaches
-        # First, try the standard endpoints
+        # Test standard endpoints with minorversion parameter
         test_endpoints = [
-            ("companyinfo", f"{base_url}/v3/company/{quickbooks_api.company_id}/companyinfo/1"),
-            ("preferences", f"{base_url}/v3/company/{quickbooks_api.company_id}/preferences"),
-            ("items", f"{base_url}/v3/company/{quickbooks_api.company_id}/items"),
-            ("customers", f"{base_url}/v3/company/{quickbooks_api.company_id}/customers"),
-            ("accounts", f"{base_url}/v3/company/{quickbooks_api.company_id}/accounts")
+            ("companyinfo", quickbooks_api._build_api_url("companyinfo/1")),
+            ("preferences", quickbooks_api._build_api_url("preferences")),
+            ("items", quickbooks_api._build_api_url("items")),
+            ("customers", quickbooks_api._build_api_url("customers")),
+            ("accounts", quickbooks_api._build_api_url("accounts"))
         ]
         
-        # Alternative base URLs to try if the primary fails
-        # Include regional clusters that might be the actual target
+        # Simplified: only try the main production URL
+        # Regional cluster guessing is no longer recommended by Intuit
         alternative_base_urls = [
-            "https://quickbooks.api.intuit.com",
-            "https://qbo-usw2.api.intuit.com",  # Regional cluster (common for production)
-            "https://qbo-use1.api.intuit.com",  # US East cluster
-            "https://qbo-usw1.api.intuit.com",  # US West 1 cluster
-            "https://sandbox-quickbooks.api.intuit.com"
+            "https://quickbooks.api.intuit.com"
         ]
         
         st.info("🔍 Testing credentials against production endpoints...")
@@ -2499,10 +2343,9 @@ def verify_production_credentials(quickbooks_api) -> Tuple[bool, str]:
         st.info("🔄 All endpoints failed with primary base URL, trying alternative base URLs...")
         st.info("💡 This might be a regional cluster routing issue (common in deployments)")
         
-        # Special handling: if DNS patch is active, try the qbo-usw2 cluster directly
-        # This addresses the specific deployment issue where DNS redirects qbo-usw2 to quickbooks.api.intuit.com
+        # Try alternative regional clusters for deployment routing issues
         if "quickbooks.api.intuit.com" in base_url:
-            st.info("🔧 Detected DNS patch scenario - trying qbo-usw2 cluster directly")
+            st.info("🔧 Trying alternative regional clusters for deployment routing")
             qbo_usw2_url = "https://qbo-usw2.api.intuit.com"
             
             if qbo_usw2_url not in alternative_base_urls:
