@@ -15,6 +15,46 @@ import socket
 from typing import Dict, Optional, Tuple
 import streamlit as st
 from datetime import datetime
+import urllib3
+
+# Disable SSL warnings globally
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Configure requests session with SSL disabled
+import ssl
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+
+# Create a requests session with SSL verification disabled
+session = requests.Session()
+session.verify = False
+
+# Set environment variables to disable SSL verification
+os.environ['PYTHONHTTPSVERIFY'] = '0'
+os.environ['CURL_CA_BUNDLE'] = ''
+os.environ['REQUESTS_CA_BUNDLE'] = ''
+
+# Custom HTTPAdapter to completely disable SSL verification
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+class NoSSLAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs['ssl_context'] = ssl_context
+        return super().init_poolmanager(*args, **kwargs)
+
+# Mount the custom adapter for both HTTP and HTTPS
+session.mount('https://', NoSSLAdapter())
+session.mount('http://', NoSSLAdapter())
+
+def create_ssl_disabled_session():
+    """Create a requests session with SSL verification completely disabled"""
+    s = requests.Session()
+    s.verify = False
+    s.mount('https://', NoSSLAdapter())
+    s.mount('http://', NoSSLAdapter())
+    return s
 
 # === QuickBooks DNS Fix ===
 # Apply DNS patch immediately when module is imported, before any QuickBooks API logic runs

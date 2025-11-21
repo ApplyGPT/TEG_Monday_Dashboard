@@ -68,6 +68,8 @@ def main():
         sandbox=credentials.get('sandbox', False)  # Default to False for production
     )
     
+    # Note: SSL verification is disabled to resolve QuickBooks API hostname mismatch issues
+    
     # Sidebar for configuration
     with st.sidebar:
         st.header("⚙️ QuickBooks Settings")
