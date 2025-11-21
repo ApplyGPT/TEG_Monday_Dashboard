@@ -2697,26 +2697,59 @@ def verify_production_credentials(quickbooks_api) -> Tuple[bool, str]:
         if not quickbooks_api.authenticate(force_refresh=True):
             return False, "❌ Failed to authenticate - cannot verify credentials"
         
-        # Test the preferences endpoint (production URL)
-        test_url = f"https://quickbooks.api.intuit.com/v3/company/{quickbooks_api.company_id}/preferences"
+        # Test multiple endpoints to verify production credentials
+        # Use the same base URL that was verified during company access
+        base_url = quickbooks_api.base_url
         
         headers = {
             "Authorization": f"Bearer {quickbooks_api.access_token}",
             "Accept": "application/json"
         }
         
-        st.info("🔍 Testing credentials against production preferences endpoint...")
-        st.info(f"   URL: {test_url}")
+        # Try multiple endpoints in order of preference
+        test_endpoints = [
+            ("companyinfo", f"{base_url}/v3/company/{quickbooks_api.company_id}/companyinfo/{quickbooks_api.company_id}"),
+            ("preferences", f"{base_url}/v3/company/{quickbooks_api.company_id}/preferences"),
+            ("items", f"{base_url}/v3/company/{quickbooks_api.company_id}/items")
+        ]
         
-        response = requests.get(test_url, headers=headers, timeout=10, verify=False)
+        st.info("🔍 Testing credentials against production endpoints...")
         
-        if response.status_code == 200:
-            st.success("✅ SUCCESS: Preferences endpoint returned 200 OK")
-            st.success("✅ Your credentials are CONFIRMED PRODUCTION")
-            return True, "✅ Production credentials verified - preferences endpoint returned 200 OK"
+        for endpoint_name, test_url in test_endpoints:
+            st.info(f"   Trying {endpoint_name}: {test_url}")
+            
+            try:
+                response = requests.get(test_url, headers=headers, timeout=10, verify=False)
+                
+                if response.status_code == 200:
+                    st.success(f"✅ SUCCESS: {endpoint_name} endpoint returned 200 OK")
+                    st.success("✅ Your credentials are CONFIRMED PRODUCTION")
+                    return True, f"✅ Production credentials verified - {endpoint_name} endpoint returned 200 OK"
+                
+                elif response.status_code == 400:
+                    st.warning(f"⚠️ Unexpected status code: {response.status_code}")
+                    st.warning(f"Response: {response.text}")
+                    # Continue to try next endpoint
+                    continue
+                    
+                elif response.status_code == 401:
+                    # This is a definitive auth failure, don't try other endpoints
+                    break
+                else:
+                    st.warning(f"⚠️ {endpoint_name} returned status {response.status_code}, trying next endpoint...")
+                    continue
+                    
+            except Exception as e:
+                st.warning(f"⚠️ Error testing {endpoint_name}: {str(e)}")
+                continue
         
-        elif response.status_code == 401:
-            st.error("❌ FAILED: Preferences endpoint returned 401 Unauthorized")
+        # If we get here, all endpoints failed - use the last response for error handling
+        if 'response' not in locals():
+            return False, "❌ Could not test any endpoints - network error"
+        
+        # Handle the final response (if we get here, all endpoints failed)
+        if response.status_code == 401:
+            st.error("❌ FAILED: All endpoints returned 401 Unauthorized")
             st.warning("⚠️ This indicates:")
             st.warning("   • You're using SANDBOX credentials with production URL, OR")
             st.warning("   • Your refresh token doesn't match your Client ID, OR")
@@ -2751,7 +2784,7 @@ def verify_production_credentials(quickbooks_api) -> Tuple[bool, str]:
                 st.info(f"   Response: {error_text}")
             except:
                 pass
-            return False, f"❌ Unexpected response: status code {response.status_code}"
+            return False, f"❌ All production endpoints failed: final status code {response.status_code}"
             
     except requests.exceptions.RequestException as e:
         st.error(f"❌ Network error during verification: {str(e)}")
