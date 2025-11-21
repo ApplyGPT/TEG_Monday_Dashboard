@@ -2708,7 +2708,7 @@ def verify_production_credentials(quickbooks_api) -> Tuple[bool, str]:
         st.info("🔍 Testing credentials against production preferences endpoint...")
         st.info(f"   URL: {test_url}")
         
-        response = requests.get(test_url, headers=headers, timeout=10)
+        response = requests.get(test_url, headers=headers, timeout=10, verify=False)
         
         if response.status_code == 200:
             st.success("✅ SUCCESS: Preferences endpoint returned 200 OK")
