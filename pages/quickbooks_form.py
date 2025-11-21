@@ -400,7 +400,7 @@ def main():
         if include_cc_fee and base_subtotal > 0:
             cc_fee_amount = round(base_subtotal * 0.03, 2)
             payload.append({
-                'type': 'Credit Card Processing Fee',
+                'type': 'Credit Card Processing Fee (3%)',
                 'amount': cc_fee_amount,
                 'quantity': 1,
                 'unit_price': cc_fee_amount,

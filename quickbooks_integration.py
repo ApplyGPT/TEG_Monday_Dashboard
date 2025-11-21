@@ -1,63 +1,27 @@
 """
 QuickBooks API Integration Module
-Handles invoice creation and sending
-
-NOTE: SSL certificate verification is disabled (verify=False) for all requests
-to resolve hostname mismatch issues with QuickBooks API endpoints.
-This is a common issue with QuickBooks regional cluster URLs.
+Clean version for Production Cloud Deployment.
+Removes all SSL/DNS hacks to resolve '400 No Handler' errors on cloud platforms.
 """
 
 import requests
+import requests.exceptions
 import json
 import os
 import toml
-import socket
-from typing import Dict, Optional, Tuple
 import streamlit as st
 from datetime import datetime
-import urllib3
+from typing import Dict, Optional, Tuple
 
-# Disable SSL warnings globally
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# Configure requests session with SSL disabled
-import ssl
-ssl_context = ssl.create_default_context()
-ssl_context.check_hostname = False
-ssl_context.verify_mode = ssl.CERT_NONE
-
-# Create a requests session with SSL verification disabled
-session = requests.Session()
-session.verify = False
-
-# Set environment variables to disable SSL verification
-os.environ['PYTHONHTTPSVERIFY'] = '0'
-os.environ['CURL_CA_BUNDLE'] = ''
-os.environ['REQUESTS_CA_BUNDLE'] = ''
-
-# Custom HTTPAdapter to completely disable SSL verification
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
-class NoSSLAdapter(HTTPAdapter):
-    def init_poolmanager(self, *args, **kwargs):
-        kwargs['ssl_context'] = ssl_context
-        return super().init_poolmanager(*args, **kwargs)
-
-# Mount the custom adapter for both HTTP and HTTPS
-session.mount('https://', NoSSLAdapter())
-session.mount('http://', NoSSLAdapter())
-
-def create_ssl_disabled_session():
-    """Create a requests session with SSL verification completely disabled"""
-    s = requests.Session()
-    s.verify = False
-    s.mount('https://', NoSSLAdapter())
-    s.mount('http://', NoSSLAdapter())
-    return s
-
-
-
+# Standard session configuration with proper User-Agent
+def get_qb_session():
+    session = requests.Session()
+    # Proper identification avoids WAF/Firewall blocks
+    session.headers.update({
+        'User-Agent': 'StreamlitQuickBooksApp/1.0',
+        'Accept': 'application/json'
+    })
+    return session
 
 class QuickBooksAPI:
     """QuickBooks API client for invoice creation and sending"""
@@ -70,1948 +34,125 @@ class QuickBooksAPI:
         self.company_id = company_id
         self.sandbox = sandbox
         
-        # STRICT URL DEFINITION
+        # Official Production URL (No cluster manipulation)
         if sandbox:
             self.base_url = "https://sandbox-quickbooks.api.intuit.com"
         else:
-            # Forces the global URL. Intuit handles internal routing.
-            # Do not attempt to use qbo-usw2 or other regional clusters.
             self.base_url = "https://quickbooks.api.intuit.com"
-        
+            
         self.access_token = None
-        self.items_cache = None
-        # Marked as True to prevent the code from trying to "discover" another URL
-        self.base_url_verified = True
-        self.verified_via_preferences = True
-        self.customer_cluster_url = None
-        self._discount_account_id = None
-        self.debug_logging_enabled = True
+        self.session = get_qb_session()
 
-    def _debug(self, message: str):
-        """Log internal debug info when debug logging is enabled."""
-        if getattr(self, "debug_logging_enabled", False):
-            try:
-                st.info(message)
-            except Exception:
-                pass
-    
-    def _normalize_quickbooks_url(self, url: str) -> str:
-        """
-        Simple URL normalization - just return the URL as-is.
-        QuickBooks global production URL should work without regional cluster manipulation.
-        
-        Args:
-            url: The URL to normalize
-            
-        Returns:
-            str: The same URL (no manipulation needed)
-        """
-        if not url:
-            return self.base_url
-        
-        return url
-    
-    def _build_api_url(self, endpoint: str, query_params: dict = None) -> str:
-        """
-        Build a complete QuickBooks API URL with minorversion parameter.
-        
-        Args:
-            endpoint: The API endpoint (e.g., 'customer', 'companyinfo/1', 'query')
-            query_params: Optional additional query parameters
-            
-        Returns:
-            str: Complete URL with minorversion parameter
-        """
-        base_url = f"{self.base_url}/v3/company/{self.company_id}/{endpoint}"
-        
-        # Always add minorversion to avoid 400 errors
-        params = {"minorversion": "65"}
-        
-        # Add any additional query parameters
-        if query_params:
-            params.update(query_params)
-        
-        # Build query string
-        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-        
-        return f"{base_url}?{query_string}"
-    
-    def _extract_cluster_url(self, response) -> Optional[str]:
-        """
-        Simplified cluster URL extraction - no longer recommended by Intuit.
-        Always return None to use the main production URL.
-        
-        Args:
-            response: The HTTP response (ignored)
-            
-        Returns:
-            None: Always use main production URL
-        """
-        st.info("💡 Skipping cluster URL extraction - using main production URL")
-        return None
-    
-    def _extract_customer_id_from_response(self, response) -> Optional[str]:
-        """
-        Try to extract customer ID from response even if it contains errors.
-        Sometimes QuickBooks returns customer data in redirects or error responses.
-        
-        Args:
-            response: The HTTP response that may contain customer information
-            
-        Returns:
-            str: Customer ID if found, None otherwise
-        """
-        try:
-            # Check Location header for customer ID in redirect
-            location = response.headers.get('Location', '')
-            if location and '/customer/' in location:
-                # Extract customer ID from URL like: .../customer/123
-                import re
-                match = re.search(r'/customer/(\d+)', location)
-                if match:
-                    return match.group(1)
-            
-            # Try to parse response body even if status is not 200
-            try:
-                response_data = response.json()
-                # Check for Customer object in response
-                if 'Customer' in response_data:
-                    customer = response_data['Customer']
-                    if isinstance(customer, dict) and 'Id' in customer:
-                        return customer['Id']
-                
-                # Check for batch response
-                if 'BatchItemResponse' in response_data:
-                    batch_items = response_data['BatchItemResponse']
-                    if isinstance(batch_items, list):
-                        for item in batch_items:
-                            if 'Customer' in item:
-                                customer = item['Customer']
-                                if isinstance(customer, dict) and 'Id' in customer:
-                                    return customer['Id']
-            except:
-                # Response might not be JSON, that's okay
-                pass
-                
-        except Exception:
-            # Silently fail - extraction is best effort
-            pass
-        
-        return None
-    
-    def _try_customer_operation_on_all_clusters(self, operation_func, *args, **kwargs) -> Optional[str]:
-        """
-        Try customer operation on all known cluster URLs as a last resort.
-        Sometimes different endpoints are on different clusters even within the same company.
-        
-        IMPORTANT: Only tries clusters for the correct environment (production vs sandbox).
-        Does not mix production and sandbox URLs.
-        
-        Args:
-            operation_func: A function that takes cluster_url as first arg and returns Optional[str]
-            *args, **kwargs: Additional arguments to pass to operation_func
-            
-        Returns:
-            str: Customer ID if successful, None otherwise
-        """
-        # Only try clusters for the correct environment - don't mix production and sandbox
-        if self.sandbox:
-            all_cluster_urls = ["https://sandbox-quickbooks.api.intuit.com"]
-        else:
-            # For production, start with main URL - regional clusters will be discovered from error responses
-            all_cluster_urls = ["https://quickbooks.api.intuit.com"]
-        
-        # Try each cluster URL
-        for cluster_url in all_cluster_urls:
-            try:
-                self._debug(f"Trying customer operation on cluster: {cluster_url}")
-                # Try the operation with this cluster URL
-                # But always keep base_url as main production URL
-                original_base_url = self.base_url
-                
-                # Refresh token to ensure it's valid
-                if self.authenticate(force_refresh=True):
-                    # Call the operation function with the cluster URL
-                    normalized_cluster = self._normalize_quickbooks_url(cluster_url)
-                    result = operation_func(normalized_cluster, *args, **kwargs)
-                    if result:
-                        self._debug(f"Customer operation succeeded")
-                        # Keep using main production URL
-                        self.base_url = "https://quickbooks.api.intuit.com"
-                        self.base_url_verified = True
-                        if not self.verified_via_preferences:
-                            self.verified_via_preferences = True
-                        return result
-                
-                # Restore original base_url
-                self.base_url = original_base_url
-            except Exception as e:
-                st.warning(f"⚠️ Failed on cluster {cluster_url}: {str(e)}")
-                # Restore original base_url
-                self.base_url = original_base_url
-                continue
-        
-        return None
-    
-    def _create_customer_direct_on_cluster(self, cluster_url: str, first_name: str, last_name: str, email: str, company_name: str = None) -> Optional[str]:
-        """
-        Try to create customer directly on a specific cluster URL.
-        
-        Args:
-            cluster_url: The cluster URL to try
-            first_name: Customer's first name
-            last_name: Customer's last name
-            email: Customer's email address
-            company_name: Customer's company name (optional)
-            
-        Returns:
-            str: Customer ID if successful, None otherwise
-        """
-        try:
-            # Normalize cluster URL to prevent DNS resolution errors
-            normalized_cluster_url = self._normalize_quickbooks_url(cluster_url)
-            customer_url = self._normalize_quickbooks_url(
-                f"{normalized_cluster_url}/v3/company/{self.company_id}/customer"
-            )
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"
-            }
-            
-            customer_data = {
-                "DisplayName": f"{first_name} {last_name}",
-                "GivenName": first_name,
-                "FamilyName": last_name,
-                "PrimaryEmailAddr": {
-                    "Address": email
-                }
-            }
-            
-            if company_name:
-                customer_data["CompanyName"] = company_name
-            
-            payload = customer_data
-            
-            response = requests.post(customer_url, json=payload, headers=headers, allow_redirects=True, verify=False)
-            
-            if response.status_code in [200, 201]:
-                customer_response = response.json()
-                customer = customer_response.get("Customer")
-                if customer and isinstance(customer, dict) and "Id" in customer:
-                    return customer["Id"]
-            
-            # Try to extract customer ID even if status is not 200
-            customer_id = self._extract_customer_id_from_response(response)
-            if customer_id:
-                return customer_id
-            
-            return None
-            
-        except Exception:
-            return None
-    
-    def _try_create_customer_via_batch(self, first_name: str, last_name: str, email: str, company_name: str = None, cluster_url: str = None) -> Optional[str]:
-        """
-        Try to create customer using batch operations as a fallback.
-        Sometimes batch operations work when direct operations fail.
-        
-        Args:
-            first_name: Customer's first name
-            last_name: Customer's last name
-            email: Customer's email address
-            company_name: Customer's company name (optional)
-            cluster_url: Optional cluster URL to use (if None, uses self.base_url)
-            
-        Returns:
-            str: Customer ID if successful, None otherwise
-        """
-        try:
-            if not self.authenticate(force_refresh=True):
-                return None
-            
-            base_url_to_use = cluster_url if cluster_url else self.base_url
-            normalized_base_url = self._normalize_quickbooks_url(base_url_to_use)
-            batch_url = self._normalize_quickbooks_url(
-                f"{normalized_base_url}/v3/company/{self.company_id}/batch"
-            )
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"
-            }
-            
-            customer_data = {
-                "DisplayName": f"{first_name} {last_name}",
-                "GivenName": first_name,
-                "FamilyName": last_name,
-                "PrimaryEmailAddr": {
-                    "Address": email
-                }
-            }
-            
-            if company_name:
-                customer_data["CompanyName"] = company_name
-            
-            batch_payload = {
-                "BatchItemRequest": [
-                    {
-                        "bId": "1",
-                        "operation": "create",
-                        "Customer": customer_data
-                    }
-                ]
-            }
-            
-            self._debug("Trying customer creation via batch operation as fallback...")
-            response = requests.post(batch_url, json=batch_payload, headers=headers, allow_redirects=True, verify=False)
-            
-            if response.status_code in [200, 201]:
-                batch_response = response.json()
-                batch_items = batch_response.get("BatchItemResponse", [])
-                if batch_items:
-                    item = batch_items[0]
-                    if "Customer" in item:
-                        customer = item["Customer"]
-                        if isinstance(customer, dict) and "Id" in customer:
-                            st.success(f"✅ Customer created successfully via batch operation: {customer['Id']}")
-                            # Always use main production URL
-                            self.base_url = "https://quickbooks.api.intuit.com"
-                            self.base_url_verified = True
-                            if not self.verified_via_preferences:
-                                self.verified_via_preferences = True
-                            return customer["Id"]
-                    elif "Fault" in item:
-                        # Check if customer was created despite fault
-                        fault = item["Fault"]
-                        if "Error" in fault:
-                            errors = fault["Error"]
-                            if isinstance(errors, dict):
-                                errors = [errors]
-                            for error in errors:
-                                # Sometimes duplicate errors still mean success
-                                if error.get("code") == "6000" and "already exists" in error.get("Message", "").lower():
-                                    # Customer already exists - try to find it
-                                    return self._find_customer_by_email(email)
-            
-            return None
-            
-        except Exception as e:
-            st.warning(f"⚠️ Batch operation failed: {str(e)}")
-            return None
-    
-    def _try_follow_redirect_for_customer(self, response, payload: dict, headers: dict) -> Optional[str]:
-        """
-        Try to follow redirect URL from Location header to get customer ID.
-        Sometimes QuickBooks redirects to the created resource even with Wrong Cluster errors.
-        
-        Args:
-            response: The HTTP response that may contain a Location header
-            payload: The customer creation payload
-            headers: The request headers
-            
-        Returns:
-            str: Customer ID if found via redirect, None otherwise
-        """
-        try:
-            location = response.headers.get('Location', '')
-            if location:
-                self._debug(f"Found Location header, trying to follow redirect: {location}")
-                # Try to GET the redirect URL
-                redirect_response = requests.get(location, headers=headers, allow_redirects=True, verify=False)
-                if redirect_response.status_code == 200:
-                    redirect_data = redirect_response.json()
-                    if "Customer" in redirect_data:
-                        customer = redirect_data["Customer"]
-                        if isinstance(customer, dict) and "Id" in customer:
-                            st.success(f"✅ Successfully retrieved customer via redirect: {customer['Id']}")
-                            return customer["Id"]
-        except Exception as e:
-            st.warning(f"⚠️ Could not follow redirect: {str(e)}")
-        
-        return None
-    
-    def _update_base_url_if_needed(self, response) -> bool:
-        """
-        Ignores cluster errors. The global URL https://quickbooks.api.intuit.com
-        should always be used. Routing is internal to Intuit.
-        """
-        # Always returns False to prevent the base_url from being changed
-        return False
-    
-    def _handle_401_error(self, response, headers, retry_func):
-        """
-        Handle 401 errors by checking for cluster issues or refreshing token
-        
-        Args:
-            response: The HTTP response that returned 401
-            headers: The headers dict to update with new token
-            retry_func: Function to call for retry (should take headers as param)
-            
-        Returns:
-            Response object if successful, None if failed
-        """
-        # Check for cluster error first and try to update base_url
-        cluster_updated = self._update_base_url_if_needed(response)
-        
-        # If cluster was updated, retry immediately with new base_url
-        if cluster_updated:
-            try:
-                retry_response = retry_func(headers)
-                if retry_response and retry_response.status_code == 200:
-                    return retry_response
-            except:
-                pass
-        
-        # Check for cluster error in response
-        try:
-            error_data = response.json()
-            if 'Fault' in error_data:
-                fault = error_data['Fault']
-                if 'Error' in fault:
-                    errors = fault['Error']
-                    for error in errors:
-                        error_msg = error.get('Message', '')
-                        error_detail = error.get('Detail', '')
-                        error_code = error.get('code', '')
-                        if error_code == '130' or 'WrongCluster' in error_msg or 'WrongCluster' in error_detail:
-                            # IGNORE Wrong Cluster errors - regional cluster domains cannot be resolved via DNS
-                            # QuickBooks will proxy requests internally from the main domain even if it says wrong cluster
-                            if self.verified_via_preferences:
-                                st.info("💡 Ignoring Wrong Cluster error - preferences endpoint confirms production")
-                                self._debug("Using main production URL - QuickBooks will proxy internally")
-                                st.info("💡 Regional cluster domains (like qbo-usw2.api.intuit.com) cannot be resolved via DNS")
-                                # Refresh token and retry with main URL
-                                self._debug("Refreshing token and retrying with main production URL...")
-                                if self.authenticate(force_refresh=True):
-                                    headers["Authorization"] = f"Bearer {self.access_token}"
-                                    try:
-                                        retry_response = retry_func(headers)
-                                        # Return the response even if it's 401 - caller will handle it
-                                        # Sometimes the response contains data despite the error
-                                        return retry_response
-                                    except Exception as e:
-                                        st.warning(f"⚠️ Retry failed: {str(e)}")
-                                        return None
-                                return None
-                            
-                            # Only try cluster discovery if we haven't verified via preferences yet
-                            self._debug("QuickBooks cluster mismatch detected. Discovering correct cluster...")
-                            if self._discover_cluster_url():
-                                # Retry with discovered cluster URL
-                                try:
-                                    retry_response = retry_func(headers)
-                                    if retry_response and retry_response.status_code == 200:
-                                        return retry_response
-                                except:
-                                    pass
-                            return None
-        except:
-            pass
-        
-        # If not a cluster error, try to refresh the token
-        self._debug("Access token expired, refreshing...")
-        if self.authenticate(force_refresh=True):
-            # Verify we have a valid token
-            if not self.access_token or len(self.access_token) < 10:
-                st.error("Failed to get valid access token after refresh")
-                return None
-            
-            # Update headers with new token
-            headers["Authorization"] = f"Bearer {self.access_token}"
-            # Retry the request
-            retry_response = retry_func(headers)
-            
-            # Check if retry_response is valid
-            if retry_response is None:
-                return None
-            
-            # If still 401 after refresh, check for cluster error again
-            if retry_response.status_code == 401:
-                # Try to update cluster URL again
-                cluster_updated = self._update_base_url_if_needed(retry_response)
-                if cluster_updated:
-                    # Retry with new cluster URL
-                    try:
-                        final_response = retry_func(headers)
-                        if final_response and final_response.status_code == 200:
-                            return final_response
-                    except:
-                        pass
-                
-                try:
-                    error_data = retry_response.json()
-                    if 'Fault' in error_data:
-                        fault = error_data['Fault']
-                        if 'Error' in fault:
-                            errors = fault['Error']
-                            for error in errors:
-                                error_code = error.get('code', '')
-                                error_msg = error.get('Message', '')
-                                error_detail = error.get('Detail', '')
-                                if error_code == '130' or 'WrongCluster' in error_msg or 'WrongCluster' in error_detail:
-                                    # If we already verified via preferences, this is a QuickBooks API bug
-                                    if self.verified_via_preferences:
-                                        st.info("💡 Ignoring Wrong Cluster error (cluster already verified via preferences endpoint)")
-                                        # Don't retry again - this is a QuickBooks API bug
-                                        # Return None so caller can handle the error gracefully
-                                        return None
-                                    
-                                    # Only try cluster discovery if we haven't verified via preferences yet
-                                    self._debug("QuickBooks cluster mismatch detected. Discovering correct cluster...")
-                                    if self._discover_cluster_url():
-                                        # Retry with discovered cluster URL
-                                        try:
-                                            final_response = retry_func(headers)
-                                            if final_response and final_response.status_code == 200:
-                                                return final_response
-                                        except:
-                                            pass
-                                    return None
-                        st.error("Authentication failed even after token refresh. This may be a QuickBooks cluster issue. Please try again.")
-                    else:
-                        st.error("Authentication failed even after token refresh. Please check your credentials.")
-                except:
-                    st.error("Authentication failed even after token refresh. Please check your credentials.")
-                return None
-            
-            return retry_response
-        else:
-            st.error("Failed to refresh access token")
-            return None
-    
+    def _get_headers(self):
+        """Returns standard headers with current token"""
+        if not self.access_token:
+            return {}
+        return {
+            "Authorization": f"Bearer {self.access_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "StreamlitQuickBooksApp/1.0"
+        }
+
     def authenticate(self, force_refresh: bool = False) -> bool:
-        """
-        Authenticate with QuickBooks API using refresh token
-        
-        Args:
-            force_refresh: If True, always get a new token even if one exists
-        
-        Returns:
-            bool: True if authentication successful, False otherwise
-        """
-        # Force refresh if requested (clear existing token)
+        """Authenticates with QuickBooks API using the refresh token"""
         if force_refresh:
             self.access_token = None
             
         try:
             auth_url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
             
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json"
-            }
-            
             data = {
                 "grant_type": "refresh_token",
                 "refresh_token": self.refresh_token
             }
             
-            # Use basic auth with client credentials
             auth = requests.auth.HTTPBasicAuth(self.client_id, self.client_secret)
             
-            response = requests.post(auth_url, data=data, headers=headers, auth=auth, verify=False)
+            # In cloud environments, verify=True is correct. SSL is trusted.
+            response = self.session.post(auth_url, data=data, auth=auth, timeout=30)
             
-            # Enhanced error reporting
             if response.status_code != 200:
-                try:
-                    error_details = response.json()
-                    error_msg = error_details.get('error_description', error_details.get('error', 'Unknown error'))
-                    st.error(f"QuickBooks authentication failed: {error_msg}")
-                    
-                    if response.status_code == 400:
-                        st.warning("⚠️ Refresh token expired or invalid. Verify Client ID matches the one used to generate the refresh token.")
-                    
-                    return False
-                except ValueError:
-                    st.error(f"QuickBooks authentication failed with status code: {response.status_code}")
-                    return False
-            
-            response.raise_for_status()
+                st.error(f"Authentication error: {response.text}")
+                return False
             
             auth_response = response.json()
             self.access_token = auth_response.get("access_token")
             new_refresh_token = auth_response.get("refresh_token")
             
             if not self.access_token:
-                st.error("Failed to get access token from QuickBooks")
                 return False
             
-            # Verify we have a valid access token (not empty or None)
-            if not self.access_token or len(self.access_token) < 10:
-                st.error("Invalid access token received from QuickBooks")
-                return False
-            
-            # IMPORTANT: Automatically update refresh token if a new one is provided
+            # Update refresh token if it changed
             if new_refresh_token and new_refresh_token != self.refresh_token:
-                try:
-                    # Update the refresh token in memory
-                    old_refresh_token = self.refresh_token
-                    self.refresh_token = new_refresh_token
-                    
-                    # Update secrets.toml file with new refresh token
-                    secrets_path = os.path.join('.streamlit', 'secrets.toml')
-                    
-                    # Read current secrets
-                    with open(secrets_path, 'r') as f:
-                        secrets_config = toml.load(f)
-                    
-                    # Update the refresh token
-                    if 'quickbooks' in secrets_config:
-                        secrets_config['quickbooks']['refresh_token'] = new_refresh_token
-                        
-                        # Write back to file
-                        with open(secrets_path, 'w') as f:
-                            toml.dump(secrets_config, f)
-                        
-                        self._debug("QuickBooks refresh token automatically updated in secrets.toml")
-                    else:
-                        st.warning("⚠️ New refresh token received but could not update secrets.toml")
-                        st.code(f"refresh_token = \"{new_refresh_token}\"", language="toml")
-                        
-                except Exception as e:
-                    st.warning(f"⚠️ Could not auto-update refresh token: {str(e)}")
-                    st.info("Please manually update secrets.toml with this new refresh token:")
-                    st.code(f"refresh_token = \"{new_refresh_token}\"", language="toml")
+                self.refresh_token = new_refresh_token
+                self._update_secrets_file(new_refresh_token)
                 
             return True
             
-        except requests.exceptions.RequestException as e:
-            st.error(f"QuickBooks authentication failed: {str(e)}")
-            return False
         except Exception as e:
-            st.error(f"Unexpected error during QuickBooks authentication: {str(e)}")
+            st.error(f"Connection error during authentication: {str(e)}")
             return False
-    
-    def _discover_cluster_url(self) -> bool:
-        """
-        Discover the correct cluster URL by trying alternative cluster URLs
-        Handles deployment routing issues where endpoints return 400 errors
-        
-        Returns:
-            bool: True if cluster URL was discovered and updated, False otherwise
-        """
-        # Refresh token first - tokens can be cluster-specific
-        if not self.authenticate(force_refresh=True):
-            st.error("❌ Failed to refresh access token")
-            return False
-        
-        # In deployment environments, endpoint discovery often fails with 400 errors
-        # If authentication worked, assume the current base URL is correct
-        if hasattr(self, 'access_token') and self.access_token:
-            st.info("💡 Skipping cluster discovery due to deployment routing issues")
-            st.info("💡 Using current base URL since authentication succeeded")
-            self.base_url_verified = True
-            return True
-        
-        # Fallback for environments where authentication failed
-        return False
-    def _verify_company_access(self) -> bool:
-        """
-        Verify we can access the company (handles cluster redirects and deployment routing issues)
-        Uses fallback logic to handle deployment-specific API routing problems
-        
-        Returns:
-            bool: True if company is accessible, False otherwise
-        """
+
+    def _update_secrets_file(self, new_token):
+        """Attempts to update secrets.toml (best effort)"""
+        try:
+            secrets_path = os.path.join('.streamlit', 'secrets.toml')
+            if os.path.exists(secrets_path):
+                with open(secrets_path, 'r') as f:
+                    config = toml.load(f)
+                
+                if 'quickbooks' in config:
+                    config['quickbooks']['refresh_token'] = new_token
+                    with open(secrets_path, 'w') as f:
+                        toml.dump(config, f)
+        except:
+            # On cloud deploy, usually we cannot write to files.
+            # Just log it internally or ignore.
+            pass
+
+    def _make_request(self, method, endpoint, data=None, params=None):
+        """Centralized request wrapper with retry logic and minorversion"""
         if not self.access_token:
             if not self.authenticate():
-                return False
-        
-        # If we already verified via preferences, we know the cluster is correct
-        if self.verified_via_preferences and self.base_url_verified:
-            return True
-        
-        # If cluster hasn't been verified, try to discover it first
-        if not self.base_url_verified:
-            if self._discover_cluster_url():
-                # Cluster discovered, now verify access
-                pass
-        
-        try:
-            # Use deployment-aware endpoint testing (same logic as production verification)
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"
-            }
-            
-            # Try multiple endpoints to handle deployment routing issues
-            test_endpoints = [
-                self._build_api_url("companyinfo/1"),
-                self._build_api_url("preferences")
-            ]
-            
-            for endpoint_url in test_endpoints:
-                response = requests.get(endpoint_url, headers=headers, allow_redirects=True, verify=False)
-                
-                if response.status_code == 200:
-                    # Extract base URL from final URL if redirect happened
-                    final_url = response.url
-                    if '/v3/company/' in final_url:
-                        new_base_url = final_url.split('/v3/company/')[0]
-                        if new_base_url != self.base_url:
-                            old_url = self.base_url
-                            self.base_url = new_base_url
-                            self._debug(f"QuickBooks cluster URL updated: {old_url} → {new_base_url}")
-                    
-                    self.base_url_verified = True
-                    if 'preferences' in endpoint_url:
-                        self.verified_via_preferences = True
-                    return True
-                
-                elif response.status_code == 400:
-                    # Deployment routing issue - continue to next endpoint
-                    continue
-            
-            # If all endpoints failed with 400 errors, this is likely a deployment routing issue
-            # Since authentication worked, assume company access is valid
-            if hasattr(self, 'access_token') and self.access_token:
-                self._debug("All endpoints returned 400 errors - assuming deployment routing issue")
-                self._debug("Company access assumed valid based on successful authentication")
-                self.base_url_verified = True
-                return True
-            
-            # Handle 401 errors - try preferences endpoint if companyinfo fails
-            if response.status_code == 401:
-                # Check if it's a Wrong Cluster error
-                try:
-                    error_data = response.json()
-                    if 'Fault' in error_data:
-                        fault = error_data['Fault']
-                        if 'Error' in fault:
-                            errors = fault['Error']
-                            if isinstance(errors, dict):
-                                errors = [errors]
-                            for error in errors:
-                                if error.get('code') == '130' or 'WrongCluster' in error.get('Message', ''):
-                                    # Try preferences endpoint instead
-                                    prefs_response = requests.get(preferences_url, headers=headers, allow_redirects=True, verify=False)
-                                    if prefs_response.status_code == 200:
-                                        self.base_url_verified = True
-                                        self.verified_via_preferences = True  # Mark that we verified via preferences
-                                        return True
-                except:
-                    pass
-                # Try refreshing token
-                if self.authenticate():
-                    headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.get(company_url, headers=headers, allow_redirects=True, verify=False)
-                    
-                    if response.status_code == 200:
-                        final_url = response.url
-                        if '/v3/company/' in final_url:
-                            new_base_url = final_url.split('/v3/company/')[0]
-                            if new_base_url != self.base_url:
-                                self.base_url = new_base_url
-                        
-                        self.base_url_verified = True
-                        return True
-                
-                # Check for cluster error in response
-                try:
-                    error_data = response.json()
-                    
-                    if 'Fault' in error_data:
-                        fault = error_data['Fault']
-                        if 'Error' in fault:
-                            errors = fault['Error']
-                            # Handle both single error dict and list of errors
-                            if isinstance(errors, dict):
-                                errors = [errors]
-                            
-                            for error in errors:
-                                error_msg = error.get('Message', '')
-                                error_detail = error.get('Detail', '')
-                                error_code = error.get('code', '')
-                                
-                                st.info(f"🔍 Error code: {error_code}")
-                                st.info(f"🔍 Error message: {error_msg}")
-                                st.info(f"🔍 Error detail: {error_detail}")
-                                
-                                if error_code == '130' or 'WrongCluster' in error_msg or 'WrongCluster' in error_detail:
-                                    # If we already verified via preferences, ignore companyinfo Wrong Cluster errors
-                                    if self.verified_via_preferences:
-                                        st.info("💡 Ignoring companyinfo Wrong Cluster error (cluster already verified via preferences endpoint)")
-                                        return True  # Return True since cluster is already verified
-                                    
-                                    # Try to discover cluster URL
-                                    self._debug("QuickBooks cluster mismatch detected. Discovering correct cluster...")
-                                    if self._discover_cluster_url():
-                                        # Retry verification with new cluster URL
-                                        company_url = self._normalize_quickbooks_url(
-                                            f"{self.base_url}/v3/company/{self.company_id}/companyinfo/1"
-                                        )
-                                        headers["Authorization"] = f"Bearer {self.access_token}"
-                                        response = requests.get(company_url, headers=headers, allow_redirects=True, verify=False)
-                                        if response.status_code == 200:
-                                            self.base_url_verified = True
-                                            return True
-                                    return False
-                except Exception as e:
-                    st.warning(f"⚠️ Could not parse error response: {str(e)}")
-                    try:
-                        st.info(f"🔍 Raw response text: {response.text[:500]}")
-                    except:
-                        pass
-                
-                st.error("❌ Could not verify company access after token refresh")
-                return False
-            
-            return False
-            
-        except Exception as e:
-            return False
-    
-    def create_customer(self, first_name: str, last_name: str, email: str, company_name: str = None) -> Optional[str]:
-        """
-        Create a customer in QuickBooks or use existing customer in sandbox
-        
-        Args:
-            first_name: Customer's first name
-            last_name: Customer's last name
-            email: Customer's email address
-            company_name: Customer's company name (optional)
-            
-        Returns:
-            str: Customer ID if successful, None otherwise
-        """
-        # Always authenticate to ensure we have a fresh token (force refresh)
-        if not self.authenticate(force_refresh=True):
                 return None
-        
-        # Verify company access first (this will establish the correct cluster URL if needed)
-        # Skip if already verified via preferences (companyinfo endpoint has cluster issues)
-        if not (self.base_url_verified and self.verified_via_preferences):
-            if not self._verify_company_access():
-                # If verification failed but we verified via preferences, that's OK - proceed anyway
-                if not self.verified_via_preferences:
-                    st.warning("⚠️ Could not verify company access. Please check your QuickBooks credentials.")
-                    return None
-                else:
-                    st.info("💡 Proceeding with customer creation (cluster verified via preferences endpoint)")
-        else:
-            st.info("✅ Cluster already verified via preferences - proceeding with customer creation")
-        
-        # Always refresh token before customer operations
-        self._debug("Refreshing token for customer operations...")
-        self.authenticate(force_refresh=True)
-        
-        # FORCE use of main production URL - ignore Wrong Cluster errors
-        # Regional cluster domains (like qbo-usw2.api.intuit.com) cannot be resolved via DNS
-        # QuickBooks will proxy requests internally from the main domain even if it says wrong cluster
-        self.base_url = "https://quickbooks.api.intuit.com"
-        self.customer_cluster_url = None  # Don't use regional clusters (DNS resolution issues)
-        self._debug("Using main production URL: https://quickbooks.api.intuit.com")
-        self._debug("Ignoring Wrong Cluster errors - QuickBooks will proxy internally")
-        if self.sandbox:
-            st.info("🔧 Sandbox Mode: Using existing customer for testing")
-            return self._get_or_create_sandbox_customer(first_name, last_name, email, company_name)
-        
-        # Try to find existing customer first, but if query endpoint has cluster issues, skip it
-        # We'll try to create the customer directly and handle "already exists" errors
-        existing_customer_id = None
-        if self.verified_via_preferences:
-            # If we verified via preferences but query endpoint fails, skip query and try creation directly
-            st.info("💡 Skipping customer query (endpoint has cluster issues) - will try direct creation")
-        else:
-            # Try to find existing customer
-            existing_customer_id = self._find_customer_by_email(email)
-        
-        if existing_customer_id:
-            # Get customer details to show the name
-            existing_customer_info = self._get_customer_info(existing_customer_id)
-            if existing_customer_info:
-                existing_name = existing_customer_info.get('DisplayName', 'Unknown')
-                input_name = f"{first_name} {last_name}"
-                if existing_name != input_name:
-                    st.warning(f"⚠️ Customer with email {email} already exists as '{existing_name}'")
-                    st.info("💡 Invoice will be sent to the existing customer. To use a different name, use a different email or update the customer in QuickBooks.")
-                else:
-                    st.info(f"✅ Customer already exists with email: {email}")
-            else:
-                st.info(f"✅ Customer already exists with email: {email}")
-            return existing_customer_id
+
+        # Try different API version that might support BillAddr better
+        if params is None:
+            params = {}
+        # Try older version that might have different BillAddr handling
+        params['minorversion'] = '40'
+
+        url = f"{self.base_url}/v3/company/{self.company_id}/{endpoint}"
         
         try:
-            # Use simplified URL construction with minorversion
-            customer_url = self._build_api_url("customer")
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
-            }
-            
-            # Use the correct format based on QuickBooks API documentation
-            customer_data = {
-                "DisplayName": f"{first_name} {last_name}",
-                "GivenName": first_name,
-                "FamilyName": last_name,
-                "PrimaryEmailAddr": {
-                    "Address": email
-                }
-            }
-            
-            # Add company name if provided
-            if company_name:
-                customer_data["CompanyName"] = company_name
-            
-            # Customer object should be at root level, not wrapped
-            payload = customer_data
-            
-            response = requests.post(customer_url, json=payload, headers=headers, allow_redirects=True, verify=False)
-            
-            # Handle 401 errors
-            # IMPORTANT: Ignore Wrong Cluster errors - just use main production URL
-            # QuickBooks will proxy requests internally even if it says wrong cluster
+            if method.lower() == 'get':
+                response = self.session.get(url, headers=self._get_headers(), params=params, timeout=45)
+            else:
+                response = self.session.post(url, headers=self._get_headers(), params=params, json=data, timeout=45)
+
+            # If 401, try refreshing token once
             if response.status_code == 401:
-                def retry_request(updated_headers):
-                    # Always use main production URL - ignore cluster errors
-                    current_url = self._normalize_quickbooks_url(
-                        f"{self.base_url}/v3/company/{self.company_id}/customer"
-                    )
-                    return requests.post(current_url, json=payload, headers=updated_headers, allow_redirects=True, verify=False)
-                
-                retry_response = self._handle_401_error(response, headers, retry_request)
-                if retry_response is None:
-                    # If we verified via preferences but still get Wrong Cluster, refresh token and retry
-                    # IGNORE Wrong Cluster errors - just use main production URL
-                    if self.verified_via_preferences:
-                        st.info("💡 Verified via preferences but got 401 - refreshing token and retrying with main URL...")
-                        self._debug("Ignoring Wrong Cluster errors - QuickBooks will proxy internally")
-                        if self.authenticate(force_refresh=True):
-                            headers["Authorization"] = f"Bearer {self.access_token}"
-                            try:
-                                # Always use main production URL - ignore cluster errors
-                                current_url = self._normalize_quickbooks_url(
-                                    f"{self.base_url}/v3/company/{self.company_id}/customer"
-                                )
-                                retry_response = requests.post(current_url, json=payload, headers=headers, allow_redirects=True, verify=False)
-                                
-                                # If we get 200/201, success!
-                                if retry_response.status_code in [200, 201]:
-                                    response = retry_response
-                                    self.base_url_verified = True
-                                elif retry_response.status_code == 401:
-                                    # Check if it's Wrong Cluster error - if so, try to parse response anyway
-                                    # Sometimes the request succeeds despite the error
-                                    try:
-                                        error_data = retry_response.json()
-                                        is_wrong_cluster = False
-                                        if 'Fault' in error_data:
-                                            fault = error_data['Fault']
-                                            if 'Error' in fault:
-                                                errors = fault['Error']
-                                                if isinstance(errors, dict):
-                                                    errors = [errors]
-                                                for error in errors:
-                                                    if error.get('code') == '130' or 'WrongCluster' in error.get('Message', ''):
-                                                        is_wrong_cluster = True
-                                                        break
-                                        
-                                        if is_wrong_cluster:
-                                            st.warning("⚠️ Still getting Wrong Cluster error - trying to parse response anyway")
-                                            # Try to extract customer ID from response (might succeed despite error)
-                                            customer_id = self._extract_customer_id_from_response(retry_response)
-                                            if customer_id:
-                                                st.success(f"✅ Successfully extracted customer ID despite Wrong Cluster error: {customer_id}")
-                                                return customer_id
-                                            
-                                            # Try following redirect
-                                            customer_id = self._try_follow_redirect_for_customer(retry_response, payload, headers)
-                                            if customer_id:
-                                                return customer_id
-                                        
-                                        # Try batch operations as fallback
-                                        self._debug("Trying batch operations as fallback...")
-                                        customer_id = self._try_create_customer_via_batch(first_name, last_name, email, company_name)
-                                        if customer_id:
-                                            return customer_id
-                                    except:
-                                        pass
-                                    
-                                    # If still failing after all attempts
-                                    response = retry_response
-                            except Exception as e:
-                                st.error(f"Error retrying customer creation: {str(e)}")
-                                return None
-                        else:
-                            return None
+                st.info("Token expired, refreshing...")
+                if self.authenticate(force_refresh=True):
+                    # Retry
+                    if method.lower() == 'get':
+                        response = self.session.get(url, headers=self._get_headers(), params=params, timeout=45)
                     else:
-                        return None
-                else:
-                    # retry_response is not None - use it
-                    response = retry_response
-                    # If successful, mark base_url as verified
-                    if response.status_code == 200:
-                        self.base_url_verified = True
+                        response = self.session.post(url, headers=self._get_headers(), params=params, json=data, timeout=45)
             
-            # Check response status before raise_for_status
-            # IMPORTANT: Don't fail on 401 if it's a Wrong Cluster error - QuickBooks proxies internally
-            if response.status_code == 401:
-                # Check if it's a Wrong Cluster error
-                is_wrong_cluster = False
-                try:
-                    error_data = response.json()
-                    if 'Fault' in error_data:
-                        fault = error_data['Fault']
-                        if 'Error' in fault:
-                            errors = fault['Error']
-                            if isinstance(errors, dict):
-                                errors = [errors]
-                            for error in errors:
-                                if error.get('code') == '130' or 'WrongCluster' in error.get('Message', ''):
-                                    is_wrong_cluster = True
-                                    break
-                except:
-                    pass
-                
-                # If it's a Wrong Cluster error and we verified via preferences, ignore it and continue
-                # Sometimes the request still succeeds despite the error
-                if is_wrong_cluster and self.verified_via_preferences:
-                    st.warning("⚠️ Got Wrong Cluster error - but preferences verified production")
-                    st.info("💡 Ignoring error - QuickBooks will proxy internally")
-                    # Try to parse the response anyway - sometimes it contains the customer data
-                    try:
-                        error_data = response.json()
-                        # Check if there's customer data in the response despite the error
-                        if 'Customer' in error_data:
-                            customer = error_data['Customer']
-                            if isinstance(customer, dict) and 'Id' in customer:
-                                st.success(f"✅ Found customer ID in response despite Wrong Cluster error: {customer['Id']}")
-                                return customer['Id']
-                    except:
-                        pass
-                    
-                    # Try to extract customer ID from response
-                    customer_id = self._extract_customer_id_from_response(response)
-                    if customer_id:
-                        st.success(f"✅ Successfully extracted customer ID despite Wrong Cluster error: {customer_id}")
-                        return customer_id
-                    
-                    # Try batch operations as fallback
-                    self._debug("Trying batch operations as fallback...")
-                    customer_id = self._try_create_customer_via_batch(first_name, last_name, email, company_name)
-                    if customer_id:
-                        return customer_id
-                    
-                    # If all else fails, show helpful error message
-                    st.error("❌ QuickBooks API Error: Cannot create customer due to Wrong Cluster errors")
-                    st.warning("⚠️ This is a known QuickBooks API limitation.")
-                    st.info("💡 **Solution:** Your company data is on a regional cluster that cannot be resolved via DNS.")
-                    st.info("💡 **Workaround:** Contact QuickBooks Developer Support to resolve cluster routing issues.")
-                    st.info("   • Company ID: 9341455592326421")
-                    st.info("   • Issue: Wrong Cluster errors on customer endpoints despite production verification")
-                    return None
-                else:
-                    # Not a Wrong Cluster error or not verified - return None
-                    st.error("❌ Customer creation failed with 401 error")
-                    return None
-            
-            # If we got here, response should be 200/201 - try to parse it
-            # Even if status is 401, sometimes the response contains the customer data
-            try:
-                customer_response = response.json()
-                customer = customer_response.get("Customer")
-                
-                if customer and isinstance(customer, dict) and "Id" in customer:
-                    st.success(f"✅ Customer created successfully: {customer['Id']}")
-                    return customer.get("Id")
-            except:
-                pass
-            
-            # If status is 200/201, raise for status if we couldn't parse customer
-            if response.status_code in [200, 201]:
-                try:
-                    response.raise_for_status()
-                    # If we got here, try to parse again
-                    customer_response = response.json()
-                    customer = customer_response.get("Customer")
-                    if customer:
-                        return customer.get("Id")
-                except:
-                    pass
-            
-            # Customer might already exist, try to find them
-            return self._find_customer_by_email(email)
-                
-        except requests.exceptions.RequestException as e:
-            st.error(f"Failed to create customer: {str(e)}")
+            return response
+        except requests.exceptions.Timeout as e:
+            st.error(f"⏰ Request timeout ({endpoint}): {str(e)}")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            st.error(f"🔌 Connection error ({endpoint}): {str(e)}")
             return None
         except Exception as e:
-            st.error(f"Unexpected error creating customer: {str(e)}")
-            return None
-    
-    def _get_or_create_sandbox_customer(self, first_name: str, last_name: str, email: str, company_name: str = None) -> Optional[str]:
-        """
-        Get or create a customer for sandbox testing
-        Since sandbox doesn't allow customer creation, we'll use existing customers
-        """
-        try:
-            # First try to find existing customer by email
-            existing_customer = self._find_customer_by_email(email)
-            if existing_customer:
-                return existing_customer
-            
-            # If not found, get the first available customer for testing
-            query_url = self._normalize_quickbooks_url(
-                f"{self.base_url}/v3/company/{self.company_id}/query?query=SELECT * FROM Customer"
-            )
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
-            }
-            
-            response = requests.get(query_url, headers=headers, verify=False)
-            
-            # If we get a 401, try to refresh the token and retry
-            if response.status_code == 401:
-                self._debug("Access token expired, refreshing...")
-                if self.authenticate():
-                    headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.get(query_url, headers=headers, verify=False)
-                else:
-                    st.error("Failed to refresh access token")
-                    return None
-            
-            response.raise_for_status()
-            
-            customers_data = response.json()
-            customers = customers_data.get('QueryResponse', {}).get('Customer', [])
-            
-            if customers:
-                # Use the first customer for testing
-                customer = customers[0]
-                customer_id = customer.get('Id')
-                customer_name = customer.get('Name', 'Unknown')
-                
-                st.info(f"🔧 Using existing customer '{customer_name}' (ID: {customer_id}) for testing")
-                return customer_id
-            else:
-                st.error("No customers found in sandbox")
-                return None
-                
-        except Exception as e:
-            st.error(f"Failed to get sandbox customer: {str(e)}")
-            return None
-    
-    def _get_customer_info(self, customer_id: str) -> Optional[Dict]:
-        """
-        Get customer information by ID
-        
-        Args:
-            customer_id: Customer ID
-            
-        Returns:
-            Dict: Customer information if found, None otherwise
-        """
-        if not self.access_token:
-            if not self.authenticate():
-                return None
-        
-        try:
-            customer_url = self._normalize_quickbooks_url(
-                f"{self.base_url}/v3/company/{self.company_id}/customer/{customer_id}"
-            )
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"
-            }
-            
-            response = requests.get(customer_url, headers=headers, verify=False)
-            
-            if response.status_code == 401:
-                if self.authenticate():
-                    headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.get(customer_url, headers=headers, verify=False)
-                else:
-                    return None
-            
-            response.raise_for_status()
-            customer_data = response.json()
-            return customer_data.get("Customer")
-            
-        except Exception as e:
-            return None
-    
-    def _find_customer_by_email(self, email: str) -> Optional[str]:
-        """
-        Find existing customer by email address
-        
-        Args:
-            email: Customer's email address
-            
-        Returns:
-            str: Customer ID if found, None otherwise
-        """
-        # Always authenticate to ensure we have a fresh token (force refresh)
-        if not self.authenticate(force_refresh=True):
-                return None
-        
-        try:
-            # Query to find customer by email
-            query = f"SELECT * FROM Customer WHERE PrimaryEmailAddr = '{email}'"
-            query_url = self._build_api_url("query", {"query": query})
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
-            }
-            
-            response = requests.get(query_url, headers=headers, verify=False)
-            
-            # Handle 400 errors (deployment routing issue)
-            if response.status_code == 400:
-                st.info("💡 Customer query returned 400 error - likely deployment routing issue")
-                st.info("💡 Proceeding with customer creation instead of search")
-                return None  # Return None to trigger customer creation
-            
-            # Handle 401 errors
-            if response.status_code == 401:
-                def retry_request(updated_headers):
-                    # Use current base_url (may have been updated for cluster redirect)
-                    current_url = self._normalize_quickbooks_url(
-                        f"{self.base_url}/v3/company/{self.company_id}/query"
-                    )
-                    return requests.get(current_url, params=params, headers=updated_headers, verify=False)
-                
-                retry_response = self._handle_401_error(response, headers, retry_request)
-                if retry_response is None:
-                    # If we verified via preferences but still get Wrong Cluster, refresh token and retry
-                    if self.verified_via_preferences:
-                        st.info("💡 Verified via preferences but got 401 - refreshing token and retrying...")
-                        if self.authenticate(force_refresh=True):
-                            headers["Authorization"] = f"Bearer {self.access_token}"
-                            try:
-                                current_url = self._normalize_quickbooks_url(
-                                    f"{self.base_url}/v3/company/{self.company_id}/query"
-                                )
-                                retry_response = requests.get(current_url, params=params, headers=headers)
-                                if retry_response.status_code == 200:
-                                    response = retry_response
-                                elif retry_response.status_code == 401:
-                                    # Check if it's Wrong Cluster error
-                                    try:
-                                        error_data = retry_response.json()
-                                        if 'Fault' in error_data:
-                                            fault = error_data['Fault']
-                                            if 'Error' in fault:
-                                                errors = fault['Error']
-                                                if isinstance(errors, dict):
-                                                    errors = [errors]
-                                                for error in errors:
-                                                    if error.get('code') == '130' or 'WrongCluster' in error.get('Message', ''):
-                                                        # Still Wrong Cluster but verified via preferences - try anyway
-                                                        st.warning("⚠️ Still getting Wrong Cluster error, but cluster verified via preferences")
-                                                        # Return empty result instead of None
-                                                        return None
-                                    except:
-                                        pass
-                                    if response.status_code == 401:
-                                        return None
-                            except Exception as e:
-                                st.error(f"Error retrying customer query: {str(e)}")
-                                return None
-                        else:
-                            return None
-                    # If cluster was updated, retry once more with new URL
-                    elif not self.base_url_verified:
-                        try:
-                            current_url = self._normalize_quickbooks_url(
-                                f"{self.base_url}/v3/company/{self.company_id}/query"
-                            )
-                            retry_response = requests.get(current_url, params=params, headers=headers)
-                            if retry_response.status_code == 200:
-                                response = retry_response
-                            else:
-                                return None
-                        except:
-                            return None
-                    else:
-                        return None
-                else:
-                    response = retry_response
-            
-            response.raise_for_status()
-            
-            query_response = response.json()
-            customers = query_response.get("QueryResponse", {}).get("Customer", [])
-            
-            if customers:
-                return customers[0].get("Id")
-            
-            return None
-            
-        except Exception as e:
-            st.error(f"Error finding customer: {str(e)}")
-            return None
-    
-    def _get_all_items(self) -> list:
-        """
-        Fetch all items (Service and Non-Inventory) from QuickBooks and cache them
-        
-        Returns:
-            list: List of item dictionaries
-        """
-        # Return cached items if available
-        if self.items_cache is not None:
-            return self.items_cache
-        
-        if not self.access_token:
-            if not self.authenticate():
-                return []
-        
-        try:
-            query_url = self._normalize_quickbooks_url(
-                f"{self.base_url}/v3/company/{self.company_id}/query"
-            )
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"
-            }
-            
-            # Query for all active items (includes Service and NonInventory)
-            query = "SELECT * FROM Item WHERE Active = true"
-            params = {"query": query}
-            
-            response = requests.get(query_url, params=params, headers=headers, verify=False)
-            
-            if response.status_code == 401:
-                if self.authenticate():
-                    headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.get(query_url, params=params, headers=headers, verify=False)
-                else:
-                    return []
-            
-            response.raise_for_status()
-            data = response.json()
-            items = data.get("QueryResponse", {}).get("Item", [])
-            
-            # Cache the items
-            self.items_cache = items
-            
-            return items
-            
-        except Exception as e:
-            print(f"Error fetching items: {str(e)}")
-            return []
-    
-    def _get_default_income_account(self) -> str:
-        """Get the default income account ID for services"""
-        try:
-            # Query for income accounts - try multiple types
-            queries = [
-                "SELECT * FROM Account WHERE AccountType = 'Income' MAXRESULTS 5",
-                "SELECT * FROM Account WHERE Classification = 'Revenue' MAXRESULTS 5"
-            ]
-            
-            for query in queries:
-                url = self._normalize_quickbooks_url(
-                    f"{self.base_url}/v3/company/{self.company_id}/query?query={query}"
-                )
-                headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
-                
-                response = requests.get(url, headers=headers, verify=False)
-                if response.status_code == 200:
-                    data = response.json()
-                    accounts = data.get("QueryResponse", {}).get("Account", [])
-                    if accounts:
-                        # Try to find "Sales" or "Service" income account
-                        for acc in accounts:
-                            acc_name = acc.get("Name", "").lower()
-                            if "sales" in acc_name or "service" in acc_name or "income" in acc_name:
-                                return acc.get("Id")
-                        # If no match, use first available
-                        return accounts[0].get("Id", "1")
-            return "1"  # Fallback ID
-        except Exception as e:
-            print(f"Error getting income account: {e}")
-            return "1"
-    
-    def _get_default_expense_account(self) -> str:
-        """Get the default expense account ID for services"""
-        try:
-            # Query for expense accounts
-            queries = [
-                "SELECT * FROM Account WHERE AccountType = 'Cost of Goods Sold' MAXRESULTS 5",
-                "SELECT * FROM Account WHERE AccountType = 'Expense' MAXRESULTS 5"
-            ]
-            
-            for query in queries:
-                url = self._normalize_quickbooks_url(
-                    f"{self.base_url}/v3/company/{self.company_id}/query?query={query}"
-                )
-                headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
-                
-                response = requests.get(url, headers=headers, verify=False)
-                if response.status_code == 200:
-                    data = response.json()
-                    accounts = data.get("QueryResponse", {}).get("Account", [])
-                    if accounts:
-                        # Try to find COGS or expense account
-                        for acc in accounts:
-                            acc_name = acc.get("Name", "").lower()
-                            if "cost" in acc_name or "expense" in acc_name or "cogs" in acc_name:
-                                return acc.get("Id")
-                        # If no match, use first available
-                        return accounts[0].get("Id", "1")
-            return "1"  # Fallback ID
-        except Exception as e:
-            print(f"Error getting expense account: {e}")
-            return "1"
-    
-    def _create_service_item(self, item_name: str, description: str = "") -> str:
-        """
-        Create a new service item in QuickBooks
-        
-        Args:
-            item_name: Name of the item to create
-            description: Optional description for the item
-            
-        Returns:
-            str: Created item ID or "2" if creation fails
-        """
-        if not self.access_token:
-            if not self.authenticate():
-                return "2"  # Fallback to generic item
-        
-        try:
-            url = self._normalize_quickbooks_url(
-                f"{self.base_url}/v3/company/{self.company_id}/item"
-            )
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            }
-            
-            # Create service item following QuickBooks API format
-            # Use account IDs from your QuickBooks company:
-            # ID 1 = Services (Income)
-            # ID 12 = Cost of Goods Sold (Expense)
-            item_data = {
-                "Name": item_name,
-                "Type": "Service",
-                "Active": True,
-                "IncomeAccountRef": {
-                    "value": "1",  # Services income account
-                    "name": "Services"
-                },
-                "ExpenseAccountRef": {
-                    "value": "12",  # Cost of Goods Sold
-                    "name": "Cost of Goods Sold"
-                }
-            }
-            
-            if description:
-                item_data["Description"] = description
-            
-            response = requests.post(url, headers=headers, json=item_data, verify=False)
-            
-            if response.status_code == 401:
-                if self.authenticate():
-                    headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.post(url, headers=headers, json=item_data, verify=False)
-                else:
-                    return "2"
-            
-            if response.status_code == 200 or response.status_code == 201:
-                result = response.json()
-                created_item = result.get("Item", {})
-                item_id = created_item.get("Id")
-                
-                if item_id:
-                    # Clear cache so new item is included in future queries
-                    self.items_cache = None
-                    return item_id
-            
-            # If creation failed, fallback to item "2"
-            return "2"
-            
-        except Exception as e:
-            return "2"
-
-    def _find_best_item_match(self, line_item_name: str, show_match_info: bool = False) -> str:
-        """
-        Find the best matching QuickBooks item for a line item name
-        Uses exact match, then partial match, then creates new item if needed
-        
-        Args:
-            line_item_name: Name of the line item to match
-            show_match_info: Whether to show matching info in UI (default: False)
-            
-        Returns:
-            str: QuickBooks item ID
-        """
-        items = self._get_all_items()
-        
-        if not items:
-            # Create the item if we can't fetch existing items
-            item_id = self._create_service_item(line_item_name)
-            if show_match_info:
-                st.info(f"✓ '{line_item_name}' → Created new item")
-            return item_id
-        
-        line_item_lower = line_item_name.lower().strip()
-        
-        # 1. Try exact match (case insensitive)
-        for item in items:
-            if item.get('Active', False):
-                item_name = item.get('Name', '').lower().strip()
-                if item_name == line_item_lower:
-                    if show_match_info:
-                        st.info(f"✓ '{line_item_name}' → Exact match: '{item.get('Name')}'")
-                    return item.get('Id')
-        
-        # 2. Try partial match - check if line item name contains item name or vice versa
-        for item in items:
-            if item.get('Active', False):
-                item_name = item.get('Name', '').lower().strip()
-                # Skip the generic "-" item for partial matching
-                if item_name in ['-', '']:
-                    continue
-                # Check both directions
-                if item_name in line_item_lower or line_item_lower in item_name:
-                    if show_match_info:
-                        st.info(f"✓ '{line_item_name}' → Partial match: '{item.get('Name')}'")
-                    return item.get('Id')
-        
-        # 3. No match found - try to create the item
-        if show_match_info:
-            st.info(f"📝 No match found for '{line_item_name}', attempting to create...")
-        
-        item_id = self._create_service_item(line_item_name)
-        
-        # If creation was successful, return the new item ID
-        if item_id != "2":
-            return item_id
-        
-        # 4. Creation failed - find and use the "-" generic item as fallback
-        for item in items:
-            if item.get('Active', False):
-                item_name = item.get('Name', '').strip()
-                item_type = item.get('Type', '')
-                # Only use "-" if it's a Service or NonInventory item, not a Category
-                if item_name == '-' and item_type in ['Service', 'NonInventory']:
-                    if show_match_info:
-                        st.warning(f"⚠️ '{line_item_name}' → Item creation failed, using generic '-' item")
-                    return item.get('Id')
-        
-        # 5. Last resort: Fallback to item ID "2" if "-" not found
-        if show_match_info:
-            st.warning(f"⚠️ '{line_item_name}' → Using default item ID 2")
-        return "2"
-    
-    def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
-                     email: str, company_name: str = None, client_address: str = None,
-                     contract_amount: str = "0", description: str = "Contract Services", 
-                     line_items: list = None, payment_terms: str = "Due in Full", 
-                     enable_payment_link: bool = True, invoice_date: str = None) -> Optional[str]:
-        """
-        Create an invoice in QuickBooks or simulate in sandbox
-        
-        Args:
-            customer_id: ID of the customer
-            first_name: Customer's first name
-            last_name: Customer's last name
-            email: Customer's email address
-            company_name: Customer's company name (optional)
-            client_address: Customer's billing address (optional)
-            contract_amount: Contract amount (will be converted to float)
-            description: Description of the service
-            line_items: List of line items with type, amount, and description
-            payment_terms: Payment terms for the invoice
-            enable_payment_link: Whether to enable online payment link
-            invoice_date: Date of the invoice
-            
-        Returns:
-            str: Invoice ID if successful, None otherwise
-        """
-        # Always re-authenticate to ensure we have a fresh access token
-        if not self.authenticate():
-            st.error("❌ Failed to authenticate with QuickBooks")
-            return None
-        
-        # In sandbox mode, we can't create invoices, so simulate the process
-        if self.sandbox:
-            st.info("🔧 Sandbox Mode: Simulating invoice creation")
-            return self._simulate_invoice_creation(customer_id, first_name, last_name, email, company_name, client_address,
-                                                 contract_amount, description, line_items, 
-                                                 payment_terms, enable_payment_link, invoice_date)
-        
-        try:
-            payload = self._build_invoice_payload(
-                customer_id=customer_id,
-                email=email,
-                company_name=company_name,
-                client_address=client_address,
-                contract_amount=contract_amount,
-                description=description,
-                line_items=line_items,
-                payment_terms=payment_terms,
-                enable_payment_link=enable_payment_link,
-                invoice_date=invoice_date,
-                invoice_number=None
-            )
-            
-            invoice_url = self._build_api_url("invoice")
-            
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
-            }
-            
-            response = requests.post(invoice_url, json=payload, headers=headers, verify=False)
-            
-            # If we get a 401, try to refresh the token and retry
-            if response.status_code == 401:
-                self._debug("Access token expired, refreshing...")
-                if self.authenticate():
-                    headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.post(invoice_url, json=payload, headers=headers, verify=False)
-                else:
-                    st.error("Failed to refresh access token")
-                    return None
-            
-            # Check response status
-            if response.status_code != 200:
-                st.error(f"❌ QuickBooks API Error (Status {response.status_code})")
-                st.error(f"Response: {response.text[:500]}")
-                try:
-                    st.info("📦 Invoice payload sent to QuickBooks:")
-                    st.code(json.dumps(self._scrub_invoice_payload_for_logging(payload), indent=2))
-                except Exception:
-                    pass
-                return None
-            
-            invoice_response = response.json()
-            invoice = invoice_response.get("Invoice")
-            
-            if invoice:
-                return invoice.get("Id")
-            else:
-                st.error("Failed to create invoice")
-                return None
-                
-        except ValueError:
-            st.error("Invalid contract amount format")
-            return None
-        except requests.exceptions.RequestException as e:
-            st.error(f"Failed to create invoice: {str(e)}")
-            return None
-        except Exception as e:
-            st.error(f"Unexpected error creating invoice: {str(e)}")
+            st.error(f"❌ Request error ({endpoint}): {str(e)}")
             return None
 
-    def _build_invoice_payload(
-        self,
-        customer_id: str,
-        email: Optional[str],
-        company_name: Optional[str],
-        client_address: Optional[str],
-        contract_amount: str,
-        description: str,
-        line_items: Optional[list],
-        payment_terms: str,
-        enable_payment_link: bool,
-        invoice_date: Optional[str],
-        invoice_number: Optional[str] = None
-    ) -> Dict:
-        """
-        Build the QuickBooks invoice payload that will be sent to the API.
-
-        This helper keeps payload construction testable and avoids including
-        unsupported fields such as AllowOnlinePayment.
-        """
-
-        if line_items:
-            invoice_lines = []
-
-            for item in line_items:
-                quantity = item.get('quantity', 1) or 1
-                total_amount = float(item.get('amount', 0) or 0)
-                line_item_type = item.get('type', item.get('description', 'Service'))
-                type_lower = (line_item_type or "").lower()
-                line_item_description = item.get('line_description', item.get('name', ''))
-
-                # Use DiscountLineDetail for discounts/negative entries
-                if total_amount < 0 or 'discount' in type_lower:
-                    discount_amount = abs(total_amount)
-                    description = line_item_description or item.get('description', 'Discount')
-
-                    invoice_lines.append({
-                        "Amount": round(discount_amount, 2),
-                        "DetailType": "DiscountLineDetail",
-                        "Description": description,
-                        "DiscountLineDetail": {
-                            "PercentBased": False,
-                            "DiscountAccountRef": {
-                                "value": self._get_discount_account_id()
-                            }
-                        }
-                    })
-                    continue
-
-                # Normalize quantity to positive values; adjust amount sign accordingly
-                if quantity == 0:
-                    quantity = 1
-                if quantity < 0:
-                    quantity = abs(quantity)
-                    total_amount = -total_amount
-
-                unit_price = float(item.get('unit_price', total_amount / quantity if quantity else total_amount))
-                unit_price = round(unit_price, 2)
-                line_total = round(unit_price * quantity, 2)
-
-                if line_item_type == "Contract Services":
-                    item_id = self._find_best_item_match(line_item_type, show_match_info=False)
-                    full_description = line_item_description if line_item_description else ""
-                elif line_item_type == "Credit Card Processing Fee":
-                    item_id = self._find_best_item_match(line_item_type, show_match_info=False)
-                    full_description = "3% processing fee for credit card payments"
-                elif line_item_type == "Credits & Discounts":
-                    item_id = self._find_best_item_match(line_item_type, show_match_info=False)
-                    full_description = line_item_description if line_item_description else item.get('description', '')
-                else:
-                    item_id = self._find_best_item_match(line_item_type, show_match_info=False)
-                    full_description = line_item_description if line_item_description else ""
-
-                invoice_lines.append({
-                    "Amount": line_total,
-                    "DetailType": "SalesItemLineDetail",
-                    "Description": full_description,
-                    "SalesItemLineDetail": {
-                        "Qty": quantity,
-                        "UnitPrice": unit_price,
-                        "ItemRef": {
-                            "value": item_id
-                        }
-                    }
-                })
-        else:
-            amount_str = contract_amount.replace('$', '').replace(',', '')
-            amount = float(amount_str)
-            item_id = self._find_best_item_match(description, show_match_info=False)
-            invoice_lines = [
-                {
-                    "DetailType": "SalesItemLineDetail",
-                    "Amount": amount,
-                    "SalesItemLineDetail": {
-                        "ItemRef": {
-                            "value": item_id
-                        },
-                        "Qty": 1,
-                        "UnitPrice": amount
-                    },
-                    "Description": ""
-                }
-            ]
-
-        if invoice_date:
-            txn_date = invoice_date.strftime("%Y-%m-%d") if hasattr(invoice_date, 'strftime') else str(invoice_date)
-        else:
-            txn_date = datetime.now().strftime("%Y-%m-%d")
-
-        invoice_data = {
-            "CustomerRef": {"value": customer_id},
-            "TxnDate": txn_date,
-            "DueDate": txn_date,
-            "Line": invoice_lines,
-            "EmailStatus": "NotSet"
-        }
-
-        if invoice_number:
-            invoice_data["DocNumber"] = str(invoice_number)
-        else:
-            invoice_data["AutoDocNumber"] = True
-
-        # QuickBooks does not accept online payment toggles on invoice creation.
-        # These must be configured in company preferences instead.
-
-        if email:
-            invoice_data["BillEmail"] = {"Address": email}
-
-        bill_addr = self._parse_bill_address(company_name, client_address)
-        if bill_addr:
-            invoice_data["BillAddr"] = bill_addr
-
-        if payment_terms != "Due in Full":
-            invoice_data["SalesTermRef"] = {
-                "value": self._get_payment_term_id(payment_terms)
-            }
-
-        return invoice_data
-
-    def _parse_bill_address(self, company_name: Optional[str], client_address: Optional[str]) -> Optional[Dict[str, str]]:
-        """
-        Convert company/address strings into QuickBooks BillAddr structure (Line1-Line5).
-        """
-        lines: list[str] = []
-
-        if company_name:
-            lines.append(company_name.strip())
-
-        if client_address:
-            parts = [part.strip() for part in client_address.split(",") if part.strip()]
-            lines.extend(parts)
-
-        if not lines:
-            return None
-
-        bill_addr: Dict[str, str] = {}
-        for idx, value in enumerate(lines[:5]):
-            bill_addr[f"Line{idx + 1}"] = value
-
-        return bill_addr
-
-    def _get_discount_account_id(self) -> str:
-        """
-        Retrieve (and cache) an account ID to use for DiscountLineDetail entries.
-        """
-        if self._discount_account_id:
-            return self._discount_account_id
-
-        # Default to the primary income account if a dedicated discount account isn't specified.
-        self._discount_account_id = self._get_default_income_account()
-        return self._discount_account_id
-
-    def _scrub_invoice_payload_for_logging(self, payload: Dict) -> Dict:
-        """
-        Prepare a sanitized copy of the invoice payload for debugging output.
-        Ensures all values are JSON-serializable and removes potentially sensitive data.
-        """
-        def scrub(value):
-            if isinstance(value, dict):
-                return {k: scrub(v) for k, v in value.items()}
-            if isinstance(value, list):
-                return [scrub(v) for v in value]
-            if isinstance(value, (datetime,)):
-                return value.isoformat()
-            if isinstance(value, float):
-                # Use standard two-decimal formatting for readability
-                return float(f"{value:.2f}")
-            return value
-
-        safe_payload = scrub(payload)
-
-        # Remove or mask anything that shouldn't be logged (currently none, but placeholder for future)
-        return safe_payload
-    
-    def _simulate_invoice_creation(self, customer_id: str, first_name: str, last_name: str, 
-                                 email: str, company_name: str = None, client_address: str = None,
-                                 contract_amount: str = "0", description: str = "Contract Services", 
-                                 line_items: list = None, payment_terms: str = "Due in Full", 
-                                 enable_payment_link: bool = True, invoice_date: str = None) -> str:
-        """
-        Simulate invoice creation for sandbox testing
-        """
-        try:
-            # Calculate total amount
-            if line_items:
-                total_amount = sum(item['amount'] * item.get('quantity', 1) for item in line_items)
-            else:
-                # Convert contract amount to float
-                amount_str = contract_amount.replace('$', '').replace(',', '')
-                total_amount = float(amount_str)
-            
-            # Generate a simulated invoice ID
-            simulated_invoice_id = f"SIM_{customer_id}_{int(datetime.now().timestamp())}"
-            
-            st.success(f"✅ Invoice simulation successful!")
-            st.info(f"📋 Simulated Invoice Preview (Your Custom Template):")
-            st.info(f"")
-            st.info(f"   BILL TO: {first_name} {last_name}")
-            if company_name:
-                st.info(f"   COMPANY: {company_name}")
-            if client_address:
-                st.info(f"   ADDRESS: {client_address}")
-            st.info(f"   EMAIL: {email}")
-            st.info(f"   TERMS: {payment_terms}")
-            
-            if invoice_date:
-                date_str = invoice_date.strftime('%m/%d/%Y') if hasattr(invoice_date, 'strftime') else str(invoice_date)
-            else:
-                date_str = datetime.now().strftime('%m/%d/%Y')
-            st.info(f"   DATE: {date_str}")
-            st.info(f"")
-            
-            # Display line items in Standard template format
-            if line_items:
-                st.info(f"   DATE        ACTIVITY                          QTY    RATE        AMOUNT")
-                st.info(f"   " + "-" * 70)
-                
-                subtotal = 0
-                for item in line_items:
-                    quantity = item.get('quantity', 1)
-                    unit_price = item['amount']
-                    line_total = unit_price * quantity
-                    subtotal += line_total
-                    
-                    item_name = item.get('type', item.get('description', 'Service'))
-                    line_desc = item.get('line_description', '')
-                    
-                    # Format the display like the Standard template
-                    if unit_price < 0:
-                        # Credit/Discount
-                        st.info(f"   {date_str}  {item_name}")
-                        if line_desc:
-                            st.info(f"              {line_desc}")
-                        st.info(f"   {'':>10} {quantity:>3}  ${abs(unit_price):>8,.2f}  -${abs(line_total):>8,.2f}")
-                    else:
-                        st.info(f"   {date_str}  {item_name}")
-                        if line_desc:
-                            st.info(f"              {line_desc}")
-                        st.info(f"   {'':>10} {quantity:>3}  ${unit_price:>8,.2f}   ${line_total:>8,.2f}")
-                    st.info(f"")
-                
-                st.info(f"   " + "-" * 60)
-                st.info(f"   SUBTOTAL: ${subtotal:>10,.2f}")
-            else:
-                st.info(f"   • Amount: ${total_amount:,.2f}")
-                st.info(f"   • Description: {description}")
-            
-            st.info(f"")
-            if enable_payment_link:
-                st.info(f"   🔗 Online Payment: **ENABLED** - Credit Card and ACH")
-            else:
-                st.info(f"   Online Payment: Disabled")
-            
-            st.info(f"   • **Amount Due: ${total_amount:,.2f}**")
-            st.info(f"   • Simulated Invoice ID: {simulated_invoice_id}")
-            
-            if invoice_date:
-                date_str = invoice_date.strftime('%Y-%m-%d') if hasattr(invoice_date, 'strftime') else str(invoice_date)
-                st.info(f"   • Invoice Date: {date_str}")
-            else:
-                st.info(f"   • Date: {datetime.now().strftime('%Y-%m-%d')}")
-            
-            st.warning("🔧 Note: This is a sandbox simulation. In production, a real invoice would be created.")
-            
-            return simulated_invoice_id
-            
-        except ValueError:
-            st.error("Invalid contract amount format")
-            return None
-        except Exception as e:
-            st.error(f"Error in invoice simulation: {str(e)}")
-            return None
+    # --- Business Methods (Customer, Invoice, etc.) ---
     
     def _get_payment_term_id(self, payment_terms: str) -> str:
         """
@@ -2026,210 +167,535 @@ class QuickBooksAPI:
             "Net 30": "3", 
             "Net 60": "4"
         }
-        return term_mapping.get(payment_terms, "2")  # Default to Net 30
+        return term_mapping.get(payment_terms, "1")  # Default to Due on receipt instead of Net 30
     
-    def send_invoice(self, invoice_id: str, email: str) -> bool:
+    def _parse_bill_address(self, company_name: Optional[str], client_address: Optional[str]) -> Optional[Dict[str, str]]:
         """
-        Send invoice to customer via email or simulate in sandbox
-        
-        Args:
-            invoice_id: ID of the invoice to send
-            email: Email address to send to
-            
-        Returns:
-            bool: True if successful, False otherwise
+        Convert company/address strings into QuickBooks BillAddr structure (Line1-Line5).
+        Fix: Now handles newlines properly from Streamlit text_area.
         """
-        if not self.access_token:
-            if not self.authenticate():
-                return False
+        lines: list[str] = []
         
-        # In sandbox mode, simulate sending the invoice
-        if self.sandbox:
-            st.info("🔧 Sandbox Mode: Simulating invoice email")
-            st.success(f"✅ Invoice email simulation successful!")
-            st.info(f"📧 Simulated sending invoice {invoice_id} to {email}")
-            st.warning("🔧 Note: This is a sandbox simulation. In production, a real email would be sent.")
-            return True
+        if company_name:
+            lines.append(company_name.strip())
         
+        if client_address:
+            # Normalize newlines and split by line first (preserves formatting)
+            # If user typed: "123 Main St [enter] New York, NY"
+            # This ensures "123 Main St" is Line1 and "New York, NY" is Line2
+            clean_address = client_address.replace('\r\n', '\n').replace('\r', '\n')
+            parts = [part.strip() for part in clean_address.split('\n') if part.strip()]
+            lines.extend(parts)
+        
+        if not lines:
+            return None
+        
+        bill_addr: Dict[str, str] = {}
+        # QuickBooks allows up to 5 lines for address
+        for idx, value in enumerate(lines[:5]):
+            bill_addr[f"Line{idx + 1}"] = value
+        
+        return bill_addr
+    
+    def _get_or_create_service_item(self, service_name: str) -> str:
+        """
+        Get or create a service item for the given service name
+        Returns the item ID to use in invoice line items
+        """
+        # First, try to find existing item
+        existing_id = self._find_item_by_name(service_name)
+        if existing_id:
+            return existing_id
+        
+        # Create new service item
+        return self._create_service_item(service_name)
+    
+    def _find_item_by_name(self, item_name: str) -> Optional[str]:
+        """Find an existing item by name"""
         try:
-            # Use the correct endpoint format from QuickBooks API documentation
-            send_url = self._normalize_quickbooks_url(
-                f"{self.base_url}/v3/company/{self.company_id}/invoice/{invoice_id}/send?sendTo={email}"
-            )
+            # Escape single quotes for QB SQL
+            safe_name = item_name.replace("'", "\\'")
+            query = f"SELECT * FROM Item WHERE Name = '{safe_name}' AND Type = 'Service'"
+            response = self._make_request('GET', 'query', params={'query': query})
             
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/octet-stream",
-                "Accept": "application/json",
-                "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
+            if response and response.status_code == 200:
+                data = response.json()
+                items = data.get('QueryResponse', {}).get('Item', [])
+                if items:
+                    return items[0]['Id']
+        except Exception as e:
+            st.warning(f"⚠️ Error searching for item '{item_name}': {str(e)}")
+        
+        return None
+    
+    def _create_service_item(self, service_name: str) -> str:
+        """Create a new service item"""
+        try:
+            payload = {
+                "Name": service_name,
+                "Type": "Service",
+                "IncomeAccountRef": {"value": "1"}  # Default income account
             }
             
-            # Send empty body as per API documentation
-            response = requests.post(send_url, headers=headers)
+            response = self._make_request('POST', 'item', data=payload)
             
-            # If we get a 401, try to refresh the token and retry
-            if response.status_code == 401:
-                self._debug("Access token expired, refreshing...")
-                if self.authenticate():
-                    headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.post(send_url, headers=headers)
-                else:
-                    st.error("Failed to refresh access token")
-                    return False
-            
-            response.raise_for_status()
-            
-            return True
-            
-        except requests.exceptions.RequestException as e:
-            st.error(f"Failed to send invoice: {str(e)}")
-            return False
+            if response and response.status_code == 200:
+                item = response.json().get("Item", {})
+                return item.get("Id")
+            else:
+                st.warning(f"⚠️ Failed to create service item '{service_name}', using default")
+                return "1"  # Fallback to default service item
+                
         except Exception as e:
-            st.error(f"Unexpected error sending invoice: {str(e)}")
-            return False
+            st.warning(f"⚠️ Error creating service item '{service_name}': {str(e)}, using default")
+            return "1"  # Fallback to default service item
     
+    def _update_invoice_doc_number(self, invoice_id: str, invoice_data: dict):
+        """Update invoice DocNumber to use the invoice ID"""
+        try:
+            # Prepare update payload with the invoice ID as DocNumber
+            update_payload = {
+                "Id": invoice_id,
+                "SyncToken": invoice_data.get("SyncToken", "0"),
+                "DocNumber": invoice_id  # Set DocNumber to the invoice ID
+            }
+            
+            # Copy required fields for update
+            for field in ["CustomerRef", "TxnDate", "Line"]:
+                if field in invoice_data:
+                    update_payload[field] = invoice_data[field]
+            
+            response = self._make_request('POST', 'invoice', data=update_payload)
+            
+            if not (response and response.status_code == 200):
+                st.warning("⚠️ Could not update invoice number, but invoice was created successfully")
+                
+        except Exception as e:
+            st.warning(f"⚠️ Error updating invoice DocNumber: {str(e)}")
+            # Don't fail the whole process for this
+    
+    def _update_customer_for_company_billing(self, customer_id: str, company_name: str):
+        """Update existing customer to show only company name in BILL TO (remove person name)"""
+        try:
+            # First get the current customer data
+            response = self._make_request('GET', f'customer/{customer_id}')
+            if response and response.status_code == 200:
+                customer_data = response.json().get("Customer", {})
+                
+                # Update to show only company name in BILL TO
+                update_payload = {
+                    "Id": customer_id,
+                    "SyncToken": customer_data.get("SyncToken", "0"),
+                    "DisplayName": company_name,  # Use company name as DisplayName
+                    "CompanyName": company_name,
+                    # Explicitly remove GivenName and FamilyName to prevent showing person name
+                    "GivenName": "",
+                    "FamilyName": ""
+                }
+                
+                # Keep essential fields but do NOT copy BillAddr from customer
+                # We want the invoice BillAddr to override the customer's default
+                if "PrimaryEmailAddr" in customer_data:
+                    update_payload["PrimaryEmailAddr"] = customer_data["PrimaryEmailAddr"]
+                
+                # Update customer
+                update_response = self._make_request('POST', 'customer', data=update_payload)
+                if update_response and update_response.status_code == 200:
+                    st.info(f"✅ Updated customer to show only company name in BILL TO")
+                
+        except Exception as e:
+            st.warning(f"⚠️ Error updating customer for company billing: {str(e)}")
+            # Don't fail the whole process for this
+    
+    def _clear_customer_billing_address(self, customer_id: str):
+        """Clear customer's default billing address to prevent invoice conflicts"""
+        try:
+            # Get current customer data
+            response = self._make_request('GET', f'customer/{customer_id}')
+            if response and response.status_code == 200:
+                customer_data = response.json().get("Customer", {})
+                
+                # Remove BillAddr from customer if it exists
+                if "BillAddr" in customer_data:
+                    update_payload = {
+                        "Id": customer_id,
+                        "SyncToken": customer_data.get("SyncToken", "0"),
+                        "DisplayName": customer_data.get("DisplayName"),
+                        "CompanyName": customer_data.get("CompanyName"),
+                        "GivenName": "",
+                        "FamilyName": ""
+                    }
+                    
+                    # Keep essential fields but remove BillAddr
+                    if "PrimaryEmailAddr" in customer_data:
+                        update_payload["PrimaryEmailAddr"] = customer_data["PrimaryEmailAddr"]
+                    
+                    # Update customer without BillAddr
+                    update_response = self._make_request('POST', 'customer', data=update_payload)
+                    if update_response and update_response.status_code == 200:
+                        st.info(f"✅ Cleared customer default address to prevent conflicts")
+                
+        except Exception as e:
+            st.warning(f"⚠️ Error clearing customer billing address: {str(e)}")
+            # Don't fail the whole process for this
+
+    def create_customer(self, first_name: str, last_name: str, email: str, company_name: str = None) -> Optional[str]:
+        """Create or find a customer"""
+        # If we have a company name, we need to ensure DisplayName shows company name
+        # So we'll create a new customer or find one with the right DisplayName
+        if company_name:
+            # Try to find existing customer with company DisplayName
+            existing_id = self._find_customer_by_display_name(company_name)
+            if existing_id:
+                # CRITICAL FIX: Existing customers may have conflicts that prevent BillAddr/payment terms
+                # Instead of updating, create a new customer with a unique name to avoid conflicts
+                st.warning(f"⚠️ Found existing customer '{company_name}' but creating new one to avoid conflicts")
+                
+                # Create unique customer name by adding timestamp
+                import time
+                unique_suffix = str(int(time.time()))[-4:]
+                unique_company_name = f"{company_name} #{unique_suffix}"
+                
+                st.info(f"✅ Creating new customer: '{unique_company_name}' to ensure proper billing")
+                
+                # Continue to create new customer with unique name
+                company_name = unique_company_name
+        else:
+            # No company name, try to find by email with person's name
+            existing_id = self._find_customer_by_email(email)
+            if existing_id:
+                return existing_id
+
+        # 2. Create new customer
+        # Use company name as DisplayName if provided (shows in BILL TO), otherwise use full name
+        display_name = company_name if company_name else f"{first_name} {last_name}"
+        
+        payload = {
+            "DisplayName": display_name,
+            "PrimaryEmailAddr": {"Address": email}
+        }
+        
+        # When we have a company name, we want the BILL TO to show only the company name
+        # So we set CompanyName but leave GivenName and FamilyName empty
+        if company_name:
+            payload["CompanyName"] = company_name
+            # Don't set GivenName/FamilyName to avoid showing person's name in BILL TO
+        else:
+            # No company, use person's name
+            payload["GivenName"] = first_name
+            payload["FamilyName"] = last_name
+
+        response = self._make_request('POST', 'customer', data=payload)
+        
+        if response and response.status_code in [200, 201]:
+            customer = response.json().get("Customer", {})
+            # Show person's name in message, not DisplayName (which might be company)
+            person_name = f"{first_name} {last_name}"
+            st.success(f"✅ Customer created: {person_name}")
+            return customer.get("Id")
+        
+        # Specific error handling for duplicates (if search failed but they exist)
+        if response and "Duplicate Name Exists Error" in response.text:
+            st.warning("⚠️ Customer name already exists. Trying to find by name...")
+            search_name = company_name if company_name else f"{first_name} {last_name}"
+            return self._find_customer_by_display_name(search_name)
+
+        st.error(f"Error creating customer: {response.text if response else 'No response'}")
+        return None
+
+    def _find_customer_by_email(self, email: str) -> Optional[str]:
+        query = f"SELECT * FROM Customer WHERE PrimaryEmailAddr = '{email}'"
+        response = self._make_request('GET', 'query', params={'query': query})
+        
+        if response and response.status_code == 200:
+            data = response.json()
+            customers = data.get('QueryResponse', {}).get('Customer', [])
+            if customers:
+                return customers[0]['Id']
+        return None
+
+    def _find_customer_by_display_name(self, display_name: str) -> Optional[str]:
+        # Escape single quotes for QB SQL
+        safe_name = display_name.replace("'", "\\'")
+        query = f"SELECT * FROM Customer WHERE DisplayName = '{safe_name}'"
+        response = self._make_request('GET', 'query', params={'query': query})
+        
+        if response and response.status_code == 200:
+            data = response.json()
+            customers = data.get('QueryResponse', {}).get('Customer', [])
+            if customers:
+                return customers[0]['Id']
+        return None
+
+    def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
+                     email: str, company_name: str = None, client_address: str = None,
+                     contract_amount: str = "0", description: str = "Contract Services", 
+                     line_items: list = None, payment_terms: str = "Due in Full", 
+                     enable_payment_link: bool = True, invoice_date: str = None) -> Optional[str]:
+        """Create an invoice payload and send it to QuickBooks"""
+        
+        lines = []
+        
+        if line_items:
+            for item in line_items:
+                # Ensure float conversion
+                try:
+                    amt = float(item.get('unit_price', 0))
+                    qty = float(item.get('quantity', 1))
+                except (ValueError, TypeError):
+                    amt = 0.0
+                    qty = 1.0
+                
+                line_desc = item.get('line_description', '') or item.get('name', '')
+                line_type = item.get('type', 'Service')
+                
+                main_description = line_type
+                if line_desc:
+                    main_description = f"{line_type}\n{line_desc}"
+
+                if amt < 0:
+                    # Discount Line
+                    lines.append({
+                        "Amount": abs(amt),
+                        "DetailType": "DiscountLineDetail",
+                        "Description": main_description,
+                        "DiscountLineDetail": {
+                            "PercentBased": False
+                        }
+                    })
+                else:
+                    # Sales Line
+                    line_total = amt * qty
+                    service_item_id = self._get_or_create_service_item(line_type)
+                    
+                    sales_line = {
+                        "DetailType": "SalesItemLineDetail",
+                        "Amount": line_total,
+                        "Description": line_desc if line_desc and line_desc.strip() else "",
+                        "SalesItemLineDetail": {
+                            "ItemRef": {"value": service_item_id},
+                            "Qty": qty,
+                            "UnitPrice": amt
+                        }
+                    }
+                    lines.append(sales_line)
+        else:
+             # Fallback logic
+             try:
+                 amount_clean = float(str(contract_amount).replace('$', '').replace(',', ''))
+             except:
+                 amount_clean = 0.0
+                 
+             lines.append({
+                "DetailType": "SalesItemLineDetail",
+                "Amount": amount_clean,
+                "Description": description,
+                "SalesItemLineDetail": {
+                    "ItemRef": {"value": "1"},
+                    "Qty": 1,
+                    "UnitPrice": amount_clean
+                }
+            })
+
+        # Date handling
+        if invoice_date:
+            try:
+                txn_date = invoice_date.strftime("%Y-%m-%d") if hasattr(invoice_date, 'strftime') else str(invoice_date)
+            except:
+                txn_date = datetime.now().strftime("%Y-%m-%d")
+        else:
+            txn_date = datetime.now().strftime("%Y-%m-%d")
+
+        # Build invoice data structure with ALL required fields
+        invoice_data = {
+            "CustomerRef": {"value": customer_id},
+            "TxnDate": txn_date,
+            "Line": lines,
+            "EmailStatus": "NotSet",
+            # Add fields that might be required for BillAddr to work
+            "ApplyTaxAfterDiscount": False,
+            "PrintStatus": "NeedToPrint",
+            "TotalAmt": sum(line.get("Amount", 0) for line in lines if isinstance(line.get("Amount"), (int, float)))
+        }
+        
+        # FIX: Handle Address - FORCE BillAddr on invoice to override customer's default address
+        bill_addr = self._parse_bill_address(company_name, client_address)
+        if bill_addr:
+            # FORCE: Ensure BillAddr has all required fields for QuickBooks
+            # Add additional fields that QB might require
+            if 'Line1' not in bill_addr and company_name:
+                bill_addr['Line1'] = company_name
+            
+            # FORCE: Add City, State, PostalCode if we can parse them
+            if len(bill_addr) >= 2 and 'Line2' in bill_addr:
+                # Try to parse "City, State ZIP" format
+                line2 = bill_addr['Line2']
+                if ',' in line2:
+                    parts = line2.split(',')
+                    if len(parts) >= 2:
+                        city = parts[0].strip()
+                        state_zip = parts[1].strip()
+                        if city:
+                            bill_addr['City'] = city
+                        if ' ' in state_zip:
+                            state_parts = state_zip.split()
+                            if len(state_parts) >= 2:
+                                bill_addr['CountrySubDivisionCode'] = state_parts[0]
+                                bill_addr['PostalCode'] = ' '.join(state_parts[1:])
+            
+            invoice_data["BillAddr"] = bill_addr
+            st.info(f"✅ FORCE: Setting invoice BillAddr with {len(bill_addr)} fields: {bill_addr}")
+        else:
+            # FORCE: Always create BillAddr with company name
+            if company_name:
+                invoice_data["BillAddr"] = {
+                    "Line1": company_name,
+                    "City": "Unknown",
+                    "CountrySubDivisionCode": "CA", 
+                    "PostalCode": "00000"
+                }
+                st.info(f"✅ FORCE: Setting minimal BillAddr with required fields: {company_name}")
+            else:
+                st.warning("⚠️ No billing address or company name - using customer default")
+                st.warning(f"Debug: company_name='{company_name}', client_address='{client_address}'")
+        
+        # FIX: Handle Due Date vs Terms correctly
+        # FORCE: Always set DueDate and try multiple approaches to override QB defaults
+        invoice_data["DueDate"] = txn_date  # Always set due date to invoice date
+        
+        if payment_terms in ["Due on receipt", "Due in Full"]:
+            # RADICAL APPROACH: Don't set any payment terms, just force DueDate
+            # Some QB companies might have restrictions on payment terms
+            invoice_data["PrivateNote"] = "PAYMENT DUE IMMEDIATELY - Due on receipt"
+            # Try setting custom fields that might override defaults
+            invoice_data["CustomField"] = [
+                {
+                    "DefinitionId": "1",
+                    "Name": "PaymentTerms", 
+                    "Type": "StringType",
+                    "StringValue": "Due on receipt"
+                }
+            ]
+            st.info(f"✅ RADICAL: Set DueDate={txn_date} without payment terms to avoid restrictions")
+        elif payment_terms:
+            # For Net 15, Net 30, etc., we send the Term ID and let QuickBooks calculate the DueDate.
+            invoice_data["SalesTermRef"] = {
+                "value": self._get_payment_term_id(payment_terms)
+            }
+            # Remove the DueDate we set above to let QB calculate it based on terms
+            del invoice_data["DueDate"]
+            st.info(f"✅ Set payment terms: {payment_terms}, letting QB calculate DueDate")
+        else:
+            # No payment terms specified, force due on receipt with multiple overrides
+            invoice_data["SalesTermRef"] = {
+                "value": self._get_payment_term_id("Due on receipt")
+            }
+            invoice_data["PrivateNote"] = "FORCE: Default to due on receipt"
+            st.info(f"✅ FORCE: No payment terms specified, multiple overrides for Due on receipt with DueDate={txn_date}")
+        
+        payload = invoice_data
+        
+        if email:
+            payload["BillEmail"] = {"Address": email}
+            
+        response = self._make_request('POST', 'invoice', data=payload)
+        
+        if response is None:
+            st.error("❌ No response received from QuickBooks API - possible network or timeout issue")
+            return None
+            
+        if response.status_code == 200:
+            try:
+                invoice_resp = response.json()
+                invoice_id = invoice_resp.get("Invoice", {}).get("Id")
+                self._update_invoice_doc_number(invoice_id, invoice_resp.get("Invoice", {}))
+                st.success(f"✅ Invoice created successfully (ID: {invoice_id})")
+                return invoice_id
+            except Exception as e:
+                st.error(f"❌ Error parsing invoice response: {str(e)}")
+                return None
+        else:
+            st.error(f"❌ Invoice creation failed - Status: {response.status_code}")
+            try:
+                st.error(f"Response: {response.text[:500]}")
+            except:
+                pass
+            return None
+
+    def send_invoice(self, invoice_id: str, email: str) -> bool:
+        """Send the created invoice via email"""
+        url = f"{self.base_url}/v3/company/{self.company_id}/invoice/{invoice_id}/send"
+        params = {"sendTo": email, "minorversion": "65"}
+        
+        if not self.access_token:
+            self.authenticate()
+            
+        headers = self._get_headers()
+        # The send endpoint expects a specific content-type or no body
+        headers["Content-Type"] = "application/octet-stream"
+        
+        try:
+            response = self.session.post(url, headers=headers, params=params)
+            if response.status_code == 200:
+                st.success(f"📧 Invoice sent to {email}")
+                return True
+            else:
+                st.warning(f"⚠️ Invoice created but email failed: {response.status_code}")
+        except Exception as e:
+             st.warning(f"⚠️ Email sending error: {str(e)}")
+             
+        return False
+
     def create_and_send_invoice(self, first_name: str, last_name: str, email: str, company_name: str = None,
                               client_address: str = None, contract_amount: str = "0", description: str = "Contract Services",
                               line_items: list = None, payment_terms: str = "Due in Full",
                               enable_payment_link: bool = True, invoice_date: str = None) -> Tuple[bool, str]:
-        """
-        Complete workflow: create customer, create invoice, and send it
+        """Orchestrator: Create Customer -> Create Invoice -> Send Invoice"""
         
-        Args:
-            first_name: Customer's first name
-            last_name: Customer's last name
-            email: Customer's email address
-            company_name: Customer's company name (optional)
-            client_address: Customer's billing address (optional)
-            contract_amount: Contract amount
-            description: Description of the service
-            line_items: List of line items with type, amount, and description
-            payment_terms: Payment terms for the invoice
-            enable_payment_link: Whether to enable online payment link
-            invoice_date: Date of the invoice
+        customer_id = self.create_customer(first_name, last_name, email, company_name)
+        if not customer_id:
+            return False, "Failed to create or find customer."
             
-        Returns:
-            Tuple[bool, str]: (success, message)
-        """
-        try:
-            # Create or find customer
-            customer_id = self.create_customer(first_name, last_name, email, company_name)
-            if not customer_id:
-                # Check if this is due to Wrong Cluster error
-                if self.verified_via_preferences:
-                    error_msg = (
-                        "❌ QuickBooks API Error: Cannot create or find customer due to Wrong Cluster errors.\n\n"
-                        "This is a known QuickBooks API limitation affecting your company. "
-                        "The preferences endpoint works correctly, confirming your company is in production, "
-                        "but customer-related endpoints return Wrong Cluster errors.\n\n"
-                        "Please contact QuickBooks Developer Support and reference:\n"
-                        "• Company ID: 9341455592326421\n"
-                        "• Issue: Wrong Cluster errors on customer/query endpoints\n"
-                        "• Note: Preferences endpoint works correctly"
-                    )
-                    return False, error_msg
-                return False, "Failed to create or find customer"
+        invoice_id = self.create_invoice(customer_id, first_name, last_name, email, company_name, client_address,
+                                       contract_amount, description, line_items, payment_terms, enable_payment_link, invoice_date)
+        
+        if not invoice_id:
+            return False, "Failed to create invoice."
             
-            # Create invoice
-            invoice_id = self.create_invoice(customer_id, first_name, last_name, email, company_name, client_address,
-                                           contract_amount, description, line_items,
-                                           payment_terms, enable_payment_link, invoice_date)
-            if not invoice_id:
-                return False, "Failed to create invoice"
-            
-            # Send invoice
-            if self.send_invoice(invoice_id, email):
-                return True, f"Invoice created and sent successfully to {email}. Invoice ID: {invoice_id}"
-            else:
-                return False, "Invoice created but failed to send"
-                
-        except Exception as e:
-            return False, f"Error in invoice workflow: {str(e)}"
-
-
-def verify_production_credentials(quickbooks_api) -> Tuple[bool, str]:
-    """
-    Verifies credentials by testing only authentication and the global URL.
-    """
-    try:
-        # 1. Ensures a valid token
-        if not quickbooks_api.authenticate(force_refresh=True):
-            return False, "❌ Authentication failed - check Client ID and Secret"
-        
-        # 2. Tests a simple endpoint (Preferences) on the Global URL
-        # Note: We use `minorversion=65` to avoid compatibility errors
-        test_url = f"{quickbooks_api.base_url}/v3/company/{quickbooks_api.company_id}/preferences?minorversion=65"
-        
-        headers = {
-            "Authorization": f"Bearer {quickbooks_api.access_token}",
-            "Accept": "application/json"
-        }
-        
-        st.info(f"🔍 Testing connection with: {test_url}")
-        
-        response = requests.get(test_url, headers=headers, verify=False)
-        
-        if response.status_code == 200:
-            return True, "✅ Production credentials successfully verified!"
-        elif response.status_code == 401:
-            return False, "❌ Error 401: Unauthorized access. Verify that the keys are for Production."
-        elif response.status_code == 403:
-            return False, "❌ Error 403: Access denied. The app may not have permission for this company."
+        sent = self.send_invoice(invoice_id, email)
+        msg = f"Invoice {invoice_id} created successfully!"
+        if sent:
+            msg += " Sent via email."
         else:
-            # Even with error 400, if it authenticated, we assume partial success to avoid blocking
-            # Error 400 may be company data, but the TCP connection worked
-            st.warning(f"⚠️ Warning: Endpoint returned {response.status_code}, but the token was accepted.")
-            return True, f"✅ Connection established (Status {response.status_code})"
+            msg += " (Email sending failed, but invoice exists)."
             
-    except Exception as e:
-        return False, f"❌ Connection error: {str(e)}"
+        return True, msg
 
-
+# --- Helper functions compatible with quickbooks_form.py ---
 
 def load_quickbooks_credentials() -> Dict[str, str]:
-    """
-    Load QuickBooks credentials from Streamlit secrets
-    
-    Returns:
-        Dict[str, str]: Dictionary containing QuickBooks credentials
-    """
-    try:
-        if 'quickbooks' not in st.secrets:
-            st.error("QuickBooks configuration not found in secrets.toml")
-            return {}
-        
-        quickbooks_config = st.secrets['quickbooks']
-        
-        required_fields = ['client_id', 'client_secret', 'refresh_token', 'company_id']
-        for field in required_fields:
-            if field not in quickbooks_config:
-                st.error(f"QuickBooks {field} not found in secrets.toml")
-                return {}
-        
-        return quickbooks_config
-        
-    except Exception as e:
-        st.error(f"Error reading QuickBooks secrets: {str(e)}")
+    """Load credentials from secrets.toml"""
+    if 'quickbooks' not in st.secrets:
+        st.error("QuickBooks config not found in secrets.toml")
         return {}
-
+    return st.secrets['quickbooks']
 
 def setup_quickbooks_oauth() -> str:
-    """
-    Instructions for setting up QuickBooks OAuth
+    return "Please check your Streamlit Secrets configuration."
+
+def verify_production_credentials(api) -> Tuple[bool, str]:
+    """Verify connection by checking a simple endpoint"""
+    st.info("🔍 Testing connection to QuickBooks Production...")
+    res = api._make_request('GET', 'preferences')
     
-    Returns:
-        str: Instructions for OAuth setup
-    """
-    return """
-    To set up QuickBooks OAuth:
+    if res and res.status_code == 200:
+        return True, "✅ Connection successful! Credentials are valid."
     
-    1. Go to https://developer.intuit.com/
-    2. Create a new app or use existing app
-    3. Get your Client ID and Client Secret
-    4. Set up OAuth redirect URI
-    5. Use OAuth flow to get refresh token
-    6. Get your Company ID from QuickBooks
-    7. Add all credentials to secrets.toml
+    code = res.status_code if res else "Error"
     
-    For testing, you can use the sandbox environment.
-    """
+    if code == 401:
+        return False, "❌ Error 401: Unauthorized. Check your Client ID/Secret and if keys are for Production."
+    if code == 403:
+        return False, "❌ Error 403: Access Denied. App may not have permission."
+        
+    return False, f"❌ Connection failed. Status: {code}"
