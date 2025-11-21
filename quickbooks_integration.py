@@ -990,7 +990,7 @@ class QuickBooksAPI:
             
             # Try multiple endpoints to handle deployment routing issues
             test_endpoints = [
-                f"{self.base_url}/v3/company/{self.company_id}/companyinfo/{self.company_id}",
+                f"{self.base_url}/v3/company/{self.company_id}/companyinfo/1",
                 f"{self.base_url}/v3/company/{self.company_id}/preferences"
             ]
             
@@ -1093,7 +1093,7 @@ class QuickBooksAPI:
                                     if self._discover_cluster_url():
                                         # Retry verification with new cluster URL
                                         company_url = self._normalize_quickbooks_url(
-                                            f"{self.base_url}/v3/company/{self.company_id}/companyinfo/{self.company_id}"
+                                            f"{self.base_url}/v3/company/{self.company_id}/companyinfo/1"
                                         )
                                         headers["Authorization"] = f"Bearer {self.access_token}"
                                         response = requests.get(company_url, headers=headers, allow_redirects=True, verify=False)
@@ -2438,7 +2438,7 @@ def verify_production_credentials(quickbooks_api) -> Tuple[bool, str]:
         # If all standard endpoints fail, we'll try alternative approaches
         # First, try the standard endpoints
         test_endpoints = [
-            ("companyinfo", f"{base_url}/v3/company/{quickbooks_api.company_id}/companyinfo/{quickbooks_api.company_id}"),
+            ("companyinfo", f"{base_url}/v3/company/{quickbooks_api.company_id}/companyinfo/1"),
             ("preferences", f"{base_url}/v3/company/{quickbooks_api.company_id}/preferences"),
             ("items", f"{base_url}/v3/company/{quickbooks_api.company_id}/items"),
             ("customers", f"{base_url}/v3/company/{quickbooks_api.company_id}/customers"),
@@ -2506,7 +2506,7 @@ def verify_production_credentials(quickbooks_api) -> Tuple[bool, str]:
             st.info(f"   Trying alternative base URL: {alt_base_url}")
             
             # Test just the most reliable endpoint (companyinfo) with alternative base URL
-            alt_test_url = f"{alt_base_url}/v3/company/{quickbooks_api.company_id}/companyinfo/{quickbooks_api.company_id}"
+            alt_test_url = f"{alt_base_url}/v3/company/{quickbooks_api.company_id}/companyinfo/1"
             
             # Create headers with correct Host header for regional clusters
             alt_headers = headers.copy()
