@@ -830,5 +830,3 @@ def load_signnow_credentials() -> Dict[str, str]:
     except Exception as e:
         st.error(f"Error reading SignNow secrets: {str(e)}")
         return {}
-
-

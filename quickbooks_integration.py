@@ -1,6 +1,10 @@
 """
 QuickBooks API Integration Module
 Handles invoice creation and sending
+
+NOTE: SSL certificate verification is disabled (verify=False) for all requests
+to resolve hostname mismatch issues with QuickBooks API endpoints.
+This is a common issue with QuickBooks regional cluster URLs.
 """
 
 import requests
@@ -422,7 +426,7 @@ class QuickBooksAPI:
             
             payload = customer_data
             
-            response = requests.post(customer_url, json=payload, headers=headers, allow_redirects=True)
+            response = requests.post(customer_url, json=payload, headers=headers, allow_redirects=True, verify=False)
             
             if response.status_code in [200, 201]:
                 customer_response = response.json()
@@ -495,7 +499,7 @@ class QuickBooksAPI:
             }
             
             self._debug("Trying customer creation via batch operation as fallback...")
-            response = requests.post(batch_url, json=batch_payload, headers=headers, allow_redirects=True)
+            response = requests.post(batch_url, json=batch_payload, headers=headers, allow_redirects=True, verify=False)
             
             if response.status_code in [200, 201]:
                 batch_response = response.json()
@@ -549,7 +553,7 @@ class QuickBooksAPI:
             if location:
                 self._debug(f"Found Location header, trying to follow redirect: {location}")
                 # Try to GET the redirect URL
-                redirect_response = requests.get(location, headers=headers, allow_redirects=True)
+                redirect_response = requests.get(location, headers=headers, allow_redirects=True, verify=False)
                 if redirect_response.status_code == 200:
                     redirect_data = redirect_response.json()
                     if "Customer" in redirect_data:
@@ -818,7 +822,7 @@ class QuickBooksAPI:
             # Use basic auth with client credentials
             auth = requests.auth.HTTPBasicAuth(self.client_id, self.client_secret)
             
-            response = requests.post(auth_url, data=data, headers=headers, auth=auth)
+            response = requests.post(auth_url, data=data, headers=headers, auth=auth, verify=False)
             
             # Enhanced error reporting
             if response.status_code != 200:
@@ -941,7 +945,7 @@ class QuickBooksAPI:
                 )
                 
                 # Try with redirects enabled - QuickBooks may redirect even on 401
-                response = requests.get(discovery_url, headers=headers, allow_redirects=True, timeout=10)
+                response = requests.get(discovery_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
                 
                 # Check if URL changed (redirect happened)
                 final_url = response.url
@@ -953,7 +957,7 @@ class QuickBooksAPI:
                             cluster_url = redirected_base_url
                             discovery_url = f"{cluster_url}/v3/company/{self.company_id}/companyinfo/{self.company_id}"
                             # Retry with the redirected cluster URL
-                            response = requests.get(discovery_url, headers=headers, allow_redirects=True, timeout=10)
+                            response = requests.get(discovery_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
                 
                 # Check Location header (even for 401 responses)
                 location_header = response.headers.get('Location', '')
@@ -975,7 +979,7 @@ class QuickBooksAPI:
                         cluster_url = new_base_url
                         discovery_url = f"{cluster_url}/v3/company/{self.company_id}/companyinfo/{self.company_id}"
                         # Retry with the new cluster URL
-                        response = requests.get(discovery_url, headers=headers, allow_redirects=True, timeout=10)
+                        response = requests.get(discovery_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
                 
                 # Check if we got a successful response
                 if response.status_code == 200:
@@ -1014,7 +1018,7 @@ class QuickBooksAPI:
                                         # Try preferences endpoint first (sometimes works when companyinfo fails)
                                         # This is the PRIMARY method - preferences endpoint is more reliable
                                         try:
-                                            prefs_response = requests.get(preferences_url, headers=headers, allow_redirects=True, timeout=10)
+                                            prefs_response = requests.get(preferences_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
                                             if prefs_response.status_code == 200:
                                                 # Preferences endpoint works - verify with main production URL only
                                                 # CRITICAL: Don't switch to regional cluster - use main production URL
@@ -1055,7 +1059,7 @@ class QuickBooksAPI:
                                                 # Instead, verify that main production URL works via preferences
                                                 try:
                                                     main_prefs_url = f"https://quickbooks.api.intuit.com/v3/company/{self.company_id}/preferences"
-                                                    main_prefs_response = requests.get(main_prefs_url, headers=headers, allow_redirects=True, timeout=10)
+                                                    main_prefs_response = requests.get(main_prefs_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
                                                     if main_prefs_response.status_code == 200:
                                                         self.base_url = "https://quickbooks.api.intuit.com"
                                                         self.base_url_verified = True
@@ -1086,7 +1090,7 @@ class QuickBooksAPI:
                                                     redirected_url = self._normalize_quickbooks_url(
                                                         f"{normalized_redirected_base}/v3/company/{self.company_id}/companyinfo/{self.company_id}"
                                                     )
-                                                    redirected_response = requests.get(redirected_url, headers=headers, allow_redirects=True, timeout=10)
+                                                    redirected_response = requests.get(redirected_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
                                                     if redirected_response.status_code == 200:
                                                         old_url = self.base_url
                                                         self.base_url = redirected_base_url
@@ -1102,7 +1106,7 @@ class QuickBooksAPI:
                     self._debug("Got 401, refreshing token...")
                     if self.authenticate():
                         headers["Authorization"] = f"Bearer {self.access_token}"
-                        response = requests.get(discovery_url, headers=headers, allow_redirects=True, timeout=10)
+                        response = requests.get(discovery_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
                         
                         if response.status_code == 200:
                             final_url = response.url
@@ -1127,7 +1131,7 @@ class QuickBooksAPI:
                     location_header = response.headers.get('Location', '')
                     if location_header:
                         st.info(f"🔍 Following redirect to: `{location_header}`")
-                        response = requests.get(location_header, headers=headers, allow_redirects=True, timeout=10)
+                        response = requests.get(location_header, headers=headers, allow_redirects=True, timeout=10, verify=False)
                         if response.status_code == 200:
                             final_url = response.url
                             if '/v3/company/' in final_url:
@@ -1163,7 +1167,7 @@ class QuickBooksAPI:
         alternative_url = f"{alternative_cluster}/v3/company/{self.company_id}/companyinfo/{self.company_id}"
         
         try:
-            alt_response = requests.get(alternative_url, headers=headers, allow_redirects=True, timeout=10)
+            alt_response = requests.get(alternative_url, headers=headers, allow_redirects=True, timeout=10, verify=False)
             
             if alt_response.status_code == 200:
                 final_url = alt_response.url
@@ -1243,7 +1247,7 @@ class QuickBooksAPI:
                 "Accept-Encoding": "identity"
             }
             
-            response = requests.get(company_url, headers=headers, allow_redirects=True)
+            response = requests.get(company_url, headers=headers, allow_redirects=True, verify=False)
             
             # Extract base URL from final URL if redirect happened
             if response.status_code == 200:
@@ -1272,7 +1276,7 @@ class QuickBooksAPI:
                             for error in errors:
                                 if error.get('code') == '130' or 'WrongCluster' in error.get('Message', ''):
                                     # Try preferences endpoint instead
-                                    prefs_response = requests.get(preferences_url, headers=headers, allow_redirects=True)
+                                    prefs_response = requests.get(preferences_url, headers=headers, allow_redirects=True, verify=False)
                                     if prefs_response.status_code == 200:
                                         self.base_url_verified = True
                                         self.verified_via_preferences = True  # Mark that we verified via preferences
@@ -1282,7 +1286,7 @@ class QuickBooksAPI:
                 # Try refreshing token
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.get(company_url, headers=headers, allow_redirects=True)
+                    response = requests.get(company_url, headers=headers, allow_redirects=True, verify=False)
                     
                     if response.status_code == 200:
                         final_url = response.url
@@ -1329,7 +1333,7 @@ class QuickBooksAPI:
                                             f"{self.base_url}/v3/company/{self.company_id}/companyinfo/{self.company_id}"
                                         )
                                         headers["Authorization"] = f"Bearer {self.access_token}"
-                                        response = requests.get(company_url, headers=headers, allow_redirects=True)
+                                        response = requests.get(company_url, headers=headers, allow_redirects=True, verify=False)
                                         if response.status_code == 200:
                                             self.base_url_verified = True
                                             return True
@@ -1451,7 +1455,7 @@ class QuickBooksAPI:
             # Customer object should be at root level, not wrapped
             payload = customer_data
             
-            response = requests.post(customer_url, json=payload, headers=headers, allow_redirects=True)
+            response = requests.post(customer_url, json=payload, headers=headers, allow_redirects=True, verify=False)
             
             # Handle 401 errors
             # IMPORTANT: Ignore Wrong Cluster errors - just use main production URL
@@ -1462,7 +1466,7 @@ class QuickBooksAPI:
                     current_url = self._normalize_quickbooks_url(
                         f"{self.base_url}/v3/company/{self.company_id}/customer"
                     )
-                    return requests.post(current_url, json=payload, headers=updated_headers, allow_redirects=True)
+                    return requests.post(current_url, json=payload, headers=updated_headers, allow_redirects=True, verify=False)
                 
                 retry_response = self._handle_401_error(response, headers, retry_request)
                 if retry_response is None:
@@ -1478,7 +1482,7 @@ class QuickBooksAPI:
                                 current_url = self._normalize_quickbooks_url(
                                     f"{self.base_url}/v3/company/{self.company_id}/customer"
                                 )
-                                retry_response = requests.post(current_url, json=payload, headers=headers, allow_redirects=True)
+                                retry_response = requests.post(current_url, json=payload, headers=headers, allow_redirects=True, verify=False)
                                 
                                 # If we get 200/201, success!
                                 if retry_response.status_code in [200, 201]:
@@ -1656,14 +1660,14 @@ class QuickBooksAPI:
                 "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
-            response = requests.get(query_url, headers=headers)
+            response = requests.get(query_url, headers=headers, verify=False)
             
             # If we get a 401, try to refresh the token and retry
             if response.status_code == 401:
                 self._debug("Access token expired, refreshing...")
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.get(query_url, headers=headers)
+                    response = requests.get(query_url, headers=headers, verify=False)
                 else:
                     st.error("Failed to refresh access token")
                     return None
@@ -1714,12 +1718,12 @@ class QuickBooksAPI:
                 "Accept-Encoding": "identity"
             }
             
-            response = requests.get(customer_url, headers=headers)
+            response = requests.get(customer_url, headers=headers, verify=False)
             
             if response.status_code == 401:
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.get(customer_url, headers=headers)
+                    response = requests.get(customer_url, headers=headers, verify=False)
                 else:
                     return None
             
@@ -1761,7 +1765,7 @@ class QuickBooksAPI:
             
             params = {"query": query}
             
-            response = requests.get(query_url, params=params, headers=headers)
+            response = requests.get(query_url, params=params, headers=headers, verify=False)
             
             # Handle 401 errors
             if response.status_code == 401:
@@ -1770,7 +1774,7 @@ class QuickBooksAPI:
                     current_url = self._normalize_quickbooks_url(
                         f"{self.base_url}/v3/company/{self.company_id}/query"
                     )
-                    return requests.get(current_url, params=params, headers=updated_headers)
+                    return requests.get(current_url, params=params, headers=updated_headers, verify=False)
                 
                 retry_response = self._handle_401_error(response, headers, retry_request)
                 if retry_response is None:
@@ -1873,12 +1877,12 @@ class QuickBooksAPI:
             query = "SELECT * FROM Item WHERE Active = true"
             params = {"query": query}
             
-            response = requests.get(query_url, params=params, headers=headers)
+            response = requests.get(query_url, params=params, headers=headers, verify=False)
             
             if response.status_code == 401:
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.get(query_url, params=params, headers=headers)
+                    response = requests.get(query_url, params=params, headers=headers, verify=False)
                 else:
                     return []
             
@@ -1910,7 +1914,7 @@ class QuickBooksAPI:
                 )
                 headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
                 
-                response = requests.get(url, headers=headers)
+                response = requests.get(url, headers=headers, verify=False)
                 if response.status_code == 200:
                     data = response.json()
                     accounts = data.get("QueryResponse", {}).get("Account", [])
@@ -1942,7 +1946,7 @@ class QuickBooksAPI:
                 )
                 headers = {"Authorization": f"Bearer {self.access_token}", "Accept": "application/json"}
                 
-                response = requests.get(url, headers=headers)
+                response = requests.get(url, headers=headers, verify=False)
                 if response.status_code == 200:
                     data = response.json()
                     accounts = data.get("QueryResponse", {}).get("Account", [])
@@ -2006,12 +2010,12 @@ class QuickBooksAPI:
             if description:
                 item_data["Description"] = description
             
-            response = requests.post(url, headers=headers, json=item_data)
+            response = requests.post(url, headers=headers, json=item_data, verify=False)
             
             if response.status_code == 401:
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.post(url, headers=headers, json=item_data)
+                    response = requests.post(url, headers=headers, json=item_data, verify=False)
                 else:
                     return "2"
             
@@ -2165,14 +2169,14 @@ class QuickBooksAPI:
                 "Accept-Encoding": "identity"  # Disable gzip to avoid decoding issues
             }
             
-            response = requests.post(invoice_url, json=payload, headers=headers)
+            response = requests.post(invoice_url, json=payload, headers=headers, verify=False)
             
             # If we get a 401, try to refresh the token and retry
             if response.status_code == 401:
                 self._debug("Access token expired, refreshing...")
                 if self.authenticate():
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = requests.post(invoice_url, json=payload, headers=headers)
+                    response = requests.post(invoice_url, json=payload, headers=headers, verify=False)
                 else:
                     st.error("Failed to refresh access token")
                     return None

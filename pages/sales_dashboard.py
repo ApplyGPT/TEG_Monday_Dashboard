@@ -727,6 +727,284 @@ def main():
     else:
         st.info(f"No sales data available for {selected_year_category}.")
     
+    # 6. Sales by Source (Revenue) - Based on UTM Data from Sales Board
+    st.subheader("Sales by Source")
+    
+    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    def get_sales_revenue_by_source():
+        """Get sales revenue data by source/channel from Sales board for revenue analysis"""
+        import json
+        
+        sales_revenue_data = []
+        
+        # Get data from Sales board only
+        sales_items = get_sales_data_from_db().get('data', {}).get('boards', [{}])[0].get('items_page', {}).get('items', [])
+        
+        # Sales board channel column ID - this is the UTM channel column with "Paid search", "Organic search", etc.
+        sales_channel_column = 'text_mkrfer1n'
+        
+        # Process Sales board data
+        for item in sales_items:
+            # Extract channel information, revenue, and other relevant data
+            channel = ""
+            date_created = None
+            lead_status = ""
+            contract_amount = 0
+            numbers3_amount = 0
+            
+            # Parse column_values if it's a string
+            column_values = item.get("column_values", [])
+            if isinstance(column_values, str):
+                try:
+                    column_values = json.loads(column_values)
+                except:
+                    column_values = []
+            
+            for col_val in column_values:
+                col_id = col_val.get("id", "")
+                text = (col_val.get("text") or "").strip()
+                col_type = col_val.get("type", "")
+                
+                # Look for the channel column (UTM channel column)
+                if col_id == sales_channel_column and text:
+                    channel = text
+                
+                # Look for date created - use date7 column specifically
+                if col_id == "date7":
+                    date_created = text
+                
+                # Look for lead status
+                if col_id == "color_mknxd1j2":  # Lead Status
+                    lead_status = text
+                
+                # Look for revenue amounts
+                if col_id == "contract_amt":  # Contract Amount
+                    try:
+                        contract_amount = float(str(text).replace('$', '').replace(',', '')) if text else 0
+                    except:
+                        contract_amount = 0
+                elif col_id == "numbers3":  # Numbers3 column
+                    try:
+                        numbers3_amount = float(str(text).replace('$', '').replace(',', '')) if text else 0
+                    except:
+                        numbers3_amount = 0
+                
+                # Fallback: look for any date column
+                if col_type == "date" and text and not date_created:
+                    date_created = text
+            
+            # Calculate total revenue (same logic as in process_sales_data)
+            total_revenue = contract_amount if contract_amount > 0 else numbers3_amount
+            
+            # Filter for proper UTM channels (exclude individual names)
+            valid_utm_channels = [
+                'paid search', 'organic search', 'direct traffic', 'referral', 
+                'email marketing', 'social media', 'tradeshow', 'google', 
+                'facebook', 'instagram', 'linkedin', 'youtube', 'twitter'
+            ]
+            
+            # Only include items with valid UTM channels and closed/win status and revenue > 0
+            if (channel and channel.strip() and 
+                lead_status and lead_status.lower() in ['closed', 'win'] and 
+                total_revenue > 0 and
+                channel.lower() in valid_utm_channels):
+                sales_revenue_data.append({
+                    'name': item.get('name', ''),
+                    'channel': channel,
+                    'date_created': date_created,
+                    'lead_status': lead_status,
+                    'revenue': total_revenue
+                })
+        
+        return sales_revenue_data
+    
+    # Year selector for sales by source chart - default to 2025
+    available_years_source = sorted([int(year) for year in df_filtered['Year'].unique() if pd.notna(year)])
+    default_year_index_source = available_years_source.index(2025) if 2025 in available_years_source else 0
+    selected_year_source = st.selectbox("Select Year for Sales by Source Analysis:", available_years_source, index=default_year_index_source, key="source_year")
+    
+    # Get sales revenue data by source
+    with st.spinner("Loading Sales by Source data..."):
+        sales_revenue_data = get_sales_revenue_by_source()
+    
+    if sales_revenue_data:
+        # Convert to DataFrame
+        sales_revenue_df = pd.DataFrame(sales_revenue_data)
+        
+        # Parse dates and filter for valid dates
+        sales_revenue_df['date_created'] = pd.to_datetime(sales_revenue_df['date_created'], errors='coerce')
+        sales_revenue_with_dates = sales_revenue_df.dropna(subset=['date_created'])
+        
+        # Filter for selected year
+        sales_revenue_with_dates = sales_revenue_with_dates[sales_revenue_with_dates['date_created'].dt.year == selected_year_source]
+        
+        if not sales_revenue_with_dates.empty:
+            # Add month-year column for grouping with proper formatting
+            sales_revenue_with_dates['Month Year'] = sales_revenue_with_dates['date_created'].dt.strftime('%B %Y')
+            sales_revenue_with_dates['Month'] = sales_revenue_with_dates['date_created'].dt.month
+            sales_revenue_with_dates['Month_Name'] = sales_revenue_with_dates['date_created'].dt.strftime('%B')
+            
+            # Sum revenue by channel and month (instead of counting leads)
+            channel_revenue = sales_revenue_with_dates.groupby(['Month', 'Month_Name', 'channel'])['revenue'].sum().reset_index()
+            channel_revenue = channel_revenue.sort_values('Month')
+            
+            # Create proper month order for x-axis
+            month_order = ['January', 'February', 'March', 'April', 'May', 'June', 
+                           'July', 'August', 'September', 'October', 'November', 'December']
+            
+            # Filter to only include months that exist in the data
+            available_months = channel_revenue['Month_Name'].unique()
+            month_order_filtered = [month for month in month_order if month in available_months]
+            
+            # Create grouped bar chart by source/channel
+            fig_source = go.Figure()
+            
+            channels = sorted(channel_revenue['channel'].unique())
+            
+            # Use strong colors for different channels [[memory:7838657]]
+            channel_colors = {
+                'Paid search': '#df2f4a',        # Red
+                'Organic search': '#00c875',     # Green  
+                'Direct': '#4ECDC4',             # Teal
+                'Social media': '#ffcb00',       # Yellow
+                'Referral': '#579bfc',           # Blue
+                'Email': '#a358df'               # Purple
+            }
+            
+            # Use strong colors for any other channels
+            all_colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F']
+            
+            for i, channel in enumerate(channels):
+                channel_data = channel_revenue[channel_revenue['channel'] == channel]
+                
+                # Handle empty channels - ensure we have a proper name for the legend
+                channel_name = channel if channel and channel.strip() else 'Unknown'
+                
+                # Get color - use hardcoded if available, otherwise cycle through colors
+                if channel_name in channel_colors:
+                    color = channel_colors[channel_name]
+                else:
+                    color = all_colors[i % len(all_colors)]
+                
+                fig_source.add_trace(go.Bar(
+                    name=channel_name,
+                    x=channel_data['Month_Name'],
+                    y=channel_data['revenue'],
+                    marker_color=color,
+                    text=[format_currency(val) for val in channel_data['revenue']],  # K format
+                    textposition='outside',
+                    textfont=dict(size=14, color='black')  # Larger text
+                ))
+            
+            fig_source.update_layout(
+                barmode='group',
+                xaxis_title='Month',
+                yaxis_title='Revenue ($)',
+                height=500,
+                bargap=0.15,
+                bargroupgap=0.0,
+                showlegend=True,
+                font=dict(size=14),  # Larger font for all text
+                xaxis=dict(
+                    categoryorder='array',
+                    categoryarray=month_order_filtered
+                ),
+                legend=dict(
+                    orientation="h",   # horizontal
+                    yanchor="top",
+                    y=-0.2,            # below the chart
+                    xanchor="center",
+                    x=0.5
+                )
+            )
+            st.plotly_chart(fig_source, use_container_width=True)
+        else:
+            st.info(f"No sales revenue data with valid dates found for {selected_year_source}.")
+    else:
+        st.info("No sales revenue data found for source analysis.")
+    
+    # 7. Current Month Sales Breakdown by Salesman
+    st.subheader("Current Month Sales Breakdown by Salesman")
+    
+    # Get current month and year
+    current_month = datetime.now().month
+    current_year = datetime.now().year
+    current_month_name = datetime.now().strftime('%B')
+    
+    # Filter data for current month and year
+    df_current_month = df_filtered[
+        (df_filtered['Year'] == current_year) & 
+        (df_filtered['Month'] == current_month)
+    ]
+    
+    if not df_current_month.empty:
+        # Group by salesman for current month
+        current_month_salesman = df_current_month.groupby('Assigned Person')['Total Value'].sum().reset_index()
+        current_month_salesman = current_month_salesman.sort_values('Total Value', ascending=False)
+        
+        # Handle empty salesmen names
+        current_month_salesman['Salesman Name'] = current_month_salesman['Assigned Person'].apply(
+            lambda x: x if x and x.strip() else 'Unassigned'
+        )
+        
+        # Create bar chart for current month
+        fig_current_month = go.Figure()
+        
+        # Hardcoded colors for specific salesmen (same as existing graph)
+        salesman_colors = {
+            'Jennifer Evans': '#df2f4a',            # Red
+            'Gabriela Tamayo': '#a358df',           # Purple
+            'Anthony Alba': '#579bfc',              # Blue
+            'Unassigned': '#96CEB4',                # Green
+            'Heather Castagno': '#ffcb00'           # Yellow
+        }
+        
+        # Use strong colors for any other salesmen
+        all_colors = ['#DDA0DD', '#98D8C8', '#F7DC6F', '#FF8A80', '#26A69A', '#42A5F5', '#66BB6A', '#FFCA28']
+        
+        # Add bars for each salesman
+        for i, row in current_month_salesman.iterrows():
+            salesman_name = row['Salesman Name']
+            revenue = row['Total Value']
+            
+            # Get color - use hardcoded if available, otherwise cycle through colors
+            if salesman_name in salesman_colors:
+                color = salesman_colors[salesman_name]
+            else:
+                color = all_colors[i % len(all_colors)]
+            
+            fig_current_month.add_trace(go.Bar(
+                name=salesman_name,
+                x=[salesman_name],
+                y=[revenue],
+                marker_color=color,
+                text=[format_currency(revenue)],  # K format on top of bars
+                textposition='outside',
+                textfont=dict(size=16, color='black'),  # Larger text
+                showlegend=False  # No legend needed for single month view
+            ))
+        
+        fig_current_month.update_layout(
+            xaxis_title='Salesman',
+            yaxis_title='Revenue ($)',
+            height=600,
+            showlegend=False,
+            font=dict(size=14),  # Larger font for all text
+            title=dict(
+                text=f"",
+                x=0.5,
+                font=dict(size=16)
+            )
+        )
+        
+        # Rotate x-axis labels if needed
+        fig_current_month.update_xaxes(tickangle=0)
+        
+        st.plotly_chart(fig_current_month, use_container_width=True)
+        
+    else:
+        st.info(f"No sales data available for {current_month_name} {current_year}.")
+    
     st.markdown("---")
     st.subheader("Close Rate by Month - 2025")
     
