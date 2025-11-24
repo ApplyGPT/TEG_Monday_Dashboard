@@ -2,6 +2,11 @@
 QuickBooks API Integration Module
 Clean version for Production Cloud Deployment.
 Removes all SSL/DNS hacks to resolve '400 No Handler' errors on cloud platforms.
+
+FIXES APPLIED:
+1. Bill To Address: Improved BillAddr handling to ensure it shows in PDF
+2. Due Date: Fixed to respect the selected invoice date instead of calculating from payment terms
+3. Email Message: Changed DisplayName to use client name instead of company name
 """
 
 import requests
@@ -180,12 +185,37 @@ class QuickBooksAPI:
             lines.append(company_name.strip())
         
         if client_address:
-            # Normalize newlines and split by line first (preserves formatting)
-            # If user typed: "123 Main St [enter] New York, NY"
-            # This ensures "123 Main St" is Line1 and "New York, NY" is Line2
+            # Normalize newlines
             clean_address = client_address.replace('\r\n', '\n').replace('\r', '\n')
-            parts = [part.strip() for part in clean_address.split('\n') if part.strip()]
-            lines.extend(parts)
+            raw_lines = [part.strip() for part in clean_address.split('\n') if part.strip()]
+            
+            address_segments: list[str] = []
+            for raw_line in raw_lines:
+                # Split each line by comma to create separate address segments
+                comma_parts = [seg.strip() for seg in raw_line.split(',') if seg.strip()]
+                if comma_parts:
+                    address_segments.extend(comma_parts)
+                else:
+                    address_segments.append(raw_line)
+            
+            # Merge state abbreviation + ZIP into single line (e.g., "CT" + "02703" -> "CT 02703")
+            merged_segments: list[str] = []
+            idx = 0
+            while idx < len(address_segments):
+                current = address_segments[idx]
+                if (
+                    idx + 1 < len(address_segments)
+                    and len(current) <= 3
+                    and current.replace('.', '').isalpha()
+                    and address_segments[idx + 1].replace(' ', '').replace('-', '').isdigit()
+                ):
+                    merged_segments.append(f"{current} {address_segments[idx + 1]}")
+                    idx += 2
+                    continue
+                merged_segments.append(current)
+                idx += 1
+            
+            lines.extend(merged_segments)
         
         if not lines:
             return None
@@ -253,20 +283,19 @@ class QuickBooksAPI:
     def _update_invoice_doc_number(self, invoice_id: str, invoice_data: dict):
         """Update invoice DocNumber to use the invoice ID"""
         try:
-            # Prepare update payload with the invoice ID as DocNumber
+            # Prepare update payload with mandatory QB fields
             update_payload = {
                 "Id": invoice_id,
                 "SyncToken": invoice_data.get("SyncToken", "0"),
-                "DocNumber": invoice_id  # Set DocNumber to the invoice ID
+                "DocNumber": invoice_id  # Use QB ID as doc number
             }
             
-            # Copy required fields for update
-            for field in ["CustomerRef", "TxnDate", "Line"]:
+            # QuickBooks requires several fields to be present on update
+            for field in ["CustomerRef", "TxnDate", "Line", "DueDate", "SalesTermRef", "BillAddr"]:
                 if field in invoice_data:
                     update_payload[field] = invoice_data[field]
             
             response = self._make_request('POST', 'invoice', data=update_payload)
-            
             if not (response and response.status_code == 200):
                 st.warning("⚠️ Could not update invoice number, but invoice was created successfully")
                 
@@ -340,56 +369,36 @@ class QuickBooksAPI:
             # Don't fail the whole process for this
 
     def create_customer(self, first_name: str, last_name: str, email: str, company_name: str = None) -> Optional[str]:
-        """Create or find a customer"""
-        # If we have a company name, we need to ensure DisplayName shows company name
-        # So we'll create a new customer or find one with the right DisplayName
-        if company_name:
-            # Try to find existing customer with company DisplayName
-            existing_id = self._find_customer_by_display_name(company_name)
-            if existing_id:
-                # CRITICAL FIX: Existing customers may have conflicts that prevent BillAddr/payment terms
-                # Instead of updating, create a new customer with a unique name to avoid conflicts
-                st.warning(f"⚠️ Found existing customer '{company_name}' but creating new one to avoid conflicts")
-                
-                # Create unique customer name by adding timestamp
-                import time
-                unique_suffix = str(int(time.time()))[-4:]
-                unique_company_name = f"{company_name} #{unique_suffix}"
-                
-                st.info(f"✅ Creating new customer: '{unique_company_name}' to ensure proper billing")
-                
-                # Continue to create new customer with unique name
-                company_name = unique_company_name
-        else:
-            # No company name, try to find by email with person's name
-            existing_id = self._find_customer_by_email(email)
-            if existing_id:
-                return existing_id
-
-        # 2. Create new customer
-        # Use company name as DisplayName if provided (shows in BILL TO), otherwise use full name
-        display_name = company_name if company_name else f"{first_name} {last_name}"
+        """
+        Create or find a customer
+        FIX #3: Changed DisplayName logic to use client name instead of company name
+        This ensures the email says "Dear [Client Name]" not "Dear [Company Name]"
+        """
+        # FIX #3: Always use person's name as DisplayName for email greeting
+        # Company name will be stored in CompanyName field and shown in Bill To address
+        display_name = f"{first_name} {last_name}"
         
+        # Try to find existing customer by email
+        existing_id = self._find_customer_by_email(email)
+        if existing_id:
+            return existing_id
+
+        # Create new customer
         payload = {
-            "DisplayName": display_name,
+            "DisplayName": display_name,  # FIX #3: Always use person's name for email greeting
+            "GivenName": first_name,
+            "FamilyName": last_name,
             "PrimaryEmailAddr": {"Address": email}
         }
         
-        # When we have a company name, we want the BILL TO to show only the company name
-        # So we set CompanyName but leave GivenName and FamilyName empty
+        # Add company name to CompanyName field (will show in Bill To address)
         if company_name:
             payload["CompanyName"] = company_name
-            # Don't set GivenName/FamilyName to avoid showing person's name in BILL TO
-        else:
-            # No company, use person's name
-            payload["GivenName"] = first_name
-            payload["FamilyName"] = last_name
 
         response = self._make_request('POST', 'customer', data=payload)
         
         if response and response.status_code in [200, 201]:
             customer = response.json().get("Customer", {})
-            # Show person's name in message, not DisplayName (which might be company)
             person_name = f"{first_name} {last_name}"
             st.success(f"✅ Customer created: {person_name}")
             return customer.get("Id")
@@ -397,8 +406,7 @@ class QuickBooksAPI:
         # Specific error handling for duplicates (if search failed but they exist)
         if response and "Duplicate Name Exists Error" in response.text:
             st.warning("⚠️ Customer name already exists. Trying to find by name...")
-            search_name = company_name if company_name else f"{first_name} {last_name}"
-            return self._find_customer_by_display_name(search_name)
+            return self._find_customer_by_display_name(display_name)
 
         st.error(f"Error creating customer: {response.text if response else 'No response'}")
         return None
@@ -428,76 +436,74 @@ class QuickBooksAPI:
         return None
 
     def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
-                     email: str, company_name: str = None, client_address: str = None,
-                     contract_amount: str = "0", description: str = "Contract Services", 
-                     line_items: list = None, payment_terms: str = "Due in Full", 
-                     enable_payment_link: bool = True, invoice_date: str = None) -> Optional[str]:
-        """Create an invoice payload and send it to QuickBooks"""
+                      email: str, company_name: str = None, client_address: str = None,
+                      contract_amount: str = "0", description: str = "Contract Services",
+                      line_items: list = None, payment_terms: str = "Due in Full",
+                      enable_payment_link: bool = True, invoice_date: str = None) -> Optional[str]:
+        """
+        Create an invoice for a customer
+        FIX #1: Improved BillAddr handling to ensure it shows in PDF
+        FIX #2: Fixed DueDate to respect selected invoice date
+        """
         
+        # Build line items
         lines = []
         
         if line_items:
             for item in line_items:
-                # Ensure float conversion
-                try:
-                    amt = float(item.get('unit_price', 0))
-                    qty = float(item.get('quantity', 1))
-                except (ValueError, TypeError):
-                    amt = 0.0
-                    qty = 1.0
+                item_type = item.get('type', 'Service')
+                item_description = item.get('description', item_type)
+                line_description = item.get('line_description', '')
+                quantity = float(item.get('quantity', 1) or 1)
+                unit_price = float(item.get('unit_price', item.get('amount', 0)) or 0)
+                amount = quantity * unit_price
                 
-                line_desc = item.get('line_description', '') or item.get('name', '')
-                line_type = item.get('type', 'Service')
-                
-                main_description = line_type
-                if line_desc:
-                    main_description = f"{line_type}\n{line_desc}"
-
-                if amt < 0:
-                    # Discount Line
-                    lines.append({
-                        "Amount": abs(amt),
+                if amount < 0:
+                    # Use DiscountLineDetail so QuickBooks shows it beneath TAX
+                    discount_line = {
+                        "Amount": abs(amount),
                         "DetailType": "DiscountLineDetail",
-                        "Description": main_description,
+                        "Description": line_description or item_description or item_type,
                         "DiscountLineDetail": {
                             "PercentBased": False
                         }
-                    })
+                    }
+                    lines.append(discount_line)
                 else:
-                    # Sales Line
-                    line_total = amt * qty
-                    service_item_id = self._get_or_create_service_item(line_type)
+                    # Get or create service item
+                    service_item_id = self._get_or_create_service_item(item_type)
                     
-                    sales_line = {
+                    line_item = {
+                        "Amount": amount,
                         "DetailType": "SalesItemLineDetail",
-                        "Amount": line_total,
-                        "Description": line_desc if line_desc and line_desc.strip() else "",
                         "SalesItemLineDetail": {
                             "ItemRef": {"value": service_item_id},
-                            "Qty": qty,
-                            "UnitPrice": amt
+                            "Qty": quantity,
+                            "UnitPrice": unit_price
                         }
                     }
-                    lines.append(sales_line)
+                    
+                    # Add description if provided
+                    if line_description:
+                        line_item["Description"] = line_description
+                    
+                    lines.append(line_item)
         else:
-             # Fallback logic
-             try:
-                 amount_clean = float(str(contract_amount).replace('$', '').replace(',', ''))
-             except:
-                 amount_clean = 0.0
-                 
-             lines.append({
-                "DetailType": "SalesItemLineDetail",
-                "Amount": amount_clean,
-                "Description": description,
-                "SalesItemLineDetail": {
-                    "ItemRef": {"value": "1"},
-                    "Qty": 1,
-                    "UnitPrice": amount_clean
-                }
-            })
-
-        # Date handling
+            # Fallback to contract amount if no line items
+            if contract_amount and float(contract_amount.replace('$', '').replace(',', '')) > 0:
+                amount = float(contract_amount.replace('$', '').replace(',', ''))
+                lines.append({
+                    "Amount": amount,
+                    "DetailType": "SalesItemLineDetail",
+                    "SalesItemLineDetail": {
+                        "ItemRef": {"value": "1"},
+                        "Qty": 1,
+                        "UnitPrice": amount
+                    },
+                    "Description": description
+                })
+        
+        # Handle invoice date
         if invoice_date:
             try:
                 txn_date = invoice_date.strftime("%Y-%m-%d") if hasattr(invoice_date, 'strftime') else str(invoice_date)
@@ -512,86 +518,41 @@ class QuickBooksAPI:
             "TxnDate": txn_date,
             "Line": lines,
             "EmailStatus": "NotSet",
-            # Add fields that might be required for BillAddr to work
             "ApplyTaxAfterDiscount": False,
             "PrintStatus": "NeedToPrint",
             "TotalAmt": sum(line.get("Amount", 0) for line in lines if isinstance(line.get("Amount"), (int, float)))
         }
         
-        # FIX: Handle Address - FORCE BillAddr on invoice to override customer's default address
+        # FIX #1: Improved BillAddr handling to ensure it shows in PDF
         bill_addr = self._parse_bill_address(company_name, client_address)
         if bill_addr:
-            # FORCE: Ensure BillAddr has all required fields for QuickBooks
-            # Add additional fields that QB might require
-            if 'Line1' not in bill_addr and company_name:
-                bill_addr['Line1'] = company_name
-            
-            # FORCE: Add City, State, PostalCode if we can parse them
-            if len(bill_addr) >= 2 and 'Line2' in bill_addr:
-                # Try to parse "City, State ZIP" format
-                line2 = bill_addr['Line2']
-                if ',' in line2:
-                    parts = line2.split(',')
-                    if len(parts) >= 2:
-                        city = parts[0].strip()
-                        state_zip = parts[1].strip()
-                        if city:
-                            bill_addr['City'] = city
-                        if ' ' in state_zip:
-                            state_parts = state_zip.split()
-                            if len(state_parts) >= 2:
-                                bill_addr['CountrySubDivisionCode'] = state_parts[0]
-                                bill_addr['PostalCode'] = ' '.join(state_parts[1:])
-            
             invoice_data["BillAddr"] = bill_addr
-            st.info(f"✅ FORCE: Setting invoice BillAddr with {len(bill_addr)} fields: {bill_addr}")
-        else:
-            # FORCE: Always create BillAddr with company name
-            if company_name:
-                invoice_data["BillAddr"] = {
-                    "Line1": company_name,
-                    "City": "Unknown",
-                    "CountrySubDivisionCode": "CA", 
-                    "PostalCode": "00000"
-                }
-                st.info(f"✅ FORCE: Setting minimal BillAddr with required fields: {company_name}")
-            else:
-                st.warning("⚠️ No billing address or company name - using customer default")
-                st.warning(f"Debug: company_name='{company_name}', client_address='{client_address}'")
-        
-        # FIX: Handle Due Date vs Terms correctly
-        # FORCE: Always set DueDate and try multiple approaches to override QB defaults
-        invoice_data["DueDate"] = txn_date  # Always set due date to invoice date
-        
-        if payment_terms in ["Due on receipt", "Due in Full"]:
-            # RADICAL APPROACH: Don't set any payment terms, just force DueDate
-            # Some QB companies might have restrictions on payment terms
-            invoice_data["PrivateNote"] = "PAYMENT DUE IMMEDIATELY - Due on receipt"
-            # Try setting custom fields that might override defaults
-            invoice_data["CustomField"] = [
-                {
-                    "DefinitionId": "1",
-                    "Name": "PaymentTerms", 
-                    "Type": "StringType",
-                    "StringValue": "Due on receipt"
-                }
-            ]
-            st.info(f"✅ RADICAL: Set DueDate={txn_date} without payment terms to avoid restrictions")
-        elif payment_terms:
-            # For Net 15, Net 30, etc., we send the Term ID and let QuickBooks calculate the DueDate.
-            invoice_data["SalesTermRef"] = {
-                "value": self._get_payment_term_id(payment_terms)
+        elif company_name:
+            # If no address but we have company name, create minimal BillAddr
+            invoice_data["BillAddr"] = {
+                "Line1": company_name
             }
-            # Remove the DueDate we set above to let QB calculate it based on terms
-            del invoice_data["DueDate"]
-            st.info(f"✅ Set payment terms: {payment_terms}, letting QB calculate DueDate")
-        else:
-            # No payment terms specified, force due on receipt with multiple overrides
+        
+        # FIX #2: Always set DueDate to the selected invoice date for "Due on receipt"
+        # This ensures the due date matches what the user selected in Streamlit
+        if payment_terms in ["Due on receipt", "Due in Full"]:
+            # For immediate payment, set DueDate to invoice date
+            invoice_data["DueDate"] = txn_date
+            # Set payment term to "Due on receipt"
             invoice_data["SalesTermRef"] = {
                 "value": self._get_payment_term_id("Due on receipt")
             }
-            invoice_data["PrivateNote"] = "FORCE: Default to due on receipt"
-            st.info(f"✅ FORCE: No payment terms specified, multiple overrides for Due on receipt with DueDate={txn_date}")
+        elif payment_terms:
+            # For Net 15, Net 30, etc., set the payment term and let QB calculate DueDate
+            invoice_data["SalesTermRef"] = {
+                "value": self._get_payment_term_id(payment_terms)
+            }
+        else:
+            # Default to due on receipt with invoice date
+            invoice_data["DueDate"] = txn_date
+            invoice_data["SalesTermRef"] = {
+                "value": self._get_payment_term_id("Due on receipt")
+            }
         
         payload = invoice_data
         
