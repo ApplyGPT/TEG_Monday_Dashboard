@@ -48,12 +48,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Hide pages from sidebar
+# Hide tool pages from sidebar
 st.markdown(
     """
 <style>
+    [data-testid="stSidebarNav"] a[href*="tools"] { display: none !important; }
     [data-testid="stSidebarNav"] a[href*="signnow_form"] { display: none !important; }
     [data-testid="stSidebarNav"] a[href*="quickbooks_form"] { display: none !important; }
+    [data-testid="stSidebarNav"] a[href*="workbook_creator"] { display: none !important; }
 </style>
 """,
     unsafe_allow_html=True,

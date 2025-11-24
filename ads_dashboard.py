@@ -93,9 +93,11 @@ st.markdown("""
         border-radius: 0.5rem;
         border-left: 4px solid #1f77b4;
     }
-    /* Hide QuickBooks and SignNow pages from sidebar */
+    /* Hide tool pages from sidebar */
+    [data-testid="stSidebarNav"] a[href*="tools"],
     [data-testid="stSidebarNav"] a[href*="quickbooks_form"],
-    [data-testid="stSidebarNav"] a[href*="signnow_form"] {
+    [data-testid="stSidebarNav"] a[href*="signnow_form"],
+    [data-testid="stSidebarNav"] a[href*="workbook_creator"] {
         display: none !important;
     }
     @media (max-width: 768px) {

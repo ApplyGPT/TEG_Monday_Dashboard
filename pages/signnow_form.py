@@ -34,14 +34,82 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS to hide all pages from sidebar navigation
+# Custom CSS to hide all non-tool pages from sidebar navigation
 st.markdown("""
 <style>
-    /* Hide the entire sidebar navigation */
-    [data-testid="stSidebarNav"] {
-        display: none !important;
-    }
+/* Hide ALL sidebar list items by default */
+[data-testid="stSidebarNav"] li {
+    display: none !important;
+}
+
+/* Show list items that contain allowed tool pages using :has() selector */
+[data-testid="stSidebarNav"] li:has(a[href*="quickbooks"]),
+[data-testid="stSidebarNav"] li:has(a[href*="signnow"]),
+[data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
+[data-testid="stSidebarNav"] li:has(a[href*="workbook"]) {
+    display: block !important;
+}
 </style>
+<script>
+// JavaScript to show only tool pages and hide everything else
+(function() {
+    function showToolPagesOnly() {
+        const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
+        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook'];
+        
+        navItems.forEach(item => {
+            const link = item.querySelector('a');
+            if (!link) {
+                item.style.setProperty('display', 'none', 'important');
+                return;
+            }
+            
+            const href = (link.getAttribute('href') || '').toLowerCase();
+            const text = link.textContent.trim().toLowerCase();
+            
+            // Check if this is an allowed tool page
+            const isToolPage = allowedPages.some(page => {
+                return href.includes(page) || text.includes(page.toLowerCase());
+            });
+            
+            // Make sure it's not ads dashboard or other dashboards
+            const isDashboard = (text.includes('ads') && text.includes('dashboard')) || 
+                              (href.includes('ads') && href.includes('dashboard'));
+            
+            if (isToolPage && !isDashboard) {
+                item.style.setProperty('display', 'block', 'important');
+                link.style.setProperty('display', 'block', 'important');
+            } else {
+                item.style.setProperty('display', 'none', 'important');
+            }
+        });
+    }
+    
+    // Run immediately and on load
+    showToolPagesOnly();
+    window.addEventListener('load', function() {
+        setTimeout(showToolPagesOnly, 50);
+        setTimeout(showToolPagesOnly, 200);
+        setTimeout(showToolPagesOnly, 500);
+    });
+    
+    // Watch for DOM changes
+    const observer = new MutationObserver(function() {
+        showToolPagesOnly();
+    });
+    
+    setTimeout(function() {
+        const sidebar = document.querySelector('[data-testid="stSidebarNav"]');
+        if (sidebar) {
+            observer.observe(sidebar, { 
+                childList: true, 
+                subtree: true,
+                attributes: true
+            });
+        }
+    }, 100);
+})();
+</script>
 """, unsafe_allow_html=True)
 
 def main():

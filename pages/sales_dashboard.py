@@ -18,12 +18,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS to hide QuickBooks and SignNow pages from sidebar
+# Custom CSS to hide tool pages from sidebar
 st.markdown("""
 <style>
-    /* Hide QuickBooks and SignNow pages from sidebar */
+    /* Hide tool pages from sidebar */
+    [data-testid="stSidebarNav"] a[href*="tools"],
     [data-testid="stSidebarNav"] a[href*="quickbooks_form"],
-    [data-testid="stSidebarNav"] a[href*="signnow_form"] {
+    [data-testid="stSidebarNav"] a[href*="signnow_form"],
+    [data-testid="stSidebarNav"] a[href*="workbook_creator"] {
         display: none !important;
     }
 </style>
