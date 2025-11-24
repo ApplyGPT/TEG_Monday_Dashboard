@@ -36,7 +36,6 @@ OPTIONAL_PRICES = {
     "source": 1330.00,
     "treatment": 760.00,
 }
-CUSTOM_LINE_BASE_PRICE = 2500.00
 SUMMARY_LABEL_COL = 14  # Column N
 SUMMARY_VALUE_COL = 16  # Column P
 SUMMARY_DEV_ROW = 10
@@ -114,6 +113,51 @@ def apply_arial_20_font(cell) -> None:
             cell.font = Font(name="Arial", size=20)
         except Exception:
             pass
+
+
+def safe_merge_cells(ws, range_str: str) -> bool:
+    """Safely merge cells, checking if they're already merged first."""
+    try:
+        # Parse the range string (e.g., "B10:B11")
+        parts = range_str.split(':')
+        if len(parts) != 2:
+            return False
+        
+        from openpyxl.utils import coordinate_from_string, column_index_from_string
+        
+        # Parse start cell
+        start_col_letter = ''.join([c for c in parts[0] if c.isalpha()])
+        start_row = int(''.join([c for c in parts[0] if c.isdigit()]))
+        start_col = column_index_from_string(start_col_letter)
+        
+        # Parse end cell
+        end_col_letter = ''.join([c for c in parts[1] if c.isalpha()])
+        end_row = int(''.join([c for c in parts[1] if c.isdigit()]))
+        end_col = column_index_from_string(end_col_letter)
+        
+        # Check if any cell in this range is already part of a merged range
+        ranges_to_unmerge = []
+        for merged_range in list(ws.merged_cells.ranges):
+            # Check if ranges overlap
+            if not (merged_range.max_row < start_row or merged_range.min_row > end_row or
+                    merged_range.max_col < start_col or merged_range.min_col > end_col):
+                # Ranges overlap, mark for unmerging
+                ranges_to_unmerge.append(merged_range)
+        
+        # Unmerge overlapping ranges
+        for merged_range in ranges_to_unmerge:
+            try:
+                min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
+                ws.unmerge_cells(f"{min_cell.coordinate}:{max_cell.coordinate}")
+            except Exception:
+                pass
+        
+        # Now merge the cells
+        ws.merge_cells(range_str)
+        return True
+    except Exception:
+        return False  # Return False if merge fails
 
 
 def safe_set_cell_value(ws, cell_ref: str, value) -> None:
@@ -270,6 +314,7 @@ def apply_development_package(
     client_email: str,
     representative: str,
     style_entries: list[dict],
+    custom_styles: list[dict],
     discount_percentage: float,
 ) -> tuple[float, float]:
     """Write the inputs into the workbook and return totals."""
@@ -288,6 +333,8 @@ def apply_development_package(
     total_development = 0.0
     total_optional = 0.0
     num_styles = len(style_entries)
+    num_custom_styles = len(custom_styles)
+    total_styles_count = num_styles + num_custom_styles  # Total for pricing tier calculation
     discount_percentage = max(0.0, float(discount_percentage or 0))
 
     base_capacity = len(ROW_INDICES)
@@ -308,16 +355,17 @@ def apply_development_package(
                 target_cell = ws.cell(row=new_row, column=col_idx)
                 copy_cell_formatting(source_cell, target_cell)
 
-        # Unmerge cells only in newly inserted rows (row 20+) to avoid MergedCell errors
-        # Don't touch existing template rows (10-18) to preserve formatting
+        # Unmerge ALL cells in newly inserted rows to avoid MergedCell errors
+        # Excel automatically adjusts merged ranges when rows are inserted, which can cause conflicts
         first_new_row = SUMMARY_TOTAL_DUE_BASE_ROW
         last_new_row = SUMMARY_TOTAL_DUE_BASE_ROW + rows_to_insert - 1
+        
+        # Get all merged ranges that intersect with the newly inserted rows
         merged_ranges_to_unmerge = []
         for merged_range in list(ws.merged_cells.ranges):
-            # Only unmerge if the merged range is entirely within the newly inserted rows
-            # and in columns B-L
-            if (merged_range.min_row >= first_new_row and merged_range.max_row <= last_new_row) and \
-               merged_range.min_col >= 2 and merged_range.max_col <= 12:  # Columns B-L
+            # Check if merged range intersects with newly inserted rows
+            # (min_row <= last_new_row and max_row >= first_new_row)
+            if (merged_range.min_row <= last_new_row and merged_range.max_row >= first_new_row):
                 merged_ranges_to_unmerge.append(merged_range)
         
         # Unmerge the identified ranges
@@ -325,7 +373,8 @@ def apply_development_package(
             try:
                 min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
                 max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
-                ws.unmerge_cells(f"{min_cell.coordinate}:{max_cell.coordinate}")
+                range_str = f"{min_cell.coordinate}:{max_cell.coordinate}"
+                ws.unmerge_cells(range_str)
             except Exception:
                 pass  # Skip if unmerge fails
 
@@ -345,14 +394,11 @@ def apply_development_package(
         style_name = entry.get("name", "").strip() or "STYLE"
         complexity_pct = float(entry.get("complexity", 0.0))
         is_activewear = entry.get("activewear", False)
-        is_custom_line = entry.get("custom_line", False)
-        row_options = entry.get("options", {}) if not is_custom_line else {}
+        row_options = entry.get("options", {})
 
-        # Determine base price for the row (custom lines use a fixed rate)
-        if is_custom_line:
-            line_base_price = CUSTOM_LINE_BASE_PRICE
-        else:
-            line_base_price = calculate_base_price(num_styles, is_activewear)
+        # Calculate base price based on tiered pricing and activewear
+        # Use total_styles_count (regular + custom) for pricing tier
+        line_base_price = calculate_base_price(total_styles_count, is_activewear)
 
         # Check if this is a new row (row_idx > 18) that needs Arial 20 font
         is_new_row = num_styles > 5 and row_idx > 18
@@ -364,10 +410,7 @@ def apply_development_package(
         cell_b = ws.cell(row=row_idx, column=2)
         cell_b.value = idx + 1
         if is_new_row:
-            try:
-                ws.merge_cells(f"B{row_idx}:B{row_second}")
-            except Exception:
-                pass
+            safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
             apply_arial_20_font(cell_b)
             if Alignment is not None:
                 cell_b.alignment = Alignment(horizontal="left", vertical="center")
@@ -376,10 +419,7 @@ def apply_development_package(
         cell_c = ws.cell(row=row_idx, column=3)
         cell_c.value = style_name.upper()
         if is_new_row:
-            try:
-                ws.merge_cells(f"C{row_idx}:C{row_second}")
-            except Exception:
-                pass
+            safe_merge_cells(ws, f"C{row_idx}:C{row_second}")
             apply_arial_20_font(cell_c)
             if Alignment is not None:
                 cell_c.alignment = Alignment(horizontal="left", vertical="center")
@@ -388,19 +428,12 @@ def apply_development_package(
         # Set complexity - show percentage when provided
         cell_e = ws.cell(row=row_idx, column=5)
         if complexity_pct == 0:
-            if is_custom_line:
-                cell_e.value = 0
-                cell_e.number_format = '0%'
-            else:
-                cell_e.value = None
+            cell_e.value = None
         else:
             cell_e.value = complexity_pct / 100.0
             cell_e.number_format = '0%'  # Percentage format
         if is_new_row:
-            try:
-                ws.merge_cells(f"E{row_idx}:E{row_second}")
-            except Exception:
-                pass
+            safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
             apply_arial_20_font(cell_e)
             if Alignment is not None:
                 cell_e.alignment = Alignment(horizontal="center", vertical="center")
@@ -412,10 +445,7 @@ def apply_development_package(
         cell_d.value = int(line_base_price)
         cell_d.number_format = '$#,##0'  # Currency format
         if is_new_row:
-            try:
-                ws.merge_cells(f"D{row_idx}:D{row_second}")
-            except Exception:
-                pass
+            safe_merge_cells(ws, f"D{row_idx}:D{row_second}")
             apply_arial_20_font(cell_d)
             if Alignment is not None:
                 cell_d.alignment = Alignment(horizontal="center", vertical="center")
@@ -428,10 +458,7 @@ def apply_development_package(
             cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
         cell_f.number_format = '$#,##0'  # Currency format
         if is_new_row:
-            try:
-                ws.merge_cells(f"F{row_idx}:F{row_second}")
-            except Exception:
-                pass
+            safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
             apply_arial_20_font(cell_f)
             if Alignment is not None:
                 cell_f.alignment = Alignment(horizontal="center", vertical="center")
@@ -441,9 +468,6 @@ def apply_development_package(
         for col_letter, key in optional_cells.items():
             col_num = ord(col_letter) - 64  # Convert letter to column number
             cell_opt = ws.cell(row=row_idx, column=col_num)
-            if is_custom_line:
-                cell_opt.value = None
-                continue
             if row_options.get(key):
                 price = int(OPTIONAL_PRICES[key])  # Ensure integer
                 cell_opt.value = price
@@ -451,51 +475,150 @@ def apply_development_package(
                 if is_new_row:
                     apply_arial_20_font(cell_opt)
                     # Merge and center columns H, I, J, K
-                    try:
-                        ws.merge_cells(f"{col_letter}{row_idx}:{col_letter}{row_second}")
+                    safe_merge_cells(ws, f"{col_letter}{row_idx}:{col_letter}{row_second}")
+                    if Alignment is not None:
                         cell_opt.alignment = Alignment(horizontal="center", vertical="center")
-                    except Exception:
-                        pass
                 row_optional_sum += price
             else:
                 cell_opt.value = None
                 if is_new_row:
                     apply_arial_20_font(cell_opt)
                     # Merge and center even if empty
-                    try:
-                        ws.merge_cells(f"{col_letter}{row_idx}:{col_letter}{row_second}")
+                    safe_merge_cells(ws, f"{col_letter}{row_idx}:{col_letter}{row_second}")
+                    if Alignment is not None:
                         cell_opt.alignment = Alignment(horizontal="center", vertical="center")
-                    except Exception:
-                        pass
         
         cell_l = ws.cell(row=row_idx, column=12)
-        if is_custom_line:
-            cell_l.value = None
-        else:
-            cell_l.value = f"=SUM(H{row_idx}:K{row_idx})"
-            cell_l.number_format = '$#,##0'  # Currency format
+        cell_l.value = f"=SUM(H{row_idx}:K{row_idx})"
+        cell_l.number_format = '$#,##0'  # Currency format
         if is_new_row:
             apply_arial_20_font(cell_l)
-            try:
-                ws.merge_cells(f"L{row_idx}:L{row_second}")
+            safe_merge_cells(ws, f"L{row_idx}:L{row_second}")
+            if Alignment is not None:
                 cell_l.alignment = Alignment(horizontal="center", vertical="center")
-            except Exception:
-                pass
 
         total_development += line_base_price * (1 + complexity_pct / 100.0)
         total_optional += row_optional_sum
 
+    # Process custom styles (user-defined price, complexity, no add-ons)
+    if num_custom_styles > 0:
+        # Calculate starting row for custom styles (after all regular styles)
+        custom_start_row = dynamic_row_indices[-1] + 2 if dynamic_row_indices else 10
+        custom_row_indices = []
+        for i in range(num_custom_styles):
+            custom_row_indices.append(custom_start_row + (i * 2))
+        
+        # If we need more rows, insert them before the totals row
+        last_custom_row = custom_row_indices[-1] if custom_row_indices else custom_start_row
+        if last_custom_row >= SUMMARY_TOTAL_DUE_BASE_ROW:
+            rows_needed = last_custom_row - SUMMARY_TOTAL_DUE_BASE_ROW + 2
+            ws.insert_rows(SUMMARY_TOTAL_DUE_BASE_ROW, amount=rows_needed)
+            # Custom row indices don't change because they're before the insertion point
+        
+        for idx, row_idx in enumerate(custom_row_indices):
+            entry = custom_styles[idx]
+            style_name = entry.get("name", "").strip() or "STYLE"
+            custom_price = float(entry.get("price", 0.0))
+            complexity_pct = float(entry.get("complexity", 0.0))
+            
+            is_new_row = row_idx > 18
+            row_second = row_idx + 1
+            
+            # Write style number (#)
+            cell_b = ws.cell(row=row_idx, column=2)
+            cell_b.value = num_styles + idx + 1
+            if is_new_row:
+                safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
+                apply_arial_20_font(cell_b)
+                if Alignment is not None:
+                    cell_b.alignment = Alignment(horizontal="left", vertical="center")
+            
+            # Write style name
+            cell_c = ws.cell(row=row_idx, column=3)
+            cell_c.value = style_name.upper()
+            if is_new_row:
+                safe_merge_cells(ws, f"C{row_idx}:C{row_second}")
+                apply_arial_20_font(cell_c)
+                if Alignment is not None:
+                    cell_c.alignment = Alignment(horizontal="left", vertical="center")
+            
+            # Write custom price
+            cell_d = ws.cell(row=row_idx, column=4)
+            cell_d.value = int(custom_price)
+            cell_d.number_format = '$#,##0'
+            if is_new_row:
+                safe_merge_cells(ws, f"D{row_idx}:D{row_second}")
+                apply_arial_20_font(cell_d)
+                if Alignment is not None:
+                    cell_d.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # Write complexity
+            cell_e = ws.cell(row=row_idx, column=5)
+            if complexity_pct == 0:
+                cell_e.value = None
+            else:
+                cell_e.value = complexity_pct / 100.0
+                cell_e.number_format = '0%'
+            if is_new_row:
+                safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
+                apply_arial_20_font(cell_e)
+                if Alignment is not None:
+                    cell_e.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # Write total formula
+            cell_f = ws.cell(row=row_idx, column=6)
+            if complexity_pct == 0:
+                cell_f.value = f"=D{row_idx}"
+            else:
+                cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
+            cell_f.number_format = '$#,##0'
+            if is_new_row:
+                safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
+                apply_arial_20_font(cell_f)
+                if Alignment is not None:
+                    cell_f.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # Clear add-ons (custom styles don't have add-ons)
+            for col_letter in ["H", "I", "J", "K"]:
+                col_num = ord(col_letter) - 64
+                cell_opt = ws.cell(row=row_idx, column=col_num)
+                cell_opt.value = None
+                if is_new_row:
+                    safe_merge_cells(ws, f"{col_letter}{row_idx}:{col_letter}{row_second}")
+                    if Alignment is not None:
+                        cell_opt.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # Clear total optional add-on
+            cell_l = ws.cell(row=row_idx, column=12)
+            cell_l.value = None
+            if is_new_row:
+                safe_merge_cells(ws, f"L{row_idx}:L{row_second}")
+                if Alignment is not None:
+                    cell_l.alignment = Alignment(horizontal="center", vertical="center")
+            
+            total_development += custom_price * (1 + complexity_pct / 100.0)
+        
+        # Update last_style_row to include custom styles
+        if custom_row_indices:
+            last_style_row = custom_row_indices[-1]
+    
+    # Determine last_style_row if no custom styles
+    if num_custom_styles == 0:
+        if dynamic_row_indices:
+            last_style_row = dynamic_row_indices[-1]
+        else:
+            last_style_row = 10
+
     # Totals section - dynamically calculate totals row and range based on number of styles
     # For 5 or fewer styles: totals at row 20 (original position)
-    # For more than 5 styles: totals row shifts down by (num_styles - 5) * 2 rows
-    if num_styles > 0:
-        first_style_row = dynamic_row_indices[0]  # Should be 10
-        last_style_row = dynamic_row_indices[num_styles - 1]
-        if num_styles <= 5:
+    # For more than 5 styles: totals row shifts down by (total_styles_count - 5) * 2 rows
+    if total_styles_count > 0:
+        first_style_row = dynamic_row_indices[0] if dynamic_row_indices else 10
+        if total_styles_count <= 5:
             totals_row = 20  # Original totals row position
         else:
             # Totals row shifts down by the number of rows we inserted
-            totals_row = 20 + (num_styles - 5) * 2
+            totals_row = 20 + (total_styles_count - 5) * 2
         
         # Unmerge any merged cells in the totals row to avoid issues
         merged_ranges_to_unmerge = []
@@ -696,6 +819,7 @@ def build_workbook_bytes(
     client_email: str,
     representative: str,
     style_entries: list[dict],
+    custom_styles: list[dict],
     discount_percentage: float,
 ) -> tuple[bytes, float, float]:
     """Load the template, update it, and return bytes plus totals."""
@@ -730,6 +854,7 @@ def build_workbook_bytes(
         client_email=client_email,
         representative=representative,
         style_entries=style_entries,
+        custom_styles=custom_styles,
         discount_percentage=discount_percentage,
     )
 
@@ -888,31 +1013,29 @@ def main() -> None:
     st.subheader("**Styles**")
     
     # Column headers
-    header_cols = st.columns([1.8, 1, 1, 1.2, 1, 0.8, 0.8, 1, 0.8])
+    header_cols = st.columns([1.8, 1, 1.2, 1.2, 1, 1, 1, 0.8])
     with header_cols[0]:
         st.markdown("**Style Name**")
     with header_cols[1]:
-        st.markdown("**Custom Line?**")
-    with header_cols[2]:
         st.markdown("**Activewear?**")
-    with header_cols[3]:
+    with header_cols[2]:
         st.markdown("**Complexity (%)**")
-    with header_cols[4]:
+    with header_cols[3]:
         st.markdown("**Wash/Dye ($1,330)**")
-    with header_cols[5]:
+    with header_cols[4]:
         st.markdown("**Design ($1,330)**")
-    with header_cols[6]:
+    with header_cols[5]:
         st.markdown("**Source ($1,330)**")
-    with header_cols[7]:
+    with header_cols[6]:
         st.markdown("**Treatment ($760)**")
-    with header_cols[8]:
+    with header_cols[7]:
         st.markdown("**Remove**")
 
     # Display existing style entries in horizontal rows
     if st.session_state["style_entries"]:
         for i, entry in enumerate(st.session_state["style_entries"]):
             with st.container():
-                cols = st.columns([1.8, 1, 1, 1.2, 1, 0.8, 0.8, 1, 0.8])
+                cols = st.columns([1.8, 1, 1.2, 1.2, 1, 1, 1, 0.8])
                 with cols[0]:
                     style_name = st.text_input(
                         "Style Name",
@@ -923,14 +1046,6 @@ def main() -> None:
                     )
                     entry["name"] = style_name
                 with cols[1]:
-                    custom_line = st.checkbox(
-                        "",
-                        value=entry.get("custom_line", False),
-                        key=f"custom_line_{i}",
-                        label_visibility="visible",
-                    )
-                    entry["custom_line"] = custom_line
-                with cols[2]:
                     activewear = st.checkbox(
                         "",
                         value=entry.get("activewear", False),
@@ -938,7 +1053,7 @@ def main() -> None:
                         label_visibility="visible",
                     )
                     entry["activewear"] = activewear
-                with cols[3]:
+                with cols[2]:
                     complexity = st.number_input(
                         "Complexity (%)",
                         min_value=0,
@@ -950,44 +1065,39 @@ def main() -> None:
                         label_visibility="collapsed",
                     )
                     entry["complexity"] = float(complexity)
-                disabled_addons = entry.get("custom_line", False)
-                with cols[4]:
+                with cols[3]:
                     wash_dye = st.checkbox(
                         "",
                         value=entry.get("options", {}).get("wash_dye", False),
                         key=f"wash_dye_{i}",
                         label_visibility="visible",
-                        disabled=disabled_addons,
                     )
-                    entry.setdefault("options", {})["wash_dye"] = False if disabled_addons else wash_dye
-                with cols[5]:
+                    entry.setdefault("options", {})["wash_dye"] = wash_dye
+                with cols[4]:
                     design = st.checkbox(
                         "",
                         value=entry.get("options", {}).get("design", False),
                         key=f"design_{i}",
                         label_visibility="visible",
-                        disabled=disabled_addons,
                     )
-                    entry.setdefault("options", {})["design"] = False if disabled_addons else design
-                with cols[6]:
+                    entry.setdefault("options", {})["design"] = design
+                with cols[5]:
                     source = st.checkbox(
                         "",
                         value=entry.get("options", {}).get("source", False),
                         key=f"source_{i}",
                         label_visibility="visible",
-                        disabled=disabled_addons,
                     )
-                    entry.setdefault("options", {})["source"] = False if disabled_addons else source
-                with cols[7]:
+                    entry.setdefault("options", {})["source"] = source
+                with cols[6]:
                     treatment = st.checkbox(
                         "",
                         value=entry.get("options", {}).get("treatment", False),
                         key=f"treatment_{i}",
                         label_visibility="visible",
-                        disabled=disabled_addons,
                     )
-                    entry.setdefault("options", {})["treatment"] = False if disabled_addons else treatment
-                with cols[8]:
+                    entry.setdefault("options", {})["treatment"] = treatment
+                with cols[7]:
                     if st.button("❌", key=f"remove_{i}", help="Remove this style"):
                         st.session_state["style_entries"].pop(i)
                         st.rerun()
@@ -995,10 +1105,9 @@ def main() -> None:
     # Add new style interface
     st.markdown("---")
     st.markdown("**Add New Style**")
-    add_cols = st.columns([1.8, 1, 1, 1.2, 1, 0.8, 0.8, 1, 0.8])
+    add_cols = st.columns([1.8, 1, 1.2, 1.2, 1, 1, 1, 0.8])
     # Ensure default values exist (placeholders only) without pre-filling
     default_new_style = st.session_state.get("new_style_name", "")
-    default_new_custom = st.session_state.get("new_custom_line", False)
     default_new_activewear = st.session_state.get("new_activewear", False)
     default_new_complexity = st.session_state.get("new_complexity", 0)
     default_new_wash = st.session_state.get("new_wash_dye", False)
@@ -1015,20 +1124,13 @@ def main() -> None:
             placeholder="e.g., Dress, Winter Coat",
         )
     with add_cols[1]:
-        new_custom_line = st.checkbox(
-            "",
-            value=default_new_custom,
-            key="new_custom_line",
-            label_visibility="visible",
-        )
-    with add_cols[2]:
         new_activewear = st.checkbox(
             "",
             value=default_new_activewear,
             key="new_activewear",
             label_visibility="visible",
         )
-    with add_cols[3]:
+    with add_cols[2]:
         new_complexity = st.number_input(
             "Complexity (%)",
             min_value=0,
@@ -1039,58 +1141,51 @@ def main() -> None:
             key="new_complexity",
             label_visibility="collapsed",
         )
-    disabled_new_addons = new_custom_line
-    with add_cols[4]:
+    with add_cols[3]:
         new_wash_dye = st.checkbox(
             "",
             value=default_new_wash,
             key="new_wash_dye",
             label_visibility="visible",
-            disabled=disabled_new_addons,
         )
-    with add_cols[5]:
+    with add_cols[4]:
         new_design = st.checkbox(
             "",
             value=default_new_design,
             key="new_design",
             label_visibility="visible",
-            disabled=disabled_new_addons,
         )
-    with add_cols[6]:
+    with add_cols[5]:
         new_source = st.checkbox(
             "",
             value=default_new_source,
             key="new_source",
             label_visibility="visible",
-            disabled=disabled_new_addons,
         )
-    with add_cols[7]:
+    with add_cols[6]:
         new_treatment = st.checkbox(
             "",
             value=default_new_treatment,
             key="new_treatment",
             label_visibility="visible",
-            disabled=disabled_new_addons,
         )
-    with add_cols[8]:
+    with add_cols[7]:
         if st.button("➕ Add", key="add_style", help="Add this style"):
             if new_style_name.strip():
                 st.session_state["style_entries"].append({
                     "name": new_style_name.strip(),
-                    "custom_line": new_custom_line,
                     "activewear": new_activewear,
                     "complexity": float(new_complexity),
                     "options": {
-                        "wash_dye": False if new_custom_line else new_wash_dye,
-                        "design": False if new_custom_line else new_design,
-                        "source": False if new_custom_line else new_source,
-                        "treatment": False if new_custom_line else new_treatment,
+                        "wash_dye": new_wash_dye,
+                        "design": new_design,
+                        "source": new_source,
+                        "treatment": new_treatment,
                     },
                 })
                 # Reset add-new-style inputs so the next style starts blank/default
                 for key in [
                     "new_style_name",
-                    "new_custom_line",
                     "new_activewear",
                     "new_complexity",
                     "new_wash_dye",
@@ -1104,8 +1199,125 @@ def main() -> None:
             else:
                 st.warning("Please enter a style name before adding.")
 
-    if not st.session_state["style_entries"]:
-        st.info("Add at least one style to enable the generator.")
+    # Custom Style section
+    st.markdown("---")
+    st.subheader("**Custom Style**")
+    
+    # Initialize session state for custom styles
+    if "custom_styles" not in st.session_state:
+        st.session_state["custom_styles"] = []
+    
+    # Column headers for custom styles
+    custom_header_cols = st.columns([2, 1.5, 1.5, 0.8])
+    with custom_header_cols[0]:
+        st.markdown("**Style Name**")
+    with custom_header_cols[1]:
+        st.markdown("**Price ($)**")
+    with custom_header_cols[2]:
+        st.markdown("**Complexity (%)**")
+    with custom_header_cols[3]:
+        st.markdown("**Remove**")
+    
+    # Display existing custom styles
+    if st.session_state["custom_styles"]:
+        for i, entry in enumerate(st.session_state["custom_styles"]):
+            with st.container():
+                custom_cols = st.columns([2, 1.5, 1.5, 0.8])
+                with custom_cols[0]:
+                    custom_style_name = st.text_input(
+                        "Custom Style Name",
+                        value=entry.get("name", ""),
+                        key=f"custom_style_name_{i}",
+                        label_visibility="collapsed",
+                        placeholder="e.g., Custom Item",
+                    )
+                    entry["name"] = custom_style_name
+                with custom_cols[1]:
+                    custom_price = st.number_input(
+                        "Price",
+                        min_value=0.0,
+                        value=float(entry.get("price", 0.0)),
+                        step=100.0,
+                        format="%.2f",
+                        key=f"custom_price_{i}",
+                        label_visibility="collapsed",
+                    )
+                    entry["price"] = float(custom_price)
+                with custom_cols[2]:
+                    custom_complexity = st.number_input(
+                        "Complexity (%)",
+                        min_value=0,
+                        max_value=200,
+                        value=int(entry.get("complexity", 0)),
+                        step=5,
+                        format="%d",
+                        key=f"custom_complexity_{i}",
+                        label_visibility="collapsed",
+                    )
+                    entry["complexity"] = float(custom_complexity)
+                with custom_cols[3]:
+                    if st.button("❌", key=f"remove_custom_{i}", help="Remove this custom style"):
+                        st.session_state["custom_styles"].pop(i)
+                        st.rerun()
+    
+    # Add new custom style interface
+    st.markdown("**Add New Custom Style**")
+    add_custom_cols = st.columns([2, 1.5, 1.5, 0.8])
+    default_new_custom_name = st.session_state.get("new_custom_style_name", "")
+    default_new_custom_price = st.session_state.get("new_custom_price", 0.0)
+    default_new_custom_complexity = st.session_state.get("new_custom_complexity", 0)
+    
+    with add_custom_cols[0]:
+        new_custom_style_name = st.text_input(
+            "Custom Style Name",
+            value=default_new_custom_name,
+            key="new_custom_style_name",
+            label_visibility="collapsed",
+            placeholder="e.g., Custom Item",
+        )
+    with add_custom_cols[1]:
+        new_custom_price = st.number_input(
+            "Price",
+            min_value=0.0,
+            value=default_new_custom_price,
+            step=100.0,
+            format="%.2f",
+            key="new_custom_price",
+            label_visibility="collapsed",
+        )
+    with add_custom_cols[2]:
+        new_custom_complexity = st.number_input(
+            "Complexity (%)",
+            min_value=0,
+            max_value=200,
+            value=default_new_custom_complexity,
+            step=5,
+            format="%d",
+            key="new_custom_complexity",
+            label_visibility="collapsed",
+        )
+    with add_custom_cols[3]:
+        if st.button("➕ Add", key="add_custom_style", help="Add this custom style"):
+            if new_custom_style_name.strip() and new_custom_price > 0:
+                st.session_state["custom_styles"].append({
+                    "name": new_custom_style_name.strip(),
+                    "price": float(new_custom_price),
+                    "complexity": float(new_custom_complexity),
+                })
+                # Reset add-new-custom-style inputs
+                for key in [
+                    "new_custom_style_name",
+                    "new_custom_price",
+                    "new_custom_complexity",
+                ]:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.rerun()
+            else:
+                st.warning("Please enter a custom style name and price before adding.")
+
+    if not st.session_state["style_entries"] and not st.session_state["custom_styles"]:
+        st.info("Add at least one style or custom style to enable the generator.")
         return
 
     st.markdown("---")
@@ -1127,6 +1339,7 @@ def main() -> None:
             client_email=client_email,
             representative=representative,
             style_entries=st.session_state["style_entries"],
+            custom_styles=st.session_state.get("custom_styles", []),
             discount_percentage=discount_percentage,
         )
     except FileNotFoundError as exc:

@@ -1192,10 +1192,15 @@ def main():
                 "color_mknxd1j2"   # Sales
             }
             
+            # Extract date created for filtering
+            date_created = None
+            date_created_cols = ["date7", "date_created", "created_date"]  # Common date column IDs
+            
             # Extract ALL column data from the item
             for col_val in column_values:
                 col_id = col_val.get("id", "")
                 text = (col_val.get("text") or "").strip()
+                col_type = col_val.get("type", "")
                 
                 if text:  # Only process columns with values
                     # Get ALL column values - we'll identify form fields by pattern matching values
@@ -1204,6 +1209,10 @@ def main():
                     # Find Lead Status - check the Disqualified status columns
                     if col_id in disqualified_status_cols and not lead_status:
                         lead_status = text
+                    
+                    # Extract date created - check specific date columns or any date type column
+                    if (col_id in date_created_cols or col_type == "date") and not date_created:
+                        date_created = text
             
             # New rule: only "Disqualified" is unqualified; anything else (including empty) is qualified
             is_qualified = True if not lead_status else str(lead_status).strip().lower() != "disqualified"
@@ -1211,6 +1220,7 @@ def main():
             all_lead_data.append({
                 'lead_status': lead_status,
                 'is_qualified': is_qualified,
+                'date_created': date_created,
                 **lead_data
             })
         
@@ -1228,6 +1238,62 @@ def main():
     
     if qualification_data:
         df = pd.DataFrame(qualification_data)
+        
+        # Initialize session state for date filter
+        if 'qualification_start_date' not in st.session_state:
+            st.session_state.qualification_start_date = None
+        if 'qualification_end_date' not in st.session_state:
+            st.session_state.qualification_end_date = None
+        
+        # Date Range Filter - Use form to prevent reruns until Submit is clicked
+        with st.form(key="qualification_date_filter_form", clear_on_submit=False):
+            col1, col2, col3 = st.columns([2, 2, 1])
+            
+            with col1:
+                start_date = st.date_input(
+                    "Start Date",
+                    value=st.session_state.qualification_start_date,
+                    help="Select the start date for filtering data"
+                )
+            
+            with col2:
+                end_date = st.date_input(
+                    "End Date",
+                    value=st.session_state.qualification_end_date,
+                    help="Select the end date for filtering data"
+                )
+            
+            with col3:
+                st.markdown("<div style='height: 25px'></div>", unsafe_allow_html=True)  # Reduced from 31px to 16px (15px up)
+                filter_submit = st.form_submit_button("Submit", type="primary", use_container_width=True)
+            
+            # Handle submit button click - update session state (inside form context)
+            if filter_submit:
+                if start_date or end_date:
+                    st.session_state.qualification_start_date = start_date
+                    st.session_state.qualification_end_date = end_date
+                else:
+                    # Clear filter if no dates selected
+                    st.session_state.qualification_start_date = None
+                    st.session_state.qualification_end_date = None
+                    st.info("Please select at least one date (Start Date or End Date) to filter.")
+        
+        # Convert date_created to datetime for filtering
+        if 'date_created' in df.columns:
+            # Try to parse date_created column
+            df['date_created_parsed'] = pd.to_datetime(df['date_created'], errors='coerce')
+            
+            # Apply date filter based on session state values (only applied filter, not temp values)
+            if st.session_state.qualification_start_date or st.session_state.qualification_end_date:
+                if st.session_state.qualification_start_date:
+                    start_datetime = pd.Timestamp(st.session_state.qualification_start_date)
+                    df = df[df['date_created_parsed'] >= start_datetime]
+                
+                if st.session_state.qualification_end_date:
+                    end_datetime = pd.Timestamp(st.session_state.qualification_end_date) + pd.Timedelta(days=1)  # Include the entire end date
+                    df = df[df['date_created_parsed'] < end_datetime]
+        else:
+            st.warning("Date information not available in the data. Date filtering is disabled.")
         
         # Show available columns for debugging (commented out for production)
         # col_ids = [c for c in df.columns if c not in ['lead_status', 'is_qualified']]

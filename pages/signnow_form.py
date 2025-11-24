@@ -117,13 +117,67 @@ def main():
     st.title("📝 SignNow Contract Form")
     st.markdown("Review and send contracts for signing")
     
-    # Load SignNow credentials
-    credentials = load_signnow_credentials()
+    # Account selection options
+    account_options = {
+        "Heather": "heather",
+        "Jennifer": "jennifer",
+        "Anthony": "anthony"
+    }
+    
+    # Initialize session state for selected account if not exists
+    if 'signnow_selected_account' not in st.session_state:
+        st.session_state.signnow_selected_account = "Heather"
+    
+    # Account selection dropdown - moved to main page
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        selected_account_display = st.selectbox(
+            "Select Account",
+            options=list(account_options.keys()),
+            index=list(account_options.keys()).index(st.session_state.signnow_selected_account) if st.session_state.signnow_selected_account in account_options else 0,
+            help="Choose which SignNow account to use for sending documents",
+            key="signnow_account_selector"
+        )
+    
+    with col2:
+        st.markdown("<div style='height: 38px'></div>", unsafe_allow_html=True)  # Align with selectbox
+    
+    # Update session state when account changes
+    st.session_state.signnow_selected_account = selected_account_display
+    selected_account = account_options[selected_account_display]
+    
+    # Sidebar for configuration
+    with st.sidebar:
+        st.header("⚙️ SignNow Settings")
+        
+        # Test connection button
+        if st.button("🔗 Test SignNow Connection"):
+            with st.spinner("Testing connection..."):
+                # Reload credentials with selected account
+                account_credentials = load_signnow_credentials(account_name=selected_account)
+                if account_credentials:
+                    test_api = SignNowAPI(
+                        client_id=account_credentials['client_id'],
+                        client_secret=account_credentials['client_secret'],
+                        basic_auth_token=account_credentials['basic_auth_token'],
+                        username=account_credentials['username'],
+                        password=account_credentials['password'],
+                        api_key=account_credentials.get('api_key')
+                    )
+                    if test_api.authenticate():
+                        st.success("✅ Connection successful!")
+                    else:
+                        st.error("❌ Connection failed!")
+                else:
+                    st.error("❌ Could not load credentials for selected account")
+    
+    # Load SignNow credentials with selected account
+    credentials = load_signnow_credentials(account_name=selected_account)
     if not credentials:
         st.error("SignNow credentials not configured. Please check your secrets.toml file.")
         st.stop()
     
-    # Initialize SignNow API
+    # Initialize SignNow API with selected account credentials
     signnow_api = SignNowAPI(
         client_id=credentials['client_id'],
         client_secret=credentials['client_secret'],
@@ -132,19 +186,6 @@ def main():
         password=credentials['password'],
         api_key=credentials.get('api_key')
     )
-    
-    # Sidebar for configuration
-    with st.sidebar:
-        st.header("⚙️ SignNow Settings")
-        st.info("Configured with SignNow API")
-        
-        # Test connection button
-        if st.button("🔗 Test SignNow Connection"):
-            with st.spinner("Testing connection..."):
-                if signnow_api.authenticate():
-                    st.success("✅ Connection successful!")
-                else:
-                    st.error("❌ Connection failed!")
     
     # Main form
     

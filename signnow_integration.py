@@ -805,24 +805,38 @@ class SignNowAPI:
             return False, f"Error creating and sending document pair: {str(e)}"
 
 
-def load_signnow_credentials() -> Dict[str, str]:
+def load_signnow_credentials(account_name: str = None) -> Dict[str, str]:
     """
     Load SignNow credentials from Streamlit secrets
+    
+    Args:
+        account_name: Name of the account to load ('heather', 'jennifer', 'anthony', or None for default)
     
     Returns:
         Dict containing SignNow credentials
     """
     try:
-        if 'signnow' not in st.secrets:
-            st.error("SignNow configuration not found in secrets.toml")
+        # Determine which secrets section to use
+        if account_name:
+            # Use specific account section
+            secrets_key = f'signnow - {account_name.lower()}'
+        else:
+            # Fallback to default signnow section if no account specified
+            secrets_key = 'signnow'
+        
+        if secrets_key not in st.secrets:
+            if account_name:
+                st.error(f"SignNow configuration for '{account_name}' not found in secrets.toml")
+            else:
+                st.error("SignNow configuration not found in secrets.toml")
             return {}
         
-        signnow_config = st.secrets['signnow']
+        signnow_config = st.secrets[secrets_key]
         
         required_fields = ['client_id', 'client_secret', 'basic_auth_token', 'username', 'password']
         for field in required_fields:
             if field not in signnow_config:
-                st.error(f"SignNow {field} not found in secrets.toml")
+                st.error(f"SignNow {field} not found in secrets.toml for account '{account_name}'")
                 return {}
         
         return signnow_config
