@@ -12,6 +12,11 @@ from io import BytesIO
 
 import streamlit as st
 
+from google_sheets_uploader import (
+    GoogleSheetsUploadError,
+    upload_workbook_to_google_sheet,
+)
+
 try:
     from openpyxl import load_workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, NamedStyle
@@ -1247,6 +1252,15 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    # Check OAuth status for warning message
+    has_oauth_creds = "wb_google_creds" in st.session_state and st.session_state.get("wb_google_creds") is not None
+    query_params = st.query_params
+    is_oauth_return = "code" in query_params
+
+    # Only show warning if user hasn't authenticated yet
+    if not has_oauth_creds and not is_oauth_return:
+        st.warning("⚠️ **Important:** If you want to upload to Google Sheets, click '**🔗 Google Sheets access**' FIRST to authorize Google access. This will avoid losing data when redirected.")
+
     st.caption(
         "Fill in the Development Package inputs and download a formatted workbook "
         "based on the official template."
@@ -1618,6 +1632,51 @@ def main() -> None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
     )
+
+    # Google Drive OAuth connection section
+    st.markdown("---")
+    st.subheader("Google Sheets Upload")
+    
+    # Check if OAuth credentials are available
+    has_oauth_creds = "wb_google_creds" in st.session_state and st.session_state.wb_google_creds is not None
+    
+    # Check if we're returning from OAuth callback
+    query_params = st.query_params
+    is_oauth_return = "code" in query_params
+    if is_oauth_return and not has_oauth_creds:
+        # We're in an OAuth callback, try to load credentials
+        from google_sheets_uploader import load_oauth_credentials
+        load_oauth_credentials()
+        if "wb_google_creds" in st.session_state and st.session_state.wb_google_creds:
+            st.rerun()
+    
+    # Show warning about OAuth flow
+    
+    if has_oauth_creds:
+        st.success("✅ Connected to Google Drive")
+    else:
+        # Trigger OAuth flow
+        from google_sheets_uploader import load_oauth_credentials
+        load_oauth_credentials()
+
+    google_sheet_status = st.empty()
+    last_sheet_url = st.session_state.get("google_sheet_url")
+    if last_sheet_url:
+        google_sheet_status.info(f"Last uploaded Google Sheet: [Open Sheet]({last_sheet_url})")
+
+    if st.button("Send to Google Sheets", type="secondary", disabled=not has_oauth_creds):
+        sheet_title = (client_name or "Workbook").strip() or "Workbook"
+        sheet_title = f"{sheet_title} - Development Package"
+        with st.spinner("Uploading workbook to Google Sheets..."):
+            try:
+                sheet_url = upload_workbook_to_google_sheet(excel_bytes, sheet_title)
+            except GoogleSheetsUploadError as exc:
+                google_sheet_status.error(f"Google Sheets upload failed: {exc}")
+            except Exception as exc:  # pragma: no cover - runtime failures
+                google_sheet_status.error(f"Unexpected Google Sheets error: {exc}")
+            else:
+                st.session_state["google_sheet_url"] = sheet_url
+                google_sheet_status.success(f"Google Sheet created: [Open Sheet]({sheet_url})")
 
 
 if __name__ == "__main__":
