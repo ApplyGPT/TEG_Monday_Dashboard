@@ -11,6 +11,7 @@ from copy import copy
 from io import BytesIO
 
 import streamlit as st
+import requests
 
 from google_sheets_uploader import (
     GoogleSheetsUploadError,
@@ -1127,6 +1128,270 @@ def build_workbook_bytes(
     return buffer.read(), total_dev, total_optional
 
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_sales_records():
+    """Get sales records from monday.com for dropdown selection."""
+    try:
+        from database_utils import get_sales_data
+        
+        sales_data = get_sales_data()
+        items = sales_data.get("data", {}).get("boards", [{}])[0].get("items_page", {}).get("items", [])
+        
+        # Return list of (item_id, item_name) tuples
+        records = [(item.get("id"), item.get("name", "")) for item in items if item.get("name")]
+        return sorted(records, key=lambda x: x[1])  # Sort by name
+    except Exception as e:
+        st.warning(f"Could not load sales records: {e}")
+        return []
+
+
+def update_monday_item_workbook_url(item_id: str, workbook_url: str) -> bool:
+    """Update a monday.com item with the workbook URL in a 'Workbook Link' field."""
+    try:
+        monday_config = st.secrets.get("monday", {})
+        api_token = monday_config.get("api_token")
+        
+        if not api_token:
+            st.error("Monday.com API token not found in secrets.")
+            return False
+        
+        # First, we need to find the column ID for "Workbook Link" or create it
+        # For now, we'll use a URL column type. The column ID needs to be found or created in monday.com
+        # This is a placeholder - the actual column ID needs to be configured
+        
+        # Query to get board columns to find the "Workbook Link" column
+        query = f"""
+        query {{
+            items(ids: [{item_id}]) {{
+                board {{
+                    id
+                    columns {{
+                        id
+                        title
+                        type
+                    }}
+                }}
+            }}
+        }}
+        """
+        
+        url = "https://api.monday.com/v2"
+        headers = {
+            "Authorization": api_token,
+            "Content-Type": "application/json",
+        }
+        
+        response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
+        data = response.json()
+        
+        if "errors" in data:
+            st.error(f"Error fetching monday.com columns: {data['errors']}")
+            return False
+        
+        items = data.get("data", {}).get("items", [])
+        if not items:
+            st.error("Item not found in monday.com")
+            return False
+        
+        board = items[0].get("board", {})
+        board_id = board.get("id")
+        columns = board.get("columns", [])
+        
+        if not board_id:
+            st.error("Could not determine board ID from monday.com item")
+            return False
+        
+        # Find "Workbook Link" or "Workbook URL Link" column
+        workbook_column = None
+        for col in columns:
+            title_lower = col.get("title", "").lower()
+            if "workbook" in title_lower and ("link" in title_lower or "url" in title_lower):
+                workbook_column = col
+                break
+        
+        if not workbook_column:
+            st.warning("⚠️ 'Workbook Link' column not found in monday.com. Please create a URL column named 'Workbook Link' or 'Workbook URL Link' in the Sales board.")
+            return False
+        
+        column_id = workbook_column.get("id")
+        column_type = workbook_column.get("type")
+        
+        # Update the item with the workbook URL
+        # For URL columns, the value format is: {"url": "https://...", "text": "Link Text"}
+        if column_type == "link":
+            mutation = f"""
+            mutation {{
+                change_column_value(
+                    board_id: {board_id},
+                    item_id: {item_id},
+                    column_id: "{column_id}",
+                    value: "{{\\"url\\": \\"{workbook_url}\\", \\"text\\": \\"View Workbook\\"}}"
+                ) {{
+                    id
+                }}
+            }}
+            """
+        else:
+            # For text columns, just use the URL as text
+            mutation = f"""
+            mutation {{
+                change_column_value(
+                    board_id: {board_id},
+                    item_id: {item_id},
+                    column_id: "{column_id}",
+                    value: "{workbook_url}"
+                ) {{
+                    id
+                }}
+            }}
+            """
+        
+        response = requests.post(url, json={"query": mutation}, headers=headers, timeout=30)
+        result = response.json()
+        
+        if "errors" in result:
+            st.error(f"Error updating monday.com: {result['errors']}")
+            return False
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Failed to update monday.com: {e}")
+        return False
+
+
+def upload_file_to_monday_item(item_id: str, board_id: str, file_bytes: bytes, filename: str) -> bool:
+    """Upload a file to a monday.com item using the GraphQL file upload API."""
+    try:
+        import json
+        
+        monday_config = st.secrets.get("monday", {})
+        api_token = monday_config.get("api_token")
+        
+        if not api_token:
+            st.error("Monday.com API token not found in secrets.")
+            return False
+        
+        # Step 1: Get the files column ID for this board
+        url = "https://api.monday.com/v2"
+        headers = {
+            "Authorization": api_token,
+            "Content-Type": "application/json",
+        }
+        
+        # Query to find the files column
+        query = f"""
+        query {{
+            boards(ids: [{board_id}]) {{
+                columns {{
+                    id
+                    title
+                    type
+                }}
+            }}
+        }}
+        """
+        
+        response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
+        data = response.json()
+        
+        if "errors" in data:
+            st.error(f"Error fetching board columns: {data['errors']}")
+            return False
+        
+        boards = data.get("data", {}).get("boards", [])
+        if not boards:
+            st.error("Board not found")
+            return False
+        
+        columns = boards[0].get("columns", [])
+        
+        # Find files column (type is "file" or title contains "file")
+        files_column = None
+        for col in columns:
+            if col.get("type") == "file" or "file" in col.get("title", "").lower():
+                files_column = col
+                break
+        
+        if not files_column:
+            st.warning("⚠️ No files column found on the board. File upload requires a files column.")
+            return False
+        
+        column_id = files_column.get("id")
+        
+        # Step 2: Upload file using GraphQL file upload API
+        # Use the /v2/file endpoint for file uploads with multipart/form-data
+        file_url = "https://api.monday.com/v2/file"
+        
+        # GraphQL mutation for adding file to column
+        mutation = """
+        mutation addFile($file: File!) {
+            add_file_to_column(
+                file: $file,
+                item_id: %s,
+                column_id: "%s"
+            ) {
+                id
+            }
+        }
+        """ % (item_id, column_id)
+        
+        # Prepare multipart form data for GraphQL file upload
+        # The format is: query, variables, map, and file
+        variables = {
+            "file": None
+        }
+        
+        file_map = {
+            "file": ["variables.file"]
+        }
+        
+        # Create multipart form data
+        files_data = {
+            'query': (None, mutation),
+            'variables': (None, json.dumps(variables)),
+            'map': (None, json.dumps(file_map)),
+            'file': (filename, file_bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        }
+        
+        # Upload the file
+        upload_response = requests.post(
+            file_url,
+            headers={"Authorization": api_token},
+            files=files_data,
+            timeout=60
+        )
+        
+        if upload_response.status_code not in [200, 201]:
+            error_text = upload_response.text
+            try:
+                error_json = upload_response.json()
+                if "errors" in error_json:
+                    st.error(f"Error uploading file: {error_json['errors']}")
+                else:
+                    st.error(f"Error uploading file: {error_text}")
+            except:
+                st.error(f"Error uploading file: {upload_response.status_code} - {error_text}")
+            return False
+        
+        result = upload_response.json()
+        
+        if "errors" in result:
+            st.error(f"Error uploading file: {result['errors']}")
+            return False
+        
+        # Check if file was added successfully
+        if result.get("data", {}).get("add_file_to_column", {}).get("id"):
+            return True
+        else:
+            st.warning("File upload may have succeeded but no file ID returned")
+            return True  # Assume success if no errors
+        
+    except Exception as e:
+        st.error(f"Failed to upload file to monday.com: {e}")
+        return False
+
+
 def main() -> None:
     st.set_page_config(
         page_title="Workbook Creator",
@@ -1265,6 +1530,42 @@ def main() -> None:
         "Fill in the Development Package inputs and download a formatted workbook "
         "based on the official template."
     )
+
+    # Monday.com client selection
+    sales_records = get_sales_records()
+    selected_item_id = None  # Initialize outside if block
+    
+    if sales_records:
+        # Check for query parameter (Option A: link from monday.com)
+        query_params_monday = st.query_params
+        preselected_item_id = query_params_monday.get("item_id")
+        
+        # Create options for dropdown
+        options = [" "] + [f"{name} ({item_id})" for item_id, name in sales_records]
+        
+        # Find preselected index if item_id is in query params
+        selected_index = 0
+        if preselected_item_id:
+            for idx, (item_id, name) in enumerate(sales_records, start=1):
+                if item_id == preselected_item_id:
+                    selected_index = idx
+                    break
+        
+        selected_client = st.selectbox(
+            "Link to Monday.com Client Record",
+            options=options,
+            index=selected_index,
+            help="Select a client from Monday.com to automatically update with the workbook URL after generation."
+        )
+        
+        # Extract item_id from selection
+        if selected_client and selected_client != " ":
+            # Extract item_id from format "Name (item_id)"
+            match = re.search(r'\((\d+)\)$', selected_client)
+            if match:
+                selected_item_id = match.group(1)
+    else:
+        st.info("No sales records found. Workbook will be generated without Monday.com integration.")
 
     client_name = st.text_input("Client Name", placeholder="Enter client name")
 
@@ -1641,8 +1942,8 @@ def main() -> None:
     has_oauth_creds = "wb_google_creds" in st.session_state and st.session_state.wb_google_creds is not None
     
     # Check if we're returning from OAuth callback
-    query_params = st.query_params
-    is_oauth_return = "code" in query_params
+    query_params_oauth = st.query_params
+    is_oauth_return = "code" in query_params_oauth
     if is_oauth_return and not has_oauth_creds:
         # We're in an OAuth callback, try to load credentials
         from google_sheets_uploader import load_oauth_credentials
@@ -1650,33 +1951,87 @@ def main() -> None:
         if "wb_google_creds" in st.session_state and st.session_state.wb_google_creds:
             st.rerun()
     
-    # Show warning about OAuth flow
-    
     if has_oauth_creds:
         st.success("✅ Connected to Google Drive")
-    else:
-        # Trigger OAuth flow
-        from google_sheets_uploader import load_oauth_credentials
-        load_oauth_credentials()
-
-    google_sheet_status = st.empty()
-    last_sheet_url = st.session_state.get("google_sheet_url")
-    if last_sheet_url:
-        google_sheet_status.info(f"Last uploaded Google Sheet: [Open Sheet]({last_sheet_url})")
-
-    if st.button("Send to Google Sheets", type="secondary", disabled=not has_oauth_creds):
+        
+        # Automatically upload to Google Sheets after workbook generation
         sheet_title = (client_name or "Workbook").strip() or "Workbook"
         sheet_title = f"{sheet_title} - Development Package"
+        
         with st.spinner("Uploading workbook to Google Sheets..."):
             try:
                 sheet_url = upload_workbook_to_google_sheet(excel_bytes, sheet_title)
-            except GoogleSheetsUploadError as exc:
-                google_sheet_status.error(f"Google Sheets upload failed: {exc}")
-            except Exception as exc:  # pragma: no cover - runtime failures
-                google_sheet_status.error(f"Unexpected Google Sheets error: {exc}")
-            else:
                 st.session_state["google_sheet_url"] = sheet_url
-                google_sheet_status.success(f"Google Sheet created: [Open Sheet]({sheet_url})")
+                st.success(f"✅ Google Sheet created: [Open Sheet]({sheet_url})")
+                
+                # Update monday.com if a client is selected
+                if selected_item_id:
+                    with st.spinner("Updating Monday.com record..."):
+                        # First update the URL column
+                        url_updated = update_monday_item_workbook_url(selected_item_id, sheet_url)
+                        
+                        # Then upload the file
+                        # Get board_id for file upload
+                        monday_config = st.secrets.get("monday", {})
+                        api_token = monday_config.get("api_token")
+                        if api_token:
+                            # Get board_id from item
+                            query = f"""
+                            query {{
+                                items(ids: [{selected_item_id}]) {{
+                                    board {{
+                                        id
+                                    }}
+                                }}
+                            }}
+                            """
+                            url = "https://api.monday.com/v2"
+                            headers = {
+                                "Authorization": api_token,
+                                "Content-Type": "application/json",
+                            }
+                            response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
+                            data = response.json()
+                            
+                            board_id = None
+                            if "data" in data and data["data"].get("items"):
+                                board_id = data["data"]["items"][0].get("board", {}).get("id")
+                            
+                            if board_id:
+                                file_uploaded = upload_file_to_monday_item(
+                                    selected_item_id, 
+                                    board_id, 
+                                    excel_bytes, 
+                                    download_name
+                                )
+                                if url_updated and file_uploaded:
+                                    st.success(f"✅ Monday.com record updated with workbook URL and file uploaded")
+                                elif url_updated:
+                                    st.success(f"✅ Monday.com record updated with workbook URL (file upload failed)")
+                                elif file_uploaded:
+                                    st.success(f"✅ File uploaded to Monday.com (URL update failed)")
+                                else:
+                                    st.warning("⚠️ Workbook uploaded to Google Sheets, but Monday.com update failed. Please update manually.")
+                            else:
+                                if url_updated:
+                                    st.success(f"✅ Monday.com record updated with workbook URL")
+                                else:
+                                    st.warning("⚠️ Workbook uploaded to Google Sheets, but Monday.com update failed. Please update manually.")
+                        else:
+                            if url_updated:
+                                st.success(f"✅ Monday.com record updated with workbook URL")
+                            else:
+                                st.warning("⚠️ Workbook uploaded to Google Sheets, but Monday.com update failed. Please update manually.")
+                
+            except GoogleSheetsUploadError as exc:
+                st.error(f"❌ Google Sheets upload failed: {exc}")
+            except Exception as exc:  # pragma: no cover - runtime failures
+                st.error(f"❌ Unexpected Google Sheets error: {exc}")
+    else:
+        st.info("🔗 Connect your Google Drive account to automatically upload workbooks to Google Sheets")
+        # Trigger OAuth flow
+        from google_sheets_uploader import load_oauth_credentials
+        load_oauth_credentials()
 
 
 if __name__ == "__main__":
