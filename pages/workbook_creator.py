@@ -15,6 +15,7 @@ try:
     from openpyxl import load_workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, NamedStyle
     from openpyxl.styles.numbers import FORMAT_CURRENCY_USD_SIMPLE, FORMAT_PERCENTAGE
+    from openpyxl.utils import column_index_from_string
 except Exception:  # pragma: no cover - fallback if dependency missing at runtime
     load_workbook = None
     Font = None
@@ -23,6 +24,7 @@ except Exception:  # pragma: no cover - fallback if dependency missing at runtim
     Border = None
     Side = None
     NamedStyle = None
+    column_index_from_string = None
 
 
 # Pricing constants
@@ -115,6 +117,28 @@ def apply_arial_20_font(cell) -> None:
             pass
 
 
+def apply_full_border(cell) -> None:
+    """Apply full thin borders around a cell."""
+    if Border is None or Side is None:
+        return
+    try:
+        thin = Side(style="thin")
+        cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    except Exception:
+        pass
+
+
+def apply_full_border_pair(ws, column, start_row: int, end_row: int) -> None:
+    """Apply borders to both cells in a vertical pair (before merging)."""
+    if column_index_from_string is None:
+        return
+    col_idx = column if isinstance(column, int) else column_index_from_string(column)
+    top_cell = ws.cell(row=start_row, column=col_idx)
+    bottom_cell = ws.cell(row=end_row, column=col_idx)
+    apply_full_border(top_cell)
+    apply_full_border(bottom_cell)
+
+
 def safe_merge_cells(ws, range_str: str) -> bool:
     """Safely merge cells, checking if they're already merged first."""
     try:
@@ -123,7 +147,7 @@ def safe_merge_cells(ws, range_str: str) -> bool:
         if len(parts) != 2:
             return False
         
-        from openpyxl.utils import coordinate_from_string, column_index_from_string
+        from openpyxl.utils import column_index_from_string
         
         # Parse start cell
         start_col_letter = ''.join([c for c in parts[0] if c.isalpha()])
@@ -136,24 +160,30 @@ def safe_merge_cells(ws, range_str: str) -> bool:
         end_col = column_index_from_string(end_col_letter)
         
         # Check if any cell in this range is already part of a merged range
-        ranges_to_unmerge = []
-        for merged_range in list(ws.merged_cells.ranges):
-            # Check if ranges overlap
-            if not (merged_range.max_row < start_row or merged_range.min_row > end_row or
-                    merged_range.max_col < start_col or merged_range.min_col > end_col):
-                # Ranges overlap, mark for unmerging
-                ranges_to_unmerge.append(merged_range)
+        # Do multiple passes to catch all overlapping merges
+        max_passes = 3
+        for pass_num in range(max_passes):
+            ranges_to_unmerge = []
+            for merged_range in list(ws.merged_cells.ranges):
+                # Check if ranges overlap (any cell in our range overlaps with merged range)
+                if not (merged_range.max_row < start_row or merged_range.min_row > end_row or
+                        merged_range.max_col < start_col or merged_range.min_col > end_col):
+                    # Ranges overlap, mark for unmerging
+                    ranges_to_unmerge.append(merged_range)
+            
+            if not ranges_to_unmerge:
+                break  # No more overlapping merges
+            
+            # Unmerge overlapping ranges (in reverse to avoid index issues)
+            for merged_range in reversed(ranges_to_unmerge):
+                try:
+                    min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                    max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
+                    ws.unmerge_cells(f"{min_cell.coordinate}:{max_cell.coordinate}")
+                except Exception:
+                    pass
         
-        # Unmerge overlapping ranges
-        for merged_range in ranges_to_unmerge:
-            try:
-                min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
-                max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
-                ws.unmerge_cells(f"{min_cell.coordinate}:{max_cell.coordinate}")
-            except Exception:
-                pass
-        
-        # Now merge the cells
+        # Now merge the cells vertically
         ws.merge_cells(range_str)
         return True
     except Exception:
@@ -360,23 +390,30 @@ def apply_development_package(
         first_new_row = SUMMARY_TOTAL_DUE_BASE_ROW
         last_new_row = SUMMARY_TOTAL_DUE_BASE_ROW + rows_to_insert - 1
         
-        # Get all merged ranges that intersect with the newly inserted rows
-        merged_ranges_to_unmerge = []
-        for merged_range in list(ws.merged_cells.ranges):
-            # Check if merged range intersects with newly inserted rows
-            # (min_row <= last_new_row and max_row >= first_new_row)
-            if (merged_range.min_row <= last_new_row and merged_range.max_row >= first_new_row):
-                merged_ranges_to_unmerge.append(merged_range)
-        
-        # Unmerge the identified ranges
-        for merged_range in merged_ranges_to_unmerge:
-            try:
-                min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
-                max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
-                range_str = f"{min_cell.coordinate}:{max_cell.coordinate}"
-                ws.unmerge_cells(range_str)
-            except Exception:
-                pass  # Skip if unmerge fails
+        # Collect all merged ranges that intersect with the newly inserted rows
+        # We need to unmerge both horizontal and vertical merges in the new rows
+        # Do this multiple times to catch all merges (some might be created after unmerging others)
+        max_iterations = 3
+        for iteration in range(max_iterations):
+            merged_ranges_to_unmerge = []
+            for merged_range in list(ws.merged_cells.ranges):
+                # Check if merged range intersects with newly inserted rows
+                # (min_row <= last_new_row and max_row >= first_new_row)
+                if (merged_range.min_row <= last_new_row and merged_range.max_row >= first_new_row):
+                    merged_ranges_to_unmerge.append(merged_range)
+            
+            if not merged_ranges_to_unmerge:
+                break  # No more merges to unmerge
+            
+            # Unmerge the identified ranges (do this in reverse to avoid index issues)
+            for merged_range in reversed(merged_ranges_to_unmerge):
+                try:
+                    min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                    max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
+                    range_str = f"{min_cell.coordinate}:{max_cell.coordinate}"
+                    ws.unmerge_cells(range_str)
+                except Exception:
+                    pass  # Skip if unmerge fails
 
     # Clear style rows and totals row (after insertion so row numbers are correct)
     clear_style_rows(ws, num_styles=num_styles)
@@ -405,11 +442,31 @@ def apply_development_package(
         
         # Each style row spans 2 rows (merged cells)
         row_second = row_idx + 1
+        
+        # For new rows, explicitly unmerge all cells in this row pair before writing
+        # This ensures we start with clean, unmerged cells (prevents horizontal merges)
+        if is_new_row:
+            ranges_to_unmerge = []
+            for merged_range in list(ws.merged_cells.ranges):
+                # Check if merged range intersects with this row pair
+                if (merged_range.min_row <= row_second and merged_range.max_row >= row_idx and
+                    merged_range.min_col <= 12 and merged_range.max_col >= 2):  # Columns B-L
+                    ranges_to_unmerge.append(merged_range)
+            
+            # Unmerge all overlapping ranges
+            for merged_range in reversed(ranges_to_unmerge):
+                try:
+                    min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                    max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
+                    ws.unmerge_cells(f"{min_cell.coordinate}:{max_cell.coordinate}")
+                except Exception:
+                    pass
 
         # Write style number (#) - merge if new row, left-aligned
         cell_b = ws.cell(row=row_idx, column=2)
         cell_b.value = idx + 1
         if is_new_row:
+            apply_full_border_pair(ws, 2, row_idx, row_second)
             safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
             apply_arial_20_font(cell_b)
             if Alignment is not None:
@@ -419,6 +476,7 @@ def apply_development_package(
         cell_c = ws.cell(row=row_idx, column=3)
         cell_c.value = style_name.upper()
         if is_new_row:
+            apply_full_border_pair(ws, 3, row_idx, row_second)
             safe_merge_cells(ws, f"C{row_idx}:C{row_second}")
             apply_arial_20_font(cell_c)
             if Alignment is not None:
@@ -433,6 +491,7 @@ def apply_development_package(
             cell_e.value = complexity_pct / 100.0
             cell_e.number_format = '0%'  # Percentage format
         if is_new_row:
+            apply_full_border_pair(ws, 5, row_idx, row_second)
             safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
             apply_arial_20_font(cell_e)
             if Alignment is not None:
@@ -445,6 +504,7 @@ def apply_development_package(
         cell_d.value = int(line_base_price)
         cell_d.number_format = '$#,##0'  # Currency format
         if is_new_row:
+            apply_full_border_pair(ws, 4, row_idx, row_second)
             safe_merge_cells(ws, f"D{row_idx}:D{row_second}")
             apply_arial_20_font(cell_d)
             if Alignment is not None:
@@ -458,6 +518,7 @@ def apply_development_package(
             cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
         cell_f.number_format = '$#,##0'  # Currency format
         if is_new_row:
+            apply_full_border_pair(ws, 6, row_idx, row_second)
             safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
             apply_arial_20_font(cell_f)
             if Alignment is not None:
@@ -475,6 +536,7 @@ def apply_development_package(
                 if is_new_row:
                     apply_arial_20_font(cell_opt)
                     # Merge and center columns H, I, J, K
+                    apply_full_border_pair(ws, col_letter, row_idx, row_second)
                     safe_merge_cells(ws, f"{col_letter}{row_idx}:{col_letter}{row_second}")
                     if Alignment is not None:
                         cell_opt.alignment = Alignment(horizontal="center", vertical="center")
@@ -484,6 +546,7 @@ def apply_development_package(
                 if is_new_row:
                     apply_arial_20_font(cell_opt)
                     # Merge and center even if empty
+                    apply_full_border_pair(ws, col_letter, row_idx, row_second)
                     safe_merge_cells(ws, f"{col_letter}{row_idx}:{col_letter}{row_second}")
                     if Alignment is not None:
                         cell_opt.alignment = Alignment(horizontal="center", vertical="center")
@@ -493,6 +556,7 @@ def apply_development_package(
         cell_l.number_format = '$#,##0'  # Currency format
         if is_new_row:
             apply_arial_20_font(cell_l)
+            apply_full_border_pair(ws, 12, row_idx, row_second)
             safe_merge_cells(ws, f"L{row_idx}:L{row_second}")
             if Alignment is not None:
                 cell_l.alignment = Alignment(horizontal="center", vertical="center")
@@ -524,10 +588,30 @@ def apply_development_package(
             is_new_row = row_idx > 18
             row_second = row_idx + 1
             
+            # For new rows, explicitly unmerge all cells in this row pair before writing
+            # This ensures we start with clean, unmerged cells (prevents horizontal merges)
+            if is_new_row:
+                ranges_to_unmerge = []
+                for merged_range in list(ws.merged_cells.ranges):
+                    # Check if merged range intersects with this row pair
+                    if (merged_range.min_row <= row_second and merged_range.max_row >= row_idx and
+                        merged_range.min_col <= 12 and merged_range.max_col >= 2):  # Columns B-L
+                        ranges_to_unmerge.append(merged_range)
+                
+                # Unmerge all overlapping ranges
+                for merged_range in reversed(ranges_to_unmerge):
+                    try:
+                        min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
+                        ws.unmerge_cells(f"{min_cell.coordinate}:{max_cell.coordinate}")
+                    except Exception:
+                        pass
+            
             # Write style number (#)
             cell_b = ws.cell(row=row_idx, column=2)
             cell_b.value = num_styles + idx + 1
             if is_new_row:
+                apply_full_border_pair(ws, 2, row_idx, row_second)
                 safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
                 apply_arial_20_font(cell_b)
                 if Alignment is not None:
@@ -537,6 +621,7 @@ def apply_development_package(
             cell_c = ws.cell(row=row_idx, column=3)
             cell_c.value = style_name.upper()
             if is_new_row:
+                apply_full_border_pair(ws, 3, row_idx, row_second)
                 safe_merge_cells(ws, f"C{row_idx}:C{row_second}")
                 apply_arial_20_font(cell_c)
                 if Alignment is not None:
@@ -547,6 +632,7 @@ def apply_development_package(
             cell_d.value = int(custom_price)
             cell_d.number_format = '$#,##0'
             if is_new_row:
+                apply_full_border_pair(ws, 4, row_idx, row_second)
                 safe_merge_cells(ws, f"D{row_idx}:D{row_second}")
                 apply_arial_20_font(cell_d)
                 if Alignment is not None:
@@ -560,6 +646,7 @@ def apply_development_package(
                 cell_e.value = complexity_pct / 100.0
                 cell_e.number_format = '0%'
             if is_new_row:
+                apply_full_border_pair(ws, 5, row_idx, row_second)
                 safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
                 apply_arial_20_font(cell_e)
                 if Alignment is not None:
@@ -573,6 +660,7 @@ def apply_development_package(
                 cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
             cell_f.number_format = '$#,##0'
             if is_new_row:
+                apply_full_border_pair(ws, 6, row_idx, row_second)
                 safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
                 apply_arial_20_font(cell_f)
                 if Alignment is not None:
@@ -584,6 +672,7 @@ def apply_development_package(
                 cell_opt = ws.cell(row=row_idx, column=col_num)
                 cell_opt.value = None
                 if is_new_row:
+                    apply_full_border_pair(ws, col_letter, row_idx, row_second)
                     safe_merge_cells(ws, f"{col_letter}{row_idx}:{col_letter}{row_second}")
                     if Alignment is not None:
                         cell_opt.alignment = Alignment(horizontal="center", vertical="center")
@@ -592,6 +681,7 @@ def apply_development_package(
             cell_l = ws.cell(row=row_idx, column=12)
             cell_l.value = None
             if is_new_row:
+                apply_full_border_pair(ws, 12, row_idx, row_second)
                 safe_merge_cells(ws, f"L{row_idx}:L{row_second}")
                 if Alignment is not None:
                     cell_l.alignment = Alignment(horizontal="center", vertical="center")

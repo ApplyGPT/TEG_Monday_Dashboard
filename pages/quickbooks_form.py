@@ -116,6 +116,17 @@ def main():
     st.title("💰 QuickBooks Invoice Form")
     st.markdown("Review and create invoices for clients")
     
+    # Salesman Email Address (CC) field
+    cc_col1, cc_col2 = st.columns(2)
+    with cc_col1:
+        cc_email = st.text_input(
+            "Salesman Email Address (CC)",
+            value="",
+            help="Email address to CC on the invoice (optional)"
+        )
+    with cc_col2:
+        st.empty()  # Empty column to maintain layout
+    
     # Load QuickBooks credentials
     credentials = load_quickbooks_credentials()
     if not credentials:
@@ -565,7 +576,8 @@ def main():
                 line_items=line_items_data,
                 payment_terms="Due on receipt",
                 enable_payment_link=enable_payment_link,
-                invoice_date=invoice_date
+                invoice_date=invoice_date,
+                cc_email=cc_email if cc_email else None
             )
             
             if success:

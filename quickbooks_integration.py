@@ -122,11 +122,12 @@ class QuickBooksAPI:
             if not self.authenticate():
                 return None
 
-        # Try different API version that might support BillAddr better
+        # Set default minorversion if not provided in params
         if params is None:
             params = {}
-        # Try older version that might have different BillAddr handling
-        params['minorversion'] = '40'
+        # Only set default minorversion if not already specified
+        if 'minorversion' not in params:
+            params['minorversion'] = '40'
 
         url = f"{self.base_url}/v3/company/{self.company_id}/{endpoint}"
         
@@ -368,11 +369,14 @@ class QuickBooksAPI:
             st.warning(f"⚠️ Error clearing customer billing address: {str(e)}")
             # Don't fail the whole process for this
 
-    def create_customer(self, first_name: str, last_name: str, email: str, company_name: str = None) -> Optional[str]:
+    def create_customer(self, first_name: str, last_name: str, email: str, company_name: str = None, cc_email: str = None) -> Optional[str]:
         """
         Create or find a customer
         FIX #3: Changed DisplayName logic to use client name instead of company name
         This ensures the email says "Dear [Client Name]" not "Dear [Company Name]"
+        
+        SOLUTION B: Add SecondaryEmailAddr if cc_email is provided
+        This ensures CC is sent even if QuickBooks ignores the send endpoint CC parameter
         """
         # FIX #3: Always use person's name as DisplayName for email greeting
         # Company name will be stored in CompanyName field and shown in Bill To address
@@ -381,6 +385,9 @@ class QuickBooksAPI:
         # Try to find existing customer by email
         existing_id = self._find_customer_by_email(email)
         if existing_id:
+            # If customer exists and we have CC email, try to update SecondaryEmailAddr
+            if cc_email and cc_email.strip():
+                self._update_customer_secondary_email(existing_id, cc_email)
             return existing_id
 
         # Create new customer
@@ -394,6 +401,11 @@ class QuickBooksAPI:
         # Add company name to CompanyName field (will show in Bill To address)
         if company_name:
             payload["CompanyName"] = company_name
+        
+        # SOLUTION B: Add SecondaryEmailAddr if CC email is provided
+        # QuickBooks will automatically CC secondary email when sending invoices
+        if cc_email and cc_email.strip():
+            payload["SecondaryEmailAddr"] = {"Address": cc_email.strip()}
 
         response = self._make_request('POST', 'customer', data=payload)
         
@@ -434,12 +446,40 @@ class QuickBooksAPI:
             if customers:
                 return customers[0]['Id']
         return None
+    
+    def _update_customer_secondary_email(self, customer_id: str, cc_email: str) -> bool:
+        """
+        Update existing customer's SecondaryEmailAddr for Solution B
+        This ensures CC is sent even if QuickBooks ignores send endpoint CC parameter
+        """
+        try:
+            # First, get the customer to retrieve SyncToken (required for updates)
+            response = self._make_request('GET', f'customer/{customer_id}')
+            if not response or response.status_code != 200:
+                return False
+            
+            customer = response.json().get("Customer", {})
+            sync_token = customer.get("SyncToken", "0")
+            
+            # Update with SecondaryEmailAddr
+            payload = {
+                "Id": customer_id,
+                "SyncToken": sync_token,
+                "SecondaryEmailAddr": {"Address": cc_email.strip()},
+                "sparse": True  # Only update specified fields
+            }
+            
+            update_response = self._make_request('POST', 'customer', data=payload)
+            return update_response and update_response.status_code in [200, 201]
+        except Exception as e:
+            st.warning(f"Could not update customer secondary email: {e}")
+            return False
 
     def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
                       email: str, company_name: str = None, client_address: str = None,
                       contract_amount: str = "0", description: str = "Contract Services",
                       line_items: list = None, payment_terms: str = "Due in Full",
-                      enable_payment_link: bool = True, invoice_date: str = None) -> Optional[str]:
+                      enable_payment_link: bool = True, invoice_date: str = None, cc_email: str = None) -> Optional[str]:
         """
         Create an invoice for a customer
         FIX #1: Improved BillAddr handling to ensure it shows in PDF
@@ -512,36 +552,25 @@ class QuickBooksAPI:
         else:
             txn_date = datetime.now().strftime("%Y-%m-%d")
 
-        # Build invoice data structure with ALL required fields
+        # Build invoice data structure
+        # Note: Don't set TotalAmt - let QuickBooks calculate it automatically
+        # Note: Don't set EmailStatus - it conflicts with ToBeEmailed
         invoice_data = {
             "CustomerRef": {"value": customer_id},
             "TxnDate": txn_date,
-            "Line": lines,
-            "EmailStatus": "NotSet",
-            "ApplyTaxAfterDiscount": False,
-            "PrintStatus": "NeedToPrint",
-            "TotalAmt": sum(line.get("Amount", 0) for line in lines if isinstance(line.get("Amount"), (int, float)))
+            "Line": lines
         }
         
         # FIX #1: Improved BillAddr handling to ensure it shows in PDF
         bill_addr = self._parse_bill_address(company_name, client_address)
         if bill_addr:
             invoice_data["BillAddr"] = bill_addr
-        elif company_name:
-            # If no address but we have company name, create minimal BillAddr
-            invoice_data["BillAddr"] = {
-                "Line1": company_name
-            }
         
-        # FIX #2: Always set DueDate to the selected invoice date for "Due on receipt"
-        # This ensures the due date matches what the user selected in Streamlit
+        # FIX #2: Set payment terms - don't set both DueDate and SalesTermRef together
+        # QuickBooks will calculate DueDate from SalesTermRef, or we can set DueDate directly
         if payment_terms in ["Due on receipt", "Due in Full"]:
-            # For immediate payment, set DueDate to invoice date
+            # For immediate payment, set DueDate directly (don't set SalesTermRef)
             invoice_data["DueDate"] = txn_date
-            # Set payment term to "Due on receipt"
-            invoice_data["SalesTermRef"] = {
-                "value": self._get_payment_term_id("Due on receipt")
-            }
         elif payment_terms:
             # For Net 15, Net 30, etc., set the payment term and let QB calculate DueDate
             invoice_data["SalesTermRef"] = {
@@ -550,16 +579,21 @@ class QuickBooksAPI:
         else:
             # Default to due on receipt with invoice date
             invoice_data["DueDate"] = txn_date
-            invoice_data["SalesTermRef"] = {
-                "value": self._get_payment_term_id("Due on receipt")
-            }
         
         payload = invoice_data
         
-        if email:
-            payload["BillEmail"] = {"Address": email}
-            
-        response = self._make_request('POST', 'invoice', data=payload)
+        # SOLUTION A: Don't set BillEmail in invoice creation
+        # QuickBooks ignores CC/BCC query parameters when BillEmail is set in the invoice
+        # By removing BillEmail, we force QuickBooks to use ONLY the sendTo parameter
+        # This ensures CC/BCC in the send endpoint are respected
+        # The email will be sent via: /invoice/{id}/send?sendTo=email&cc=cc_email
+        
+        # Don't set ToBeEmailed - we'll send manually via send endpoint with CC
+        # This gives us control over CC/BCC addresses
+        
+        # Use standard minorversion (no special requirements since CC is in send endpoint)
+        params = {"minorversion": "8"}
+        response = self._make_request('POST', 'invoice', data=payload, params=params)
         
         if response is None:
             st.error("❌ No response received from QuickBooks API - possible network or timeout issue")
@@ -570,7 +604,10 @@ class QuickBooksAPI:
                 invoice_resp = response.json()
                 invoice_id = invoice_resp.get("Invoice", {}).get("Id")
                 self._update_invoice_doc_number(invoice_id, invoice_resp.get("Invoice", {}))
-                st.success(f"✅ Invoice created successfully (ID: {invoice_id})")
+                success_msg = f"✅ Invoice created successfully (ID: {invoice_id})"
+                if cc_email and cc_email.strip():
+                    success_msg += f" (CC: {cc_email})"
+                st.success(success_msg)
                 return invoice_id
             except Exception as e:
                 st.error(f"❌ Error parsing invoice response: {str(e)}")
@@ -578,15 +615,54 @@ class QuickBooksAPI:
         else:
             st.error(f"❌ Invoice creation failed - Status: {response.status_code}")
             try:
-                st.error(f"Response: {response.text[:500]}")
-            except:
-                pass
+                error_text = response.text
+                st.error(f"Full Response: {error_text}")
+                
+                # Try to parse and show detailed error
+                try:
+                    error_json = response.json()
+                    if "Fault" in error_json:
+                        errors = error_json.get("Fault", {}).get("Error", [])
+                        for err in errors:
+                            st.error(f"Error Code: {err.get('code', 'Unknown')}")
+                            st.error(f"Error Message: {err.get('Message', 'Unknown')}")
+                            detail = err.get('Detail', '')
+                            st.error(f"Error Detail: {detail}")
+                            
+                            # Highlight BillEmailCc if mentioned
+                            if "BillEmailCc" in detail or "BillEmail" in detail:
+                                st.warning("💡 Issue might be with BillEmail or BillEmailCc structure. Check the payload above.")
+                except:
+                    pass
+            except Exception as e:
+                st.error(f"Could not parse error response: {e}")
             return None
 
-    def send_invoice(self, invoice_id: str, email: str) -> bool:
-        """Send the created invoice via email"""
+    def send_invoice(self, invoice_id: str, email: str, cc_email: str = None, bcc_email: str = None) -> bool:
+        """
+        Send the created invoice via email using the SEND endpoint.
+        CC and BCC must be added via query parameters, not in invoice payload.
+        
+        Endpoint format:
+        POST /v3/company/{companyId}/invoice/{invoiceId}/send?sendTo=<email>&cc=<cc_email>&bcc=<bcc_email>
+        """
         url = f"{self.base_url}/v3/company/{self.company_id}/invoice/{invoice_id}/send"
-        params = {"sendTo": email, "minorversion": "65"}
+        
+        # Build query parameters - CC and BCC are added as query params
+        # SOLUTION A: Since BillEmail is NOT in the invoice payload, QBO will respect these parameters
+        # This forces QuickBooks to use ONLY the sendTo parameter, ensuring CC/BCC work correctly
+        params = {
+            "sendTo": email,
+            "minorversion": "8"
+        }
+        
+        # Add CC email as query parameter
+        if cc_email and cc_email.strip():
+            params["cc"] = cc_email.strip()
+        
+        # Add BCC email as query parameter (if needed in future)
+        if bcc_email and bcc_email.strip():
+            params["bcc"] = bcc_email.strip()
         
         if not self.access_token:
             self.authenticate()
@@ -598,10 +674,17 @@ class QuickBooksAPI:
         try:
             response = self.session.post(url, headers=headers, params=params)
             if response.status_code == 200:
-                st.success(f"📧 Invoice sent to {email}")
+                msg = f"📧 Invoice sent to {email}"
+                if cc_email and cc_email.strip():
+                    msg += f" (CC: {cc_email})"
+                if bcc_email and bcc_email.strip():
+                    msg += f" (BCC: {bcc_email})"
+                st.success(msg)
                 return True
             else:
                 st.warning(f"⚠️ Invoice created but email failed: {response.status_code}")
+                if response.text:
+                    st.warning(f"Error details: {response.text[:200]}")
         except Exception as e:
              st.warning(f"⚠️ Email sending error: {str(e)}")
              
@@ -610,23 +693,35 @@ class QuickBooksAPI:
     def create_and_send_invoice(self, first_name: str, last_name: str, email: str, company_name: str = None,
                               client_address: str = None, contract_amount: str = "0", description: str = "Contract Services",
                               line_items: list = None, payment_terms: str = "Due in Full",
-                              enable_payment_link: bool = True, invoice_date: str = None) -> Tuple[bool, str]:
-        """Orchestrator: Create Customer -> Create Invoice -> Send Invoice"""
+                              enable_payment_link: bool = True, invoice_date: str = None, cc_email: str = None) -> Tuple[bool, str]:
+        """
+        Orchestrator: Create Customer -> Create Invoice -> Send Invoice
         
-        customer_id = self.create_customer(first_name, last_name, email, company_name)
+        CC Email Implementation:
+        - SOLUTION A: Removed BillEmail from invoice, using sendTo parameter only (forces CC respect)
+        - SOLUTION B: Added SecondaryEmailAddr to customer profile (ensures CC even if QBO ignores send endpoint)
+        """
+        
+        # Pass cc_email to create_customer for Solution B (SecondaryEmailAddr)
+        customer_id = self.create_customer(first_name, last_name, email, company_name, cc_email=cc_email)
         if not customer_id:
             return False, "Failed to create or find customer."
             
         invoice_id = self.create_invoice(customer_id, first_name, last_name, email, company_name, client_address,
-                                       contract_amount, description, line_items, payment_terms, enable_payment_link, invoice_date)
+                                       contract_amount, description, line_items, payment_terms, enable_payment_link, invoice_date, cc_email=cc_email)
         
         if not invoice_id:
             return False, "Failed to create invoice."
-            
-        sent = self.send_invoice(invoice_id, email)
+        
+        # STEP 2: Send invoice via SEND endpoint with CC/BCC in query parameters
+        # This is required because CC/BCC cannot be set during invoice creation
+        sent = self.send_invoice(invoice_id, email, cc_email=cc_email)
         msg = f"Invoice {invoice_id} created successfully!"
         if sent:
-            msg += " Sent via email."
+            if cc_email and cc_email.strip():
+                msg += f" Sent via email to {email} (CC: {cc_email})."
+            else:
+                msg += " Sent via email."
         else:
             msg += " (Email sending failed, but invoice exists)."
             
