@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+from copy import copy
 from io import BytesIO
 
 import streamlit as st
@@ -15,7 +16,7 @@ try:
     from openpyxl import load_workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, NamedStyle
     from openpyxl.styles.numbers import FORMAT_CURRENCY_USD_SIMPLE, FORMAT_PERCENTAGE
-    from openpyxl.utils import column_index_from_string
+    from openpyxl.utils import column_index_from_string, get_column_letter
 except Exception:  # pragma: no cover - fallback if dependency missing at runtime
     load_workbook = None
     Font = None
@@ -25,6 +26,7 @@ except Exception:  # pragma: no cover - fallback if dependency missing at runtim
     Side = None
     NamedStyle = None
     column_index_from_string = None
+    get_column_letter = None
 
 
 # Pricing constants
@@ -45,6 +47,11 @@ SUMMARY_OPT_ROW = 12
 SUMMARY_DISCOUNT_ROW = 14
 SUMMARY_SUM_END_ROW = 13  # Row before discount row
 SUMMARY_TOTAL_DUE_BASE_ROW = 20
+DELIVERABLE_BLOCK_START = 22
+DELIVERABLE_BLOCK_END = 34
+DELIVERABLE_BLOCK_HEIGHT = DELIVERABLE_BLOCK_END - DELIVERABLE_BLOCK_START + 1
+DELIVERABLE_COL_START = 2  # Column B
+DELIVERABLE_COL_END = 16   # Column P
 TEMPLATE_FILENAME = "Copy of TEG 2025 WORKBOOK TEMPLATES.xlsx"
 TARGET_SHEET = "DEVELOPMENT ONLY"
 ROW_INDICES = [10, 12, 14, 16, 18]  # Rows reserved for style entries
@@ -137,6 +144,111 @@ def apply_full_border_pair(ws, column, start_row: int, end_row: int) -> None:
     bottom_cell = ws.cell(row=end_row, column=col_idx)
     apply_full_border(top_cell)
     apply_full_border(bottom_cell)
+
+
+def capture_deliverables_block(ws):
+    """Capture the deliverables block (values + formatting) from the template."""
+    block_rows = []
+    for row in range(DELIVERABLE_BLOCK_START, DELIVERABLE_BLOCK_END + 1):
+        row_data = []
+        for col in range(DELIVERABLE_COL_START, DELIVERABLE_COL_END + 1):
+            cell = ws.cell(row=row, column=col)
+            row_data.append(
+                {
+                    "value": cell.value,
+                    "number_format": cell.number_format,
+                    "font": copy(cell.font) if cell.font else None,
+                    "fill": copy(cell.fill) if cell.fill else None,
+                    "border": copy(cell.border) if cell.border else None,
+                    "alignment": copy(cell.alignment) if cell.alignment else None,
+                }
+            )
+        block_rows.append(row_data)
+    
+    merged_ranges = []
+    for merged_range in ws.merged_cells.ranges:
+        if (
+            merged_range.min_row >= DELIVERABLE_BLOCK_START
+            and merged_range.max_row <= DELIVERABLE_BLOCK_END
+            and merged_range.min_col >= DELIVERABLE_COL_START
+            and merged_range.max_col <= DELIVERABLE_COL_END
+        ):
+            merged_ranges.append(
+                (
+                    merged_range.min_row - DELIVERABLE_BLOCK_START,
+                    merged_range.max_row - DELIVERABLE_BLOCK_START,
+                    merged_range.min_col,
+                    merged_range.max_col,
+                )
+            )
+    
+    return {"rows": block_rows, "merges": merged_ranges}
+
+
+def restore_deliverables_block(ws, template_block: dict, target_start_row: int) -> None:
+    """Restore the deliverables block at the specified start row."""
+    if not template_block:
+        return
+    
+    rows_data = template_block.get("rows", [])
+    block_height = len(rows_data)
+    target_end_row = target_start_row + block_height - 1
+    
+    # Clear existing merges in target area
+    to_unmerge = []
+    for merged_range in list(ws.merged_cells.ranges):
+        if (
+            merged_range.max_row < target_start_row
+            or merged_range.min_row > target_end_row
+            or merged_range.max_col < DELIVERABLE_COL_START
+            or merged_range.min_col > DELIVERABLE_COL_END
+        ):
+            continue
+        to_unmerge.append(merged_range)
+    
+    for merged_range in to_unmerge:
+        try:
+            ws.unmerge_cells(range_string=str(merged_range))
+        except Exception:
+            pass
+    
+    # Write cell data and formatting
+    for row_offset, row_cells in enumerate(rows_data):
+        target_row = target_start_row + row_offset
+        for col_offset, cell_data in enumerate(row_cells):
+            target_col = DELIVERABLE_COL_START + col_offset
+            coord = None
+            if get_column_letter is not None:
+                coord = f"{get_column_letter(target_col)}{target_row}"
+            value = cell_data.get("value") if cell_data else None
+            if coord:
+                safe_set_cell_value(ws, coord, value)
+            else:
+                ws.cell(row=target_row, column=target_col).value = value
+            cell = ws.cell(row=target_row, column=target_col)
+            cell.number_format = cell_data.get("number_format") or cell.number_format
+            if cell_data.get("font"):
+                cell.font = copy(cell_data["font"])
+            if cell_data.get("fill"):
+                cell.fill = copy(cell_data["fill"])
+            if cell_data.get("border"):
+                cell.border = copy(cell_data["border"])
+            if cell_data.get("alignment"):
+                cell.alignment = copy(cell_data["alignment"])
+    
+    # Recreate merged ranges (adjusted for new start row)
+    for min_row_offset, max_row_offset, min_col, max_col in template_block.get("merges", []):
+        start_row = target_start_row + min_row_offset
+        end_row = target_start_row + max_row_offset
+        try:
+            ws.merge_cells(
+                start_row=start_row,
+                start_column=min_col,
+                end_row=end_row,
+                end_column=max_col,
+            )
+        except Exception:
+            pass
 
 
 def safe_merge_cells(ws, range_str: str) -> bool:
@@ -366,6 +478,7 @@ def apply_development_package(
     num_custom_styles = len(custom_styles)
     total_styles_count = num_styles + num_custom_styles  # Total for pricing tier calculation
     discount_percentage = max(0.0, float(discount_percentage or 0))
+    deliverables_template = capture_deliverables_block(ws)
 
     base_capacity = len(ROW_INDICES)
     extra_styles = max(num_styles - base_capacity, 0)
@@ -698,6 +811,61 @@ def apply_development_package(
             last_style_row = dynamic_row_indices[-1]
         else:
             last_style_row = 10
+
+    total_extra_rows = max(total_styles_count - len(ROW_INDICES), 0) * 2
+    deliverables_block_start = DELIVERABLE_BLOCK_START + total_extra_rows
+    deliverables_block_end = deliverables_block_start + DELIVERABLE_BLOCK_HEIGHT - 1
+    restore_deliverables_block(ws, deliverables_template, deliverables_block_start)
+
+    # Update deliverables table counts (column J) for add-on selections
+    if column_index_from_string is not None and total_styles_count > 0:
+        label_column_idx = column_index_from_string("H")
+        target_col_j = column_index_from_string("J")
+        deliverable_addon_map = [
+            ("WASH/TREATMENT", "H"),
+            ("DESIGN", "I"),
+            ("SOURCING", "J"),
+            ("TREATMENT", "K"),
+        ]
+
+        def find_label_row(label_text: str) -> int | None:
+            """Locate the row index for a given deliverable label."""
+            lowered = label_text.strip().lower()
+            partial_match_row = None
+            for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+                value = ws.cell(row=scan_row, column=label_column_idx).value
+                if not isinstance(value, str):
+                    continue
+                value_clean = value.strip().lower()
+                if value_clean == lowered:
+                    return scan_row
+                if lowered in value_clean and partial_match_row is None:
+                    partial_match_row = scan_row
+            return partial_match_row
+
+        for label_text, addon_col_letter in deliverable_addon_map:
+            row_idx = find_label_row(label_text)
+            if row_idx is None:
+                continue
+            addon_range = f"{addon_col_letter}10:{addon_col_letter}{last_style_row}"
+            cell = ws.cell(row=row_idx, column=target_col_j)
+            cell.value = f"=COUNT({addon_range})"
+            cell.number_format = "0"
+
+        # Update pattern/sample counts in column C to include all style rows
+        sample_count_map = [
+            ("PATTERNS", "B"),
+            ("FIRST SAMPLES", "B"),
+            ("FINAL SAMPLES", "B"),
+        ]
+        for label_text, source_col_letter in sample_count_map:
+            row_idx = find_label_row(label_text)
+            if row_idx is None:
+                continue
+            source_range = f"{source_col_letter}10:{source_col_letter}{last_style_row}"
+            count_cell = ws.cell(row=row_idx, column=column_index_from_string("C"))
+            count_cell.value = f"=COUNT({source_range})"
+            count_cell.number_format = "0"
 
     # Totals section - dynamically calculate totals row and range based on number of styles
     # For 5 or fewer styles: totals at row 20 (original position)
