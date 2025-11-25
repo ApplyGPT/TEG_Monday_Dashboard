@@ -989,6 +989,109 @@ def main():
     else:
         st.info("No sales revenue data found for source analysis.")
     
+    # 7. Number of Deals Closed by Source (Frequency) - Based on UTM Data from Sales Board
+    st.subheader("Number of Deals Closed by Source")
+    
+    # Reuse the same year selector or create a new one (using same selected_year_source)
+    # Get sales revenue data by source (same data, but we'll count instead of sum)
+    with st.spinner("Loading Number of Deals Closed by Source data..."):
+        sales_revenue_data = get_sales_revenue_by_source()
+    
+    if sales_revenue_data:
+        # Convert to DataFrame
+        sales_revenue_df = pd.DataFrame(sales_revenue_data)
+        
+        # Parse close dates and filter for valid dates
+        sales_revenue_df['close_date'] = pd.to_datetime(sales_revenue_df['close_date'], errors='coerce')
+        sales_revenue_with_dates = sales_revenue_df.dropna(subset=['close_date'])
+        
+        # Filter for selected year based on close date (use same year as Sales by Source)
+        sales_revenue_with_dates = sales_revenue_with_dates[sales_revenue_with_dates['close_date'].dt.year == selected_year_source]
+        
+        if not sales_revenue_with_dates.empty:
+            # Add month columns for grouping
+            sales_revenue_with_dates['Month'] = sales_revenue_with_dates['close_date'].dt.month
+            sales_revenue_with_dates['Month_Name'] = sales_revenue_with_dates['close_date'].dt.strftime('%B')
+            
+            # Count deals by channel and month (instead of summing revenue)
+            channel_counts = sales_revenue_with_dates.groupby(['Month', 'Month_Name', 'channel']).size().reset_index(name='deal_count')
+            channel_counts = channel_counts.sort_values('Month')
+            
+            # Create proper month order for x-axis
+            month_order = ['January', 'February', 'March', 'April', 'May', 'June', 
+                           'July', 'August', 'September', 'October', 'November', 'December']
+            
+            # Filter to only include months that exist in the data
+            available_months = channel_counts['Month_Name'].unique()
+            month_order_filtered = [month for month in month_order if month in available_months]
+            
+            # Create grouped bar chart by source/channel
+            fig_deals_count = go.Figure()
+            
+            channels = sorted(channel_counts['channel'].unique())
+            
+            # Use strong colors for different channels (same as Sales by Source) [[memory:7838657]]
+            channel_colors = {
+                'Paid search': '#df2f4a',        # Red
+                'Organic search': '#00c875',     # Green  
+                'Direct': '#4ECDC4',             # Teal
+                'Social media': '#ffcb00',       # Yellow
+                'Referral': '#579bfc',           # Blue
+                'Email': '#a358df'               # Purple
+            }
+            
+            # Use strong colors for any other channels
+            all_colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F']
+            
+            for i, channel in enumerate(channels):
+                channel_data = channel_counts[channel_counts['channel'] == channel]
+                
+                # Handle empty channels - ensure we have a proper name for the legend
+                channel_name = channel if channel and channel.strip() else 'Unknown'
+                
+                # Get color - use hardcoded if available, otherwise cycle through colors
+                if channel_name in channel_colors:
+                    color = channel_colors[channel_name]
+                else:
+                    color = all_colors[i % len(all_colors)]
+                
+                fig_deals_count.add_trace(go.Bar(
+                    name=channel_name,
+                    x=channel_data['Month_Name'],
+                    y=channel_data['deal_count'],
+                    marker_color=color,
+                    text=[str(int(val)) for val in channel_data['deal_count']],  # Show count as integer
+                    textposition='outside',
+                    textfont=dict(size=14, color='black')  # Larger text
+                ))
+            
+            fig_deals_count.update_layout(
+                barmode='group',
+                xaxis_title='Month',
+                yaxis_title='Number of Deals',
+                height=600,
+                bargap=0.15,
+                bargroupgap=0.0,
+                showlegend=True,
+                font=dict(size=14),  # Larger font for all text
+                xaxis=dict(
+                    categoryorder='array',
+                    categoryarray=month_order_filtered
+                ),
+                legend=dict(
+                    orientation="h",   # horizontal
+                    yanchor="top",
+                    y=-0.2,            # below the chart
+                    xanchor="center",
+                    x=0.5
+                )
+            )
+            st.plotly_chart(fig_deals_count, use_container_width=True)
+        else:
+            st.info(f"No deals data with valid dates found for {selected_year_source}.")
+    else:
+        st.info("No deals data found for source analysis.")
+    
     st.markdown("---")
     st.subheader("Close Rate by Month - 2025")
     

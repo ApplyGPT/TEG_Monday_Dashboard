@@ -641,28 +641,13 @@ class QuickBooksAPI:
     def send_invoice(self, invoice_id: str, email: str, cc_email: str = None, bcc_email: str = None) -> bool:
         """
         Send the created invoice via email using the SEND endpoint.
-        CC and BCC must be added via query parameters, not in invoice payload.
+        If CC email is provided, send two separate emails (one to client, one to salesman).
+        This is more reliable than using CC functionality which QuickBooks doesn't always respect.
         
         Endpoint format:
-        POST /v3/company/{companyId}/invoice/{invoiceId}/send?sendTo=<email>&cc=<cc_email>&bcc=<bcc_email>
+        POST /v3/company/{companyId}/invoice/{invoiceId}/send?sendTo=<email>
         """
         url = f"{self.base_url}/v3/company/{self.company_id}/invoice/{invoice_id}/send"
-        
-        # Build query parameters - CC and BCC are added as query params
-        # SOLUTION A: Since BillEmail is NOT in the invoice payload, QBO will respect these parameters
-        # This forces QuickBooks to use ONLY the sendTo parameter, ensuring CC/BCC work correctly
-        params = {
-            "sendTo": email,
-            "minorversion": "8"
-        }
-        
-        # Add CC email as query parameter
-        if cc_email and cc_email.strip():
-            params["cc"] = cc_email.strip()
-        
-        # Add BCC email as query parameter (if needed in future)
-        if bcc_email and bcc_email.strip():
-            params["bcc"] = bcc_email.strip()
         
         if not self.access_token:
             self.authenticate()
@@ -671,24 +656,53 @@ class QuickBooksAPI:
         # The send endpoint expects a specific content-type or no body
         headers["Content-Type"] = "application/octet-stream"
         
+        # Send email to primary recipient (client)
+        primary_sent = False
         try:
+            params = {
+                "sendTo": email,
+                "minorversion": "8"
+            }
             response = self.session.post(url, headers=headers, params=params)
             if response.status_code == 200:
-                msg = f"📧 Invoice sent to {email}"
-                if cc_email and cc_email.strip():
-                    msg += f" (CC: {cc_email})"
-                if bcc_email and bcc_email.strip():
-                    msg += f" (BCC: {bcc_email})"
-                st.success(msg)
-                return True
+                primary_sent = True
             else:
-                st.warning(f"⚠️ Invoice created but email failed: {response.status_code}")
+                st.warning(f"⚠️ Failed to send invoice to client ({email}): {response.status_code}")
                 if response.text:
                     st.warning(f"Error details: {response.text[:200]}")
         except Exception as e:
-             st.warning(f"⚠️ Email sending error: {str(e)}")
-             
-        return False
+            st.warning(f"⚠️ Error sending invoice to client: {str(e)}")
+        
+        # If CC email is provided, send a second email to the salesman
+        cc_sent = False
+        if cc_email and cc_email.strip():
+            try:
+                params = {
+                    "sendTo": cc_email.strip(),
+                    "minorversion": "8"
+                }
+                response = self.session.post(url, headers=headers, params=params)
+                if response.status_code == 200:
+                    cc_sent = True
+                else:
+                    st.warning(f"⚠️ Failed to send invoice to salesman ({cc_email}): {response.status_code}")
+                    if response.text:
+                        st.warning(f"Error details: {response.text[:200]}")
+            except Exception as e:
+                st.warning(f"⚠️ Error sending invoice to salesman: {str(e)}")
+        
+        # Report results
+        if primary_sent:
+            if cc_email and cc_email.strip():
+                if cc_sent:
+                    st.success(f"📧 Invoice sent to {email} and {cc_email}")
+                else:
+                    st.success(f"📧 Invoice sent to {email} (salesman email failed)")
+            else:
+                st.success(f"📧 Invoice sent to {email}")
+            return True
+        else:
+            return False
 
     def create_and_send_invoice(self, first_name: str, last_name: str, email: str, company_name: str = None,
                               client_address: str = None, contract_amount: str = "0", description: str = "Contract Services",
@@ -698,11 +712,10 @@ class QuickBooksAPI:
         Orchestrator: Create Customer -> Create Invoice -> Send Invoice
         
         CC Email Implementation:
-        - SOLUTION A: Removed BillEmail from invoice, using sendTo parameter only (forces CC respect)
-        - SOLUTION B: Added SecondaryEmailAddr to customer profile (ensures CC even if QBO ignores send endpoint)
+        - Sends two separate emails: one to client email, one to salesman email
+        - This is more reliable than CC functionality which QuickBooks doesn't always respect
         """
         
-        # Pass cc_email to create_customer for Solution B (SecondaryEmailAddr)
         customer_id = self.create_customer(first_name, last_name, email, company_name, cc_email=cc_email)
         if not customer_id:
             return False, "Failed to create or find customer."
@@ -713,15 +726,15 @@ class QuickBooksAPI:
         if not invoice_id:
             return False, "Failed to create invoice."
         
-        # STEP 2: Send invoice via SEND endpoint with CC/BCC in query parameters
-        # This is required because CC/BCC cannot be set during invoice creation
+        # STEP 2: Send invoice via SEND endpoint
+        # If CC email is provided, send two separate emails (one to client, one to salesman)
         sent = self.send_invoice(invoice_id, email, cc_email=cc_email)
         msg = f"Invoice {invoice_id} created successfully!"
         if sent:
             if cc_email and cc_email.strip():
-                msg += f" Sent via email to {email} (CC: {cc_email})."
+                msg += f" Sent via email to {email} and {cc_email}."
             else:
-                msg += " Sent via email."
+                msg += f" Sent via email to {email}."
         else:
             msg += " (Email sending failed, but invoice exists)."
             
