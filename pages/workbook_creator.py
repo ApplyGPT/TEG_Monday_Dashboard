@@ -561,7 +561,7 @@ def apply_development_package(
         
         # Each style row spans 2 rows (merged cells)
         row_second = row_idx + 1
-        
+
         # For new rows, explicitly unmerge all cells in this row pair before writing
         # This ensures we start with clean, unmerged cells (prevents horizontal merges)
         if is_new_row:
@@ -609,14 +609,14 @@ def apply_development_package(
         else:
             cell_e.value = complexity_pct / 100.0
             cell_e.number_format = '0%'  # Percentage format
-        if is_new_row:
-            apply_full_border_pair(ws, 5, row_idx, row_second)
-            safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
-            apply_arial_20_font(cell_e)
-            if Alignment is not None:
-                cell_e.alignment = Alignment(horizontal="center", vertical="center")
-        elif Alignment is not None and cell_e.alignment:
-            cell_e.alignment = Alignment(horizontal="center", vertical="center")
+            if is_new_row:
+                apply_full_border_pair(ws, 5, row_idx, row_second)
+                safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
+                apply_arial_20_font(cell_e)
+                if Alignment is not None:
+                    cell_e.alignment = Alignment(horizontal="center", vertical="center")
+                elif Alignment is not None and cell_e.alignment:
+                    cell_e.alignment = Alignment(horizontal="center", vertical="center")
 
         # Write base price (currency format, integer)
         cell_d = ws.cell(row=row_idx, column=4)
@@ -630,18 +630,18 @@ def apply_development_package(
                 cell_d.alignment = Alignment(horizontal="center", vertical="center")
         elif Alignment is not None and cell_d.alignment:
             cell_d.alignment = Alignment(horizontal="center", vertical="center")
-        cell_f = ws.cell(row=row_idx, column=6)
+            cell_f = ws.cell(row=row_idx, column=6)
         if complexity_pct == 0:
             cell_f.value = f"=D{row_idx}"
         else:
             cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
-        cell_f.number_format = '$#,##0'  # Currency format
-        if is_new_row:
-            apply_full_border_pair(ws, 6, row_idx, row_second)
-            safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
-            apply_arial_20_font(cell_f)
+            cell_f.number_format = '$#,##0'  # Currency format
+            if is_new_row:
+                apply_full_border_pair(ws, 6, row_idx, row_second)
+                safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
+                apply_arial_20_font(cell_f)
             if Alignment is not None:
-                cell_f.alignment = Alignment(horizontal="center", vertical="center")
+                    cell_f.alignment = Alignment(horizontal="center", vertical="center")
 
         # Optional add-ons per row (columns H, I, J, K)
         row_optional_sum = 0.0
@@ -818,10 +818,304 @@ def apply_development_package(
         else:
             last_style_row = 10
 
+    # Count activewear and regular styles
+    num_activewear = sum(1 for entry in style_entries if entry.get("activewear", False))
+    num_regular = num_styles - num_activewear
+    
     total_extra_rows = max(total_styles_count - len(ROW_INDICES), 0) * 2
     deliverables_block_start = DELIVERABLE_BLOCK_START + total_extra_rows
     deliverables_block_end = deliverables_block_start + DELIVERABLE_BLOCK_HEIGHT - 1
     restore_deliverables_block(ws, deliverables_template, deliverables_block_start)
+    
+    # If there are activewear styles, modify deliverables section
+    if num_activewear > 0 and column_index_from_string is not None:
+        label_column_idx = column_index_from_string("B")
+        col_c_idx = column_index_from_string("C")
+        col_d_idx = column_index_from_string("D")
+        final_samples_row = None
+        
+        # Find the "FINAL SAMPLES" row (should be around row 31-32)
+        for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+            value = ws.cell(row=scan_row, column=label_column_idx).value
+            if isinstance(value, str):
+                value_lower = value.strip().lower()
+                if "final samples" in value_lower and final_samples_row is None:
+                    final_samples_row = scan_row
+                    break
+        
+        if final_samples_row:
+            # Step 1: Replace FINAL SAMPLES (rows 31-32) with SECOND SAMPLES (only columns B-D)
+            # Unmerge cells in columns B-D for these rows first
+            for row in [final_samples_row, final_samples_row + 1]:
+                for col in [label_column_idx, col_c_idx, col_d_idx]:
+                    for merged_range in list(ws.merged_cells.ranges):
+                        if (merged_range.min_row <= row <= merged_range.max_row and
+                            merged_range.min_col <= col <= merged_range.max_col):
+                            try:
+                                ws.unmerge_cells(range_string=str(merged_range))
+                            except Exception:
+                                pass
+
+            # Clear values in row 32 (second row of pair) for columns B-D
+            for col in [label_column_idx, col_c_idx, col_d_idx]:
+                if get_column_letter:
+                    safe_set_cell_value(ws, f"{get_column_letter(col)}{final_samples_row + 1}", None)
+                else:
+                    ws.cell(row=final_samples_row + 1, column=col).value = None
+
+            # Clear column C in row 31 (to ensure no leftover values)
+            if get_column_letter:
+                safe_set_cell_value(ws, f"{get_column_letter(col_c_idx)}{final_samples_row}", None)
+            else:
+                ws.cell(row=final_samples_row, column=col_c_idx).value = None
+
+            # Set SECOND SAMPLES in row 31, column B, count in column D
+            if get_column_letter:
+                safe_set_cell_value(ws, f"{get_column_letter(label_column_idx)}{final_samples_row}", "SECOND SAMPLES")
+                safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{final_samples_row}", num_activewear)
+            else:
+                ws.cell(row=final_samples_row, column=label_column_idx).value = "SECOND SAMPLES"
+                ws.cell(row=final_samples_row, column=col_d_idx).value = num_activewear
+            ws.cell(row=final_samples_row, column=col_d_idx).number_format = "0"
+            
+            # Use row 29 (ROUND OF REVISIONS) as reference - it should be around row 29
+            # Find ROUND OF REVISIONS row (should be row 29)
+            reference_row = None
+            for scan_row in range(deliverables_block_start, final_samples_row):
+                value = ws.cell(row=scan_row, column=label_column_idx).value
+                if isinstance(value, str) and "round of revisions" in value.lower():
+                    reference_row = scan_row
+                    break
+            
+            # If not found, assume it's row 29 (typical position)
+            if reference_row is None:
+                reference_row = 29
+            
+            # Check what merges exist for columns B-D in rows 29-30 (reference_row to reference_row+1)
+            b_merged = False
+            c_merged = False
+            d_merged = False
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row == reference_row and merged_range.max_row == reference_row + 1):
+                    if merged_range.min_col == 2 and merged_range.max_col == 2:  # Column B
+                        b_merged = True
+                    elif merged_range.min_col == 3 and merged_range.max_col == 3:  # Column C
+                        c_merged = True
+                    elif merged_range.min_col == 4 and merged_range.max_col == 4:  # Column D
+                        d_merged = True
+            
+            # Copy exact formatting from B29-D30 to B31-D32 (SECOND SAMPLES)
+            # First, copy cell formatting (but not alignment for column B - we'll center it after merge)
+            for col in [label_column_idx, col_c_idx, col_d_idx]:
+                source_cell_29 = ws.cell(row=reference_row, column=col)
+                source_cell_30 = ws.cell(row=reference_row + 1, column=col)
+                target_cell_31 = ws.cell(row=final_samples_row, column=col)
+                target_cell_32 = ws.cell(row=final_samples_row + 1, column=col)
+                
+                # Copy formatting from row 29 to row 31
+                if source_cell_29.font:
+                    target_cell_31.font = copy(source_cell_29.font)
+                if source_cell_29.fill:
+                    target_cell_31.fill = copy(source_cell_29.fill)
+                if source_cell_29.border:
+                    target_cell_31.border = copy(source_cell_29.border)
+                # Don't copy alignment for column B - we'll set it to center after merge
+                if col != label_column_idx and source_cell_29.alignment:
+                    target_cell_31.alignment = copy(source_cell_29.alignment)
+                target_cell_31.number_format = source_cell_29.number_format
+                
+                # Copy formatting from row 30 to row 32
+                if source_cell_30.font:
+                    target_cell_32.font = copy(source_cell_30.font)
+                if source_cell_30.fill:
+                    target_cell_32.fill = copy(source_cell_30.fill)
+                if source_cell_30.border:
+                    target_cell_32.border = copy(source_cell_30.border)
+                # Don't copy alignment for column B - we'll set it to center after merge
+                if col != label_column_idx and source_cell_30.alignment:
+                    target_cell_32.alignment = copy(source_cell_30.alignment)
+                target_cell_32.number_format = source_cell_30.number_format
+            
+            # Merge B:C together and D separately, with center alignment
+            if safe_merge_cells:
+                # Merge B:C together (columns B and C merged across 2 rows)
+                safe_merge_cells(ws, f"B{final_samples_row}:C{final_samples_row + 1}")
+                # Set center alignment for merged B:C
+                if Alignment:
+                    cell_bc = ws.cell(row=final_samples_row, column=label_column_idx)
+                    cell_bc.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                # Merge column D
+                safe_merge_cells(ws, f"D{final_samples_row}:D{final_samples_row + 1}")
+                # Set center alignment for merged column D
+                if Alignment:
+                    cell_d = ws.cell(row=final_samples_row, column=col_d_idx)
+                    cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            
+            # Step 2: Insert 6 rows after row 32 (3 new deliverable entries, each with 2 rows)
+            insert_row = final_samples_row + 2  # After row 32
+            rows_to_insert = 6
+            
+            # Insert rows
+            ws.insert_rows(insert_row, amount=rows_to_insert)
+            
+            # Unmerge any cells in the newly inserted rows
+            for i in range(rows_to_insert):
+                target_row = insert_row + i
+                for col in range(DELIVERABLE_COL_START, DELIVERABLE_COL_END + 1):
+                    for merged_range in list(ws.merged_cells.ranges):
+                        if (merged_range.min_row <= target_row <= merged_range.max_row and
+                            merged_range.min_col <= col <= merged_range.max_col):
+                            try:
+                                ws.unmerge_cells(range_string=str(merged_range))
+                            except Exception:
+                                pass
+            
+            # Step 3: Set values for the new rows and define row variables
+            # Row 33-34: 2ND ROUND OF FITTINGS (count in column D)
+            row_2nd_fittings = insert_row
+            # Clear column C to ensure no leftover values
+            if get_column_letter:
+                safe_set_cell_value(ws, f"{get_column_letter(col_c_idx)}{row_2nd_fittings}", None)
+            else:
+                ws.cell(row=row_2nd_fittings, column=col_c_idx).value = None
+            if get_column_letter:
+                safe_set_cell_value(ws, f"{get_column_letter(label_column_idx)}{row_2nd_fittings}", "2ND ROUND OF FITTINGS")
+                safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{row_2nd_fittings}", 1)
+            else:
+                ws.cell(row=row_2nd_fittings, column=label_column_idx).value = "2ND ROUND OF FITTINGS"
+                ws.cell(row=row_2nd_fittings, column=col_d_idx).value = 1
+            ws.cell(row=row_2nd_fittings, column=col_d_idx).number_format = "0"
+            row_2nd_fittings_2 = insert_row + 1
+            
+            # Row 35-36: 2ND ROUND OF REVISIONS (count in column D)
+            row_2nd_revisions = insert_row + 2
+            # Clear column C to ensure no leftover values
+            if get_column_letter:
+                safe_set_cell_value(ws, f"{get_column_letter(col_c_idx)}{row_2nd_revisions}", None)
+            else:
+                ws.cell(row=row_2nd_revisions, column=col_c_idx).value = None
+            if get_column_letter:
+                safe_set_cell_value(ws, f"{get_column_letter(label_column_idx)}{row_2nd_revisions}", "2ND ROUND OF REVISIONS")
+                safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{row_2nd_revisions}", 1)
+            else:
+                ws.cell(row=row_2nd_revisions, column=label_column_idx).value = "2ND ROUND OF REVISIONS"
+                ws.cell(row=row_2nd_revisions, column=col_d_idx).value = 1
+            ws.cell(row=row_2nd_revisions, column=col_d_idx).number_format = "0"
+            row_2nd_revisions_2 = insert_row + 3
+            
+            # Row 37-38: FINAL SAMPLES (count of all styles)
+            row_final_samples = insert_row + 4
+            # Clear column C to ensure no leftover values
+            if get_column_letter:
+                safe_set_cell_value(ws, f"{get_column_letter(col_c_idx)}{row_final_samples}", None)
+            else:
+                ws.cell(row=row_final_samples, column=col_c_idx).value = None
+            if get_column_letter:
+                safe_set_cell_value(ws, f"{get_column_letter(label_column_idx)}{row_final_samples}", "FINAL SAMPLES")
+                # Will be set by formulas section below
+            else:
+                ws.cell(row=row_final_samples, column=label_column_idx).value = "FINAL SAMPLES"
+            row_final_samples_2 = insert_row + 5
+            
+            # Step 4: Copy exact formatting from B29-D30 to each new row pair (B33-D34, B35-D36, B37-D38)
+            # Use row 29 as source for first row of each pair, row 30 for second row
+            # Don't copy alignment for column B - we'll center it after merge
+            for base_row in [row_2nd_fittings, row_2nd_revisions, row_final_samples]:
+                row_second = base_row + 1
+                # Copy formatting from row 29 to first row of pair
+                for col in [label_column_idx, col_c_idx, col_d_idx]:
+                    source_cell_29 = ws.cell(row=reference_row, column=col)
+                    source_cell_30 = ws.cell(row=reference_row + 1, column=col)
+                    target_cell_first = ws.cell(row=base_row, column=col)
+                    target_cell_second = ws.cell(row=row_second, column=col)
+                    
+                    # Copy formatting from row 29 to first row
+                    if source_cell_29.font:
+                        target_cell_first.font = copy(source_cell_29.font)
+                    if source_cell_29.fill:
+                        target_cell_first.fill = copy(source_cell_29.fill)
+                    if source_cell_29.border:
+                        target_cell_first.border = copy(source_cell_29.border)
+                    # Don't copy alignment for column B - we'll set it to center after merge
+                    if col != label_column_idx and source_cell_29.alignment:
+                        target_cell_first.alignment = copy(source_cell_29.alignment)
+                    target_cell_first.number_format = source_cell_29.number_format
+                    
+                    # Copy formatting from row 30 to second row
+                    if source_cell_30.font:
+                        target_cell_second.font = copy(source_cell_30.font)
+                    if source_cell_30.fill:
+                        target_cell_second.fill = copy(source_cell_30.fill)
+                    if source_cell_30.border:
+                        target_cell_second.border = copy(source_cell_30.border)
+                    # Don't copy alignment for column B - we'll set it to center after merge
+                    if col != label_column_idx and source_cell_30.alignment:
+                        target_cell_second.alignment = copy(source_cell_30.alignment)
+                    target_cell_second.number_format = source_cell_30.number_format
+            
+            # Step 5: Merge B:C together and D separately, with center alignment for each new row pair
+            if safe_merge_cells:
+                for base_row in [row_2nd_fittings, row_2nd_revisions, row_final_samples]:
+                    row_second = base_row + 1
+                    # Merge B:C together (columns B and C merged across 2 rows)
+                    safe_merge_cells(ws, f"B{base_row}:C{row_second}")
+                    # Set center alignment for merged B:C
+                    if Alignment:
+                        cell_bc = ws.cell(row=base_row, column=label_column_idx)
+                        cell_bc.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                    # Merge column D
+                    safe_merge_cells(ws, f"D{base_row}:D{row_second}")
+                    # Set center alignment for merged column D
+                    if Alignment:
+                        cell_d = ws.cell(row=base_row, column=col_d_idx)
+                        cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                    
+                    # Set FINAL SAMPLES count immediately after merging
+                    if base_row == row_final_samples:
+                        # Unmerge column D temporarily to set the value
+                        try:
+                            ws.unmerge_cells(f"D{base_row}:D{row_second}")
+                        except Exception:
+                            pass
+                        # Set the count formula (total styles: regular + activewear)
+                        source_range = f"B10:B{last_style_row}"
+                        count_formula = f"=COUNT({source_range})"
+                        if get_column_letter:
+                            safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{base_row}", count_formula)
+                        else:
+                            ws.cell(row=base_row, column=col_d_idx).value = count_formula
+                        count_cell = ws.cell(row=base_row, column=col_d_idx)
+                        count_cell.number_format = "0"
+                        # Re-merge column D
+                        safe_merge_cells(ws, f"D{base_row}:D{row_second}")
+                        # Restore center alignment
+                        if Alignment:
+                            cell_d = ws.cell(row=base_row, column=col_d_idx)
+                            cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            
+            # Restore merged cells for right side columns (H-P) using template merge patterns
+            if deliverables_template and "merges" in deliverables_template:
+                right_side_merges = []
+                for min_row_offset, max_row_offset, min_col, max_col in deliverables_template.get("merges", []):
+                    if (min_col >= 8 and max_col <= 16 and 
+                        max_row_offset - min_row_offset == 1):
+                        right_side_merges.append((min_col, max_col))
+                
+                # Apply merge patterns to new rows
+                for base_row in [row_2nd_fittings, row_2nd_revisions, row_final_samples]:
+                    row_second = base_row + 1
+                    for min_col, max_col in right_side_merges:
+                        try:
+                            if get_column_letter:
+                                start_col_letter = get_column_letter(min_col)
+                                end_col_letter = get_column_letter(max_col)
+                                range_str = f"{start_col_letter}{base_row}:{end_col_letter}{row_second}"
+                                safe_merge_cells(ws, range_str)
+                        except Exception:
+                            pass
+            
+            # Update deliverables_block_end to include new rows
+            deliverables_block_end += rows_to_insert
 
     # Update deliverables table counts (column J) for add-on selections
     if column_index_from_string is not None and total_styles_count > 0:
@@ -858,20 +1152,118 @@ def apply_development_package(
             cell.value = f"=COUNT({addon_range})"
             cell.number_format = "0"
 
-        # Update pattern/sample counts in column C to include all style rows
-        sample_count_map = [
-            ("PATTERNS", "B"),
-            ("FIRST SAMPLES", "B"),
-            ("FINAL SAMPLES", "B"),
-        ]
-        for label_text, source_col_letter in sample_count_map:
-            row_idx = find_label_row(label_text)
-            if row_idx is None:
-                continue
-            source_range = f"{source_col_letter}10:{source_col_letter}{last_style_row}"
-            count_cell = ws.cell(row=row_idx, column=column_index_from_string("C"))
+        # Update pattern/sample counts in column D (the "#" column)
+        # Patterns: all styles (regular + activewear)
+        patterns_row = find_label_row("PATTERNS")
+        if patterns_row:
+            source_range = f"B10:B{last_style_row}"
+            count_cell = ws.cell(row=patterns_row, column=column_index_from_string("D"))
             count_cell.value = f"=COUNT({source_range})"
             count_cell.number_format = "0"
+        
+        # First Samples: all styles (regular + activewear)
+        first_samples_row = find_label_row("FIRST SAMPLES")
+        if first_samples_row:
+            source_range = f"B10:B{last_style_row}"
+            count_cell = ws.cell(row=first_samples_row, column=column_index_from_string("D"))
+            count_cell.value = f"=COUNT({source_range})"
+            count_cell.number_format = "0"
+        
+        # Round of Fittings: always 1
+        fittings_row = find_label_row("ROUND OF FITTINGS")
+        if fittings_row:
+            count_cell = ws.cell(row=fittings_row, column=column_index_from_string("D"))
+            count_cell.value = 1
+            count_cell.number_format = "0"
+        
+        # Round of Revisions: 2 if activewear exists (one for Regular, one for Active), otherwise 1
+        revisions_row = find_label_row("ROUND OF REVISIONS")
+        if revisions_row:
+            col_d_idx = column_index_from_string("D")
+            # Unmerge the cell first if it's merged, then set the value
+            count_cell = ws.cell(row=revisions_row, column=col_d_idx)
+            # Check if this cell is part of a merged range and unmerge it
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= revisions_row <= merged_range.max_row and
+                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+            # Clear the cell value first
+            count_cell.value = None
+            # Set the new value
+            if num_activewear > 0:
+                count_cell.value = 2  # One for Regular category, one for Active category
+            else:
+                count_cell.value = 1
+            count_cell.number_format = "0"
+        
+        # If activewear exists, handle SECOND SAMPLES and the new rows
+        if num_activewear > 0:
+            # SECOND SAMPLES: count of activewear styles (replaced FINAL SAMPLES at rows 31-32)
+            # Note: count is already set in column D above, but we ensure it's correct here
+            second_sample_row = find_label_row("SECOND SAMPLES")
+            if second_sample_row:
+                count_cell = ws.cell(row=second_sample_row, column=column_index_from_string("D"))
+                count_cell.value = num_activewear
+                count_cell.number_format = "0"
+            
+            # 2nd Round of Fittings: always 1 (already set in column D above)
+            second_fittings_row = find_label_row("2ND ROUND OF FITTINGS")
+            if second_fittings_row:
+                count_cell = ws.cell(row=second_fittings_row, column=column_index_from_string("D"))
+                count_cell.value = 1
+                count_cell.number_format = "0"
+            
+            # 2nd Round of Revisions: always 1 for Active category (already set in column D above)
+            second_revisions_row = find_label_row("2ND ROUND OF REVISIONS")
+            if second_revisions_row:
+                count_cell = ws.cell(row=second_revisions_row, column=column_index_from_string("D"))
+                count_cell.value = 1
+                count_cell.number_format = "0"
+            
+            # Final Samples: count is already set in the merge section above, but verify it's correct here
+            # (This is a backup check - the count should already be set when merging FINAL SAMPLES)
+            final_samples_row = find_label_row("FINAL SAMPLES")
+            if final_samples_row:
+                # Verify the count is set - if not, set it now
+                col_d_idx = column_index_from_string("D")
+                count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                if not count_cell.value or count_cell.value == "":
+                    # Unmerge temporarily to set value
+                    was_merged = False
+                    for merged_range in list(ws.merged_cells.ranges):
+                        if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
+                            merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                            was_merged = True
+                            try:
+                                ws.unmerge_cells(range_string=str(merged_range))
+                            except Exception:
+                                pass
+                            break
+                    source_range = f"B10:B{last_style_row}"
+                    count_formula = f"=COUNT({source_range})"
+                    if get_column_letter:
+                        safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{final_samples_row}", count_formula)
+                    else:
+                        ws.cell(row=final_samples_row, column=col_d_idx).value = count_formula
+                    count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                    count_cell.number_format = "0"
+                    # Re-merge if it was merged before
+                    if was_merged and safe_merge_cells:
+                        safe_merge_cells(ws, f"D{final_samples_row}:D{final_samples_row + 1}")
+                        if Alignment:
+                            cell_d = ws.cell(row=final_samples_row, column=col_d_idx)
+                            cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+        else:
+            # Final Samples: all styles (regular only, no activewear)
+            final_samples_row = find_label_row("FINAL SAMPLES")
+            if final_samples_row:
+                source_range = f"B10:B{last_style_row}"
+                count_cell = ws.cell(row=final_samples_row, column=column_index_from_string("D"))
+                count_cell.value = f"=COUNT({source_range})"
+                count_cell.number_format = "0"
 
     # Totals section - dynamically calculate totals row and range based on number of styles
     # For 5 or fewer styles: totals at row 20 (original position)
@@ -1517,15 +1909,6 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    # Check OAuth status for warning message
-    has_oauth_creds = "wb_google_creds" in st.session_state and st.session_state.get("wb_google_creds") is not None
-    query_params = st.query_params
-    is_oauth_return = "code" in query_params
-
-    # Only show warning if user hasn't authenticated yet
-    if not has_oauth_creds and not is_oauth_return:
-        st.warning("⚠️ **Important:** If you want to upload to Google Sheets, click '**🔗 Google Sheets access**' FIRST to authorize Google access. This will avoid losing data when redirected.")
-
     st.caption(
         "Fill in the Development Package inputs and download a formatted workbook "
         "based on the official template."
@@ -1934,104 +2317,45 @@ def main() -> None:
         type="primary",
     )
 
-    # Google Drive OAuth connection section
+    # Google Drive upload section (service account only)
     st.markdown("---")
-    st.subheader("Google Sheets Upload")
-    
-    # Check if OAuth credentials are available
-    has_oauth_creds = "wb_google_creds" in st.session_state and st.session_state.wb_google_creds is not None
-    
-    # Check if we're returning from OAuth callback
-    query_params_oauth = st.query_params
-    is_oauth_return = "code" in query_params_oauth
-    if is_oauth_return and not has_oauth_creds:
-        # We're in an OAuth callback, try to load credentials
-        from google_sheets_uploader import load_oauth_credentials
-        load_oauth_credentials()
-        if "wb_google_creds" in st.session_state and st.session_state.wb_google_creds:
-            st.rerun()
-    
-    if has_oauth_creds:
-        st.success("✅ Connected to Google Drive")
-        
-        # Automatically upload to Google Sheets after workbook generation
-        sheet_title = (client_name or "Workbook").strip() or "Workbook"
-        sheet_title = f"{sheet_title} - Development Package"
-        
+    st.subheader("Google Sheets --> Monday.com Upload")
+
+    sheet_title = (client_name or "Workbook").strip() or "Workbook"
+    sheet_title = f"{sheet_title} - Development Package"
+
+    st.caption("Uploads will use the shared Google Drive folder configured for the service account.")
+
+    if st.button("Upload to Monday.com", type="primary"):
         with st.spinner("Uploading workbook to Google Sheets..."):
             try:
-                sheet_url = upload_workbook_to_google_sheet(excel_bytes, sheet_title)
+                sheet_url, converted = upload_workbook_to_google_sheet(excel_bytes, sheet_title)
                 st.session_state["google_sheet_url"] = sheet_url
-                st.success(f"✅ Google Sheet created: [Open Sheet]({sheet_url})")
-                
-                # Update monday.com if a client is selected
+                if converted:
+                    st.success(f"✅ Google Sheet created: [Open Sheet]({sheet_url})")
+                else:
+                    st.success(
+                        f"✅ Workbook uploaded as XLSX: [Download / Open]({sheet_url})  \n"
+                        "Google denied automatic conversion because service accounts report zero Drive quota. "
+                        "Open the file in Google Drive and use **File → Save as Google Sheets** if you need an editable sheet."
+                    )
+
+                # Update monday.com URL column only (no file upload)
                 if selected_item_id:
                     with st.spinner("Updating Monday.com record..."):
-                        # First update the URL column
                         url_updated = update_monday_item_workbook_url(selected_item_id, sheet_url)
-                        
-                        # Then upload the file
-                        # Get board_id for file upload
-                        monday_config = st.secrets.get("monday", {})
-                        api_token = monday_config.get("api_token")
-                        if api_token:
-                            # Get board_id from item
-                            query = f"""
-                            query {{
-                                items(ids: [{selected_item_id}]) {{
-                                    board {{
-                                        id
-                                    }}
-                                }}
-                            }}
-                            """
-                            url = "https://api.monday.com/v2"
-                            headers = {
-                                "Authorization": api_token,
-                                "Content-Type": "application/json",
-                            }
-                            response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
-                            data = response.json()
-                            
-                            board_id = None
-                            if "data" in data and data["data"].get("items"):
-                                board_id = data["data"]["items"][0].get("board", {}).get("id")
-                            
-                            if board_id:
-                                file_uploaded = upload_file_to_monday_item(
-                                    selected_item_id, 
-                                    board_id, 
-                                    excel_bytes, 
-                                    download_name
-                                )
-                                if url_updated and file_uploaded:
-                                    st.success(f"✅ Monday.com record updated with workbook URL and file uploaded")
-                                elif url_updated:
-                                    st.success(f"✅ Monday.com record updated with workbook URL (file upload failed)")
-                                elif file_uploaded:
-                                    st.success(f"✅ File uploaded to Monday.com (URL update failed)")
-                                else:
-                                    st.warning("⚠️ Workbook uploaded to Google Sheets, but Monday.com update failed. Please update manually.")
-                            else:
-                                if url_updated:
-                                    st.success(f"✅ Monday.com record updated with workbook URL")
-                                else:
-                                    st.warning("⚠️ Workbook uploaded to Google Sheets, but Monday.com update failed. Please update manually.")
+                        if url_updated:
+                            st.success("✅ Monday.com record updated with workbook URL")
                         else:
-                            if url_updated:
-                                st.success(f"✅ Monday.com record updated with workbook URL")
-                            else:
-                                st.warning("⚠️ Workbook uploaded to Google Sheets, but Monday.com update failed. Please update manually.")
-                
+                            st.warning("⚠️ Workbook uploaded to Google Drive, but Monday.com update failed. Please update manually.")
+
             except GoogleSheetsUploadError as exc:
-                st.error(f"❌ Google Sheets upload failed: {exc}")
+                message = str(exc)
+                st.error(f"❌ Google Sheets upload failed: {message}")
+                if "storage quota" in message.lower():
+                    _show_drive_quota_help()
             except Exception as exc:  # pragma: no cover - runtime failures
                 st.error(f"❌ Unexpected Google Sheets error: {exc}")
-    else:
-        st.info("🔗 Connect your Google Drive account to automatically upload workbooks to Google Sheets")
-        # Trigger OAuth flow
-        from google_sheets_uploader import load_oauth_credentials
-        load_oauth_credentials()
 
 
 if __name__ == "__main__":
