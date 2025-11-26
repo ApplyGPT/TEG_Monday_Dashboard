@@ -116,6 +116,28 @@ def main():
     st.title("💰 QuickBooks Invoice Form")
     st.markdown("Review and create invoices for clients")
     
+    # Get data from session state (from redirect) or URL parameters
+    # This must be done BEFORE any form fields that use these defaults
+    if 'quickbooks_data' in st.session_state:
+        # Data from redirect page
+        data = st.session_state['quickbooks_data']
+        first_name_default = data.get('first_name', '')
+        last_name_default = data.get('last_name', '')
+        email_default = data.get('email', '')
+        contract_amount_default = data.get('contract_amount', '')
+        cc_email_default = data.get('cc_email', '')
+        company_name_default = data.get('company_name', '')
+        st.success("✅ Data loaded from Monday.com")
+    else:
+        # Fallback to URL parameters
+        query_params = get_decoded_query_params()
+        first_name_default = query_params.get('first_name', '')
+        last_name_default = query_params.get('last_name', '')
+        email_default = query_params.get('email', '')
+        contract_amount_default = query_params.get('contract_amount', '')
+        cc_email_default = query_params.get('cc_email', '')
+        company_name_default = query_params.get('company_name', '')
+    
     # Salesman Email Address (CC) field
     cc_col1, cc_col2 = st.columns(2)
     with cc_col1:
@@ -176,27 +198,6 @@ def main():
     
     # Main form
     st.subheader("Invoice Information")
-    
-    # Get data from session state (from redirect) or URL parameters
-    if 'quickbooks_data' in st.session_state:
-        # Data from redirect page
-        data = st.session_state['quickbooks_data']
-        first_name_default = data.get('first_name', '')
-        last_name_default = data.get('last_name', '')
-        email_default = data.get('email', '')
-        contract_amount_default = data.get('contract_amount', '')
-        cc_email_default = data.get('cc_email', '')
-        company_name_default = data.get('company_name', '')
-        st.success("✅ Data loaded from Monday.com")
-    else:
-        # Fallback to URL parameters
-        query_params = get_decoded_query_params()
-        first_name_default = query_params.get('first_name', '')
-        last_name_default = query_params.get('last_name', '')
-        email_default = query_params.get('email', '')
-        contract_amount_default = query_params.get('contract_amount', '')
-        cc_email_default = query_params.get('cc_email', '')
-        company_name_default = query_params.get('company_name', '')
     
     # Parse contract amount for Adjustments line item
     adjustments_amount = 0.00
