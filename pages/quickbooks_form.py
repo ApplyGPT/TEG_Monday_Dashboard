@@ -121,7 +121,7 @@ def main():
     with cc_col1:
         cc_email = st.text_input(
             "Salesman Email Address (CC)",
-            value="",
+            value=cc_email_default,
             help="Email address to CC on the invoice (optional)"
         )
     with cc_col2:
@@ -185,6 +185,8 @@ def main():
         last_name_default = data.get('last_name', '')
         email_default = data.get('email', '')
         contract_amount_default = data.get('contract_amount', '')
+        cc_email_default = data.get('cc_email', '')
+        company_name_default = data.get('company_name', '')
         st.success("✅ Data loaded from Monday.com")
     else:
         # Fallback to URL parameters
@@ -193,6 +195,8 @@ def main():
         last_name_default = query_params.get('last_name', '')
         email_default = query_params.get('email', '')
         contract_amount_default = query_params.get('contract_amount', '')
+        cc_email_default = query_params.get('cc_email', '')
+        company_name_default = query_params.get('company_name', '')
     
     # Parse contract amount for Adjustments line item
     adjustments_amount = 0.00
@@ -222,7 +226,7 @@ def main():
         
         company_name = st.text_input(
             "Company Name",
-            value="",
+            value=company_name_default,
             help="Enter the client's company name (optional)"
         )
         
