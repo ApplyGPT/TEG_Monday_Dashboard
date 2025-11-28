@@ -5,6 +5,7 @@ Builds the Development Package section of the workbook using a template.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 from copy import copy
@@ -1238,10 +1239,10 @@ def apply_development_package(
 
         # Update pattern/sample counts in column D (the "#" column)
         # Patterns: all styles (regular + activewear, excluding custom line items)
+        # Activewear styles count as 1.5 each for patterns (rounded up)
+        # Use formula: count all styles, then add 0.5 for each activewear style (rounded up)
         patterns_row = find_label_row("PATTERNS")
         if patterns_row:
-            # Use direct count instead of formula to avoid counting extra values
-            count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
             col_d_idx = column_index_from_string("D")
             # Check if merged and remember pattern
             was_merged = False
@@ -1259,7 +1260,19 @@ def apply_development_package(
             # Clear the cell completely (including any formulas)
             count_cell = ws.cell(row=patterns_row, column=col_d_idx)
             count_cell.value = None
-            # Re-merge if needed, then set value
+            # Create formula: count all styles in column D, then add ROUNDUP(activewear_count * 0.5, 0)
+            # Formula: COUNTIF(D10:D{last_regular_style_row}, ">0") + ROUNDUP(COUNTIF(D10:D{last_regular_style_row}, 3560) * 0.5, 0)
+            # This counts all styles, then adds 0.5 for each activewear (which already counts as 1, so total is 1.5 each)
+            # Excel will automatically convert function names to local language (e.g., COUNTIF -> CONT.SE, ROUNDUP -> ARREDONDAR.PARA.CIMA)
+            if get_column_letter and last_regular_style_row:
+                # Use column letter format: D10:D{row}
+                end_col_letter_d = get_column_letter(column_index_from_string("D"))
+                formula = f"=COUNTIF({end_col_letter_d}10:{end_col_letter_d}{last_regular_style_row}, \">0\") + ROUNDUP(COUNTIF({end_col_letter_d}10:{end_col_letter_d}{last_regular_style_row}, 3560) * 0.5, 0)"
+            else:
+                # Fallback to direct calculation
+                patterns_count = num_regular + math.ceil(num_activewear * 1.5)
+                formula = patterns_count
+            # Re-merge if needed, then set formula/value
             if was_merged and merge_pattern and safe_merge_cells:
                 min_row, max_row, min_col, max_col = merge_pattern
                 if get_column_letter:
@@ -1267,20 +1280,20 @@ def apply_development_package(
                     end_col_letter = get_column_letter(max_col)
                     range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
                     safe_merge_cells(ws, range_str)
-                # Set value AFTER re-merging
+                # Set formula/value AFTER re-merging
                 count_cell = ws.cell(row=patterns_row, column=col_d_idx)
-                count_cell.value = count_value
+                count_cell.value = formula
                 count_cell.number_format = "0"
             else:
                 # Not merged, set value directly
-                count_cell.value = count_value
+                count_cell.value = formula
                 count_cell.number_format = "0"
         
         # First Samples: all styles (regular + activewear, excluding custom line items)
+        # Activewear styles count as 1.5 each for first samples (rounded up)
+        # Use formula: count all styles, then add 0.5 for each activewear style (rounded up)
         first_samples_row = find_label_row("FIRST SAMPLES")
         if first_samples_row:
-            # Use direct count instead of formula to avoid counting extra values
-            count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
             col_d_idx = column_index_from_string("D")
             # Check if merged and remember pattern
             was_merged = False
@@ -1298,7 +1311,19 @@ def apply_development_package(
             # Clear the cell completely (including any formulas)
             count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
             count_cell.value = None
-            # Re-merge if needed, then set value
+            # Create formula: count all styles in column D, then add ROUNDUP(activewear_count * 0.5, 0)
+            # Formula: COUNTIF(D10:D{last_regular_style_row}, ">0") + ROUNDUP(COUNTIF(D10:D{last_regular_style_row}, 3560) * 0.5, 0)
+            # This counts all styles, then adds 0.5 for each activewear (which already counts as 1, so total is 1.5 each)
+            # Excel will automatically convert function names to local language (e.g., COUNTIF -> CONT.SE, ROUNDUP -> ARREDONDAR.PARA.CIMA)
+            if get_column_letter and last_regular_style_row:
+                # Use column letter format: D10:D{row}
+                end_col_letter_d = get_column_letter(column_index_from_string("D"))
+                formula = f"=COUNTIF({end_col_letter_d}10:{end_col_letter_d}{last_regular_style_row}, \">0\") + ROUNDUP(COUNTIF({end_col_letter_d}10:{end_col_letter_d}{last_regular_style_row}, 3560) * 0.5, 0)"
+            else:
+                # Fallback to direct calculation
+                first_samples_count = num_regular + math.ceil(num_activewear * 1.5)
+                formula = first_samples_count
+            # Re-merge if needed, then set formula/value
             if was_merged and merge_pattern and safe_merge_cells:
                 min_row, max_row, min_col, max_col = merge_pattern
                 if get_column_letter:
@@ -1306,13 +1331,13 @@ def apply_development_package(
                     end_col_letter = get_column_letter(max_col)
                     range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
                     safe_merge_cells(ws, range_str)
-                # Set value AFTER re-merging
+                # Set formula/value AFTER re-merging
                 count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
-                count_cell.value = count_value
+                count_cell.value = formula
                 count_cell.number_format = "0"
             else:
                 # Not merged, set value directly
-                count_cell.value = count_value
+                count_cell.value = formula
                 count_cell.number_format = "0"
         
         # Round of Fittings: always 1
