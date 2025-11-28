@@ -488,16 +488,44 @@ def apply_development_package(
 
     base_capacity = len(ROW_INDICES)
     extra_styles = max(num_styles - base_capacity, 0)
-    rows_to_insert = extra_styles * 2
+    rows_to_insert_regular = extra_styles * 2
+    
+    # Calculate how many rows we'll need for custom styles too (if any)
+    # This ensures we insert all rows upfront before writing any styles
+    rows_to_insert_custom = 0
+    if num_custom_styles > 0:
+        # Calculate where custom styles would start (after all regular styles)
+        if num_styles > 5:
+            custom_start_row = 20 + (num_styles - 5) * 2
+        else:
+            custom_start_row = 10 + num_styles * 2
+        # Calculate where totals row will be after regular insertions
+        if num_styles > 5:
+            totals_row_after_regular = 20 + (num_styles - 5) * 2
+        else:
+            totals_row_after_regular = 20
+        # Calculate custom row indices
+        custom_row_indices_precalc = []
+        for i in range(num_custom_styles):
+            custom_row_indices_precalc.append(custom_start_row + (i * 2))
+        # Check if we need more rows for custom styles
+        if custom_row_indices_precalc:
+            last_custom_row = custom_row_indices_precalc[-1]
+            if last_custom_row >= totals_row_after_regular - 2:
+                required_totals_row = last_custom_row + 2
+                rows_to_insert_custom = required_totals_row - totals_row_after_regular
+                if rows_to_insert_custom < 0:
+                    rows_to_insert_custom = 0
 
-    # If we have more styles than the template supports, insert rows before the summary section
-    if rows_to_insert > 0:
-        ws.insert_rows(SUMMARY_TOTAL_DUE_BASE_ROW, amount=rows_to_insert)
+    # Insert all rows upfront (regular + custom) before writing any styles
+    total_rows_to_insert = rows_to_insert_regular + rows_to_insert_custom
+    if total_rows_to_insert > 0:
+        ws.insert_rows(SUMMARY_TOTAL_DUE_BASE_ROW, amount=total_rows_to_insert)
 
         # Copy formatting from template row 18 to new rows (preserve colors, borders, alignment)
         # New rows start at 20, 22, 24, etc.
         template_row = 18  # Use row 18 as template for formatting
-        for i in range(rows_to_insert):
+        for i in range(total_rows_to_insert):
             new_row = 20 + i
             for col_idx in range(2, 13):  # Columns B through L
                 source_cell = ws.cell(row=template_row, column=col_idx)
@@ -507,7 +535,7 @@ def apply_development_package(
         # Unmerge ALL cells in newly inserted rows to avoid MergedCell errors
         # Excel automatically adjusts merged ranges when rows are inserted, which can cause conflicts
         first_new_row = SUMMARY_TOTAL_DUE_BASE_ROW
-        last_new_row = SUMMARY_TOTAL_DUE_BASE_ROW + rows_to_insert - 1
+        last_new_row = SUMMARY_TOTAL_DUE_BASE_ROW + total_rows_to_insert - 1
         
         # Collect all merged ranges that intersect with the newly inserted rows
         # We need to unmerge both horizontal and vertical merges in the new rows
@@ -630,18 +658,20 @@ def apply_development_package(
                 cell_d.alignment = Alignment(horizontal="center", vertical="center")
         elif Alignment is not None and cell_d.alignment:
             cell_d.alignment = Alignment(horizontal="center", vertical="center")
-            cell_f = ws.cell(row=row_idx, column=6)
+        
+        # Write total formula (column F)
+        cell_f = ws.cell(row=row_idx, column=6)
         if complexity_pct == 0:
             cell_f.value = f"=D{row_idx}"
         else:
             cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
-            cell_f.number_format = '$#,##0'  # Currency format
-            if is_new_row:
-                apply_full_border_pair(ws, 6, row_idx, row_second)
-                safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
-                apply_arial_20_font(cell_f)
-            if Alignment is not None:
-                    cell_f.alignment = Alignment(horizontal="center", vertical="center")
+        cell_f.number_format = '$#,##0'  # Currency format
+        if is_new_row:
+            apply_full_border_pair(ws, 6, row_idx, row_second)
+            safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
+            apply_arial_20_font(cell_f)
+        if Alignment is not None:
+            cell_f.alignment = Alignment(horizontal="center", vertical="center")
 
         # Optional add-ons per row (columns H, I, J, K)
         row_optional_sum = 0.0
@@ -691,12 +721,8 @@ def apply_development_package(
         for i in range(num_custom_styles):
             custom_row_indices.append(custom_start_row + (i * 2))
         
-        # If we need more rows, insert them before the totals row
-        last_custom_row = custom_row_indices[-1] if custom_row_indices else custom_start_row
-        if last_custom_row >= SUMMARY_TOTAL_DUE_BASE_ROW:
-            rows_needed = last_custom_row - SUMMARY_TOTAL_DUE_BASE_ROW + 2
-            ws.insert_rows(SUMMARY_TOTAL_DUE_BASE_ROW, amount=rows_needed)
-            # Custom row indices don't change because they're before the insertion point
+        # Custom row indices are already calculated correctly since we inserted all rows upfront
+        # No need to insert more rows here - they were already inserted above
         
         for idx, row_idx in enumerate(custom_row_indices):
             entry = custom_styles[idx]
@@ -807,16 +833,23 @@ def apply_development_package(
             
             total_development += custom_price * (1 + complexity_pct / 100.0)
         
-        # Update last_style_row to include custom styles
+        # Update last_style_row to include custom styles (for totals calculations)
         if custom_row_indices:
             last_style_row = custom_row_indices[-1]
     
-    # Determine last_style_row if no custom styles
+    # Determine last_style_row if no custom styles (for totals calculations)
     if num_custom_styles == 0:
         if dynamic_row_indices:
             last_style_row = dynamic_row_indices[-1]
         else:
             last_style_row = 10
+
+    # Determine last_regular_style_row (only regular + activewear, excluding custom styles)
+    # This is used for deliverables counts (Patterns, First Samples, Final Samples)
+    if dynamic_row_indices:
+        last_regular_style_row = dynamic_row_indices[-1]
+    else:
+        last_regular_style_row = 10
 
     # Count activewear and regular styles
     num_activewear = sum(1 for entry in style_entries if entry.get("activewear", False))
@@ -1077,14 +1110,13 @@ def apply_development_package(
                             ws.unmerge_cells(f"D{base_row}:D{row_second}")
                         except Exception:
                             pass
-                        # Set the count formula (total styles: regular + activewear)
-                        source_range = f"B10:B{last_style_row}"
-                        count_formula = f"=COUNT({source_range})"
-                        if get_column_letter:
-                            safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{base_row}", count_formula)
-                        else:
-                            ws.cell(row=base_row, column=col_d_idx).value = count_formula
+                        # Set the count value (total styles: regular + activewear, excluding custom line items)
+                        count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
+                        # Clear the cell completely (including any formulas) before setting value
                         count_cell = ws.cell(row=base_row, column=col_d_idx)
+                        count_cell.value = None
+                        # Set direct numeric value (not a formula)
+                        count_cell.value = count_value
                         count_cell.number_format = "0"
                         # Re-merge column D
                         safe_merge_cells(ws, f"D{base_row}:D{row_second}")
@@ -1101,7 +1133,7 @@ def apply_development_package(
                         max_row_offset - min_row_offset == 1):
                         right_side_merges.append((min_col, max_col))
                 
-                # Apply merge patterns to new rows
+                # Apply merge patterns to new rows and center align
                 for base_row in [row_2nd_fittings, row_2nd_revisions, row_final_samples]:
                     row_second = base_row + 1
                     for min_col, max_col in right_side_merges:
@@ -1111,11 +1143,63 @@ def apply_development_package(
                                 end_col_letter = get_column_letter(max_col)
                                 range_str = f"{start_col_letter}{base_row}:{end_col_letter}{row_second}"
                                 safe_merge_cells(ws, range_str)
+                                # Center align the merged cell
+                                if Alignment:
+                                    cell = ws.cell(row=base_row, column=min_col)
+                                    cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
                         except Exception:
                             pass
             
+            # Center align all right side columns (H-P) in the entire deliverables section
+            if Alignment:
+                for row in range(deliverables_block_start, deliverables_block_end + 1):
+                    for col in range(8, 17):  # Columns H (8) through P (16)
+                        cell = ws.cell(row=row, column=col)
+                        if cell.alignment:
+                            cell.alignment = Alignment(
+                                horizontal='center',
+                                vertical=cell.alignment.vertical,
+                                wrap_text=cell.alignment.wrap_text,
+                                shrink_to_fit=cell.alignment.shrink_to_fit,
+                                indent=cell.alignment.indent
+                            )
+                        else:
+                            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            
             # Update deliverables_block_end to include new rows
             deliverables_block_end += rows_to_insert
+        
+        # Center align all right side columns (H-P) in the entire deliverables section (including original rows)
+        if Alignment:
+            for row in range(deliverables_block_start, deliverables_block_end + 1):
+                for col in range(8, 17):  # Columns H (8) through P (16)
+                    cell = ws.cell(row=row, column=col)
+                    if cell.alignment:
+                        cell.alignment = Alignment(
+                            horizontal='center',
+                            vertical=cell.alignment.vertical,
+                            wrap_text=cell.alignment.wrap_text,
+                            shrink_to_fit=cell.alignment.shrink_to_fit,
+                            indent=cell.alignment.indent
+                        )
+                    else:
+                        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+    else:
+        # Even if no activewear, center align right side columns (H-P) in deliverables section
+        if Alignment:
+            for row in range(deliverables_block_start, deliverables_block_end + 1):
+                for col in range(8, 17):  # Columns H (8) through P (16)
+                    cell = ws.cell(row=row, column=col)
+                    if cell.alignment:
+                        cell.alignment = Alignment(
+                            horizontal='center',
+                            vertical=cell.alignment.vertical,
+                            wrap_text=cell.alignment.wrap_text,
+                            shrink_to_fit=cell.alignment.shrink_to_fit,
+                            indent=cell.alignment.indent
+                        )
+                    else:
+                        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
 
     # Update deliverables table counts (column J) for add-on selections
     if column_index_from_string is not None and total_styles_count > 0:
@@ -1153,51 +1237,148 @@ def apply_development_package(
             cell.number_format = "0"
 
         # Update pattern/sample counts in column D (the "#" column)
-        # Patterns: all styles (regular + activewear)
+        # Patterns: all styles (regular + activewear, excluding custom line items)
         patterns_row = find_label_row("PATTERNS")
         if patterns_row:
-            source_range = f"B10:B{last_style_row}"
-            count_cell = ws.cell(row=patterns_row, column=column_index_from_string("D"))
-            count_cell.value = f"=COUNT({source_range})"
-            count_cell.number_format = "0"
+            # Use direct count instead of formula to avoid counting extra values
+            count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
+            col_d_idx = column_index_from_string("D")
+            # Check if merged and remember pattern
+            was_merged = False
+            merge_pattern = None
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= patterns_row <= merged_range.max_row and
+                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                    was_merged = True
+                    merge_pattern = (merged_range.min_row, merged_range.max_row, merged_range.min_col, merged_range.max_col)
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+                    break
+            # Clear the cell completely (including any formulas)
+            count_cell = ws.cell(row=patterns_row, column=col_d_idx)
+            count_cell.value = None
+            # Re-merge if needed, then set value
+            if was_merged and merge_pattern and safe_merge_cells:
+                min_row, max_row, min_col, max_col = merge_pattern
+                if get_column_letter:
+                    start_col_letter = get_column_letter(min_col)
+                    end_col_letter = get_column_letter(max_col)
+                    range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
+                    safe_merge_cells(ws, range_str)
+                # Set value AFTER re-merging
+                count_cell = ws.cell(row=patterns_row, column=col_d_idx)
+                count_cell.value = count_value
+                count_cell.number_format = "0"
+            else:
+                # Not merged, set value directly
+                count_cell.value = count_value
+                count_cell.number_format = "0"
         
-        # First Samples: all styles (regular + activewear)
+        # First Samples: all styles (regular + activewear, excluding custom line items)
         first_samples_row = find_label_row("FIRST SAMPLES")
         if first_samples_row:
-            source_range = f"B10:B{last_style_row}"
-            count_cell = ws.cell(row=first_samples_row, column=column_index_from_string("D"))
-            count_cell.value = f"=COUNT({source_range})"
-            count_cell.number_format = "0"
+            # Use direct count instead of formula to avoid counting extra values
+            count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
+            col_d_idx = column_index_from_string("D")
+            # Check if merged and remember pattern
+            was_merged = False
+            merge_pattern = None
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= first_samples_row <= merged_range.max_row and
+                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                    was_merged = True
+                    merge_pattern = (merged_range.min_row, merged_range.max_row, merged_range.min_col, merged_range.max_col)
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+                    break
+            # Clear the cell completely (including any formulas)
+            count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
+            count_cell.value = None
+            # Re-merge if needed, then set value
+            if was_merged and merge_pattern and safe_merge_cells:
+                min_row, max_row, min_col, max_col = merge_pattern
+                if get_column_letter:
+                    start_col_letter = get_column_letter(min_col)
+                    end_col_letter = get_column_letter(max_col)
+                    range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
+                    safe_merge_cells(ws, range_str)
+                # Set value AFTER re-merging
+                count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
+                count_cell.value = count_value
+                count_cell.number_format = "0"
+            else:
+                # Not merged, set value directly
+                count_cell.value = count_value
+                count_cell.number_format = "0"
         
         # Round of Fittings: always 1
         fittings_row = find_label_row("ROUND OF FITTINGS")
         if fittings_row:
-            count_cell = ws.cell(row=fittings_row, column=column_index_from_string("D"))
-            count_cell.value = 1
-            count_cell.number_format = "0"
-        
-        # Round of Revisions: 2 if activewear exists (one for Regular, one for Active), otherwise 1
-        revisions_row = find_label_row("ROUND OF REVISIONS")
-        if revisions_row:
             col_d_idx = column_index_from_string("D")
-            # Unmerge the cell first if it's merged, then set the value
-            count_cell = ws.cell(row=revisions_row, column=col_d_idx)
-            # Check if this cell is part of a merged range and unmerge it
+            # Unmerge if needed and clear any formulas
             for merged_range in list(ws.merged_cells.ranges):
-                if (merged_range.min_row <= revisions_row <= merged_range.max_row and
+                if (merged_range.min_row <= fittings_row <= merged_range.max_row and
                     merged_range.min_col <= col_d_idx <= merged_range.max_col):
                     try:
                         ws.unmerge_cells(range_string=str(merged_range))
                     except Exception:
                         pass
-            # Clear the cell value first
+            # Clear the cell completely (including any formulas)
+            count_cell = ws.cell(row=fittings_row, column=col_d_idx)
             count_cell.value = None
-            # Set the new value
-            if num_activewear > 0:
-                count_cell.value = 2  # One for Regular category, one for Active category
-            else:
-                count_cell.value = 1
+            # Set direct numeric value (not a formula)
+            count_cell.value = 1
             count_cell.number_format = "0"
+        
+        # Round of Revisions: count of types (2 if both regular and activewear exist, otherwise 1)
+        revisions_row = find_label_row("ROUND OF REVISIONS")
+        if revisions_row:
+            col_d_idx = column_index_from_string("D")
+            # Check if this cell is part of a merged range and remember the merge pattern
+            was_merged = False
+            merge_pattern = None
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= revisions_row <= merged_range.max_row and
+                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                    was_merged = True
+                    merge_pattern = (merged_range.min_row, merged_range.max_row, merged_range.min_col, merged_range.max_col)
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+                    break
+            # Clear the cell completely (including any formulas)
+            count_cell = ws.cell(row=revisions_row, column=col_d_idx)
+            count_cell.value = None
+            # Create a formula: default 1, but if there's any Activewear (price = 3560) will be 2
+            # Formula checks if there are any cells in column D (BASE PRICE) that equal 3560 (activewear price)
+            # If yes, return 2, otherwise return 1
+            if get_column_letter:
+                # Use last_regular_style_row to exclude custom styles
+                formula = f"=IF(COUNTIF(D10:D{last_regular_style_row}, 3560) > 0, 2, 1)"
+            else:
+                # Fallback if get_column_letter is not available
+                formula = f"=IF(COUNTIF(D10:D{last_regular_style_row}, 3560) > 0, 2, 1)"
+            # Re-merge if needed, then set formula
+            if was_merged and merge_pattern and safe_merge_cells:
+                min_row, max_row, min_col, max_col = merge_pattern
+                if get_column_letter:
+                    start_col_letter = get_column_letter(min_col)
+                    end_col_letter = get_column_letter(max_col)
+                    range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
+                    safe_merge_cells(ws, range_str)
+                # Set formula AFTER re-merging (same pattern as PATTERNS and FIRST SAMPLES)
+                count_cell = ws.cell(row=revisions_row, column=col_d_idx)
+                count_cell.value = formula
+                count_cell.number_format = "0"
+            else:
+                # Not merged, set formula directly
+                count_cell.value = formula
+                count_cell.number_format = "0"
         
         # If activewear exists, handle SECOND SAMPLES and the new rows
         if num_activewear > 0:
@@ -1205,21 +1386,57 @@ def apply_development_package(
             # Note: count is already set in column D above, but we ensure it's correct here
             second_sample_row = find_label_row("SECOND SAMPLES")
             if second_sample_row:
-                count_cell = ws.cell(row=second_sample_row, column=column_index_from_string("D"))
+                col_d_idx = column_index_from_string("D")
+                # Unmerge if needed and clear any formulas
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= second_sample_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                # Clear the cell completely (including any formulas)
+                count_cell = ws.cell(row=second_sample_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
                 count_cell.value = num_activewear
                 count_cell.number_format = "0"
             
             # 2nd Round of Fittings: always 1 (already set in column D above)
             second_fittings_row = find_label_row("2ND ROUND OF FITTINGS")
             if second_fittings_row:
-                count_cell = ws.cell(row=second_fittings_row, column=column_index_from_string("D"))
+                col_d_idx = column_index_from_string("D")
+                # Unmerge if needed and clear any formulas
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= second_fittings_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                # Clear the cell completely (including any formulas)
+                count_cell = ws.cell(row=second_fittings_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
                 count_cell.value = 1
                 count_cell.number_format = "0"
             
             # 2nd Round of Revisions: always 1 for Active category (already set in column D above)
             second_revisions_row = find_label_row("2ND ROUND OF REVISIONS")
             if second_revisions_row:
-                count_cell = ws.cell(row=second_revisions_row, column=column_index_from_string("D"))
+                col_d_idx = column_index_from_string("D")
+                # Unmerge if needed and clear any formulas
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= second_revisions_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                # Clear the cell completely (including any formulas)
+                count_cell = ws.cell(row=second_revisions_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
                 count_cell.value = 1
                 count_cell.number_format = "0"
             
@@ -1227,42 +1444,59 @@ def apply_development_package(
             # (This is a backup check - the count should already be set when merging FINAL SAMPLES)
             final_samples_row = find_label_row("FINAL SAMPLES")
             if final_samples_row:
-                # Verify the count is set - if not, set it now
+                # Use direct count instead of formula
+                count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
                 col_d_idx = column_index_from_string("D")
+                # Unmerge temporarily to set value and clear any formulas
+                was_merged = False
+                merge_pattern = None
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        was_merged = True
+                        merge_pattern = (merged_range.min_row, merged_range.max_row, merged_range.min_col, merged_range.max_col)
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                        break
+                # Clear the cell completely (including any formulas)
                 count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
-                if not count_cell.value or count_cell.value == "":
-                    # Unmerge temporarily to set value
-                    was_merged = False
-                    for merged_range in list(ws.merged_cells.ranges):
-                        if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
-                            merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                            was_merged = True
-                            try:
-                                ws.unmerge_cells(range_string=str(merged_range))
-                            except Exception:
-                                pass
-                            break
-                    source_range = f"B10:B{last_style_row}"
-                    count_formula = f"=COUNT({source_range})"
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
+                count_cell.value = count_value
+                count_cell.number_format = "0"
+                # Re-merge if it was merged before
+                if was_merged and merge_pattern and safe_merge_cells:
+                    min_row, max_row, min_col, max_col = merge_pattern
                     if get_column_letter:
-                        safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{final_samples_row}", count_formula)
-                    else:
-                        ws.cell(row=final_samples_row, column=col_d_idx).value = count_formula
-                    count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
-                    count_cell.number_format = "0"
-                    # Re-merge if it was merged before
-                    if was_merged and safe_merge_cells:
-                        safe_merge_cells(ws, f"D{final_samples_row}:D{final_samples_row + 1}")
-                        if Alignment:
-                            cell_d = ws.cell(row=final_samples_row, column=col_d_idx)
-                            cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                        start_col_letter = get_column_letter(min_col)
+                        end_col_letter = get_column_letter(max_col)
+                        range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
+                        safe_merge_cells(ws, range_str)
+                    if Alignment:
+                        cell_d = ws.cell(row=final_samples_row, column=col_d_idx)
+                        cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
         else:
-            # Final Samples: all styles (regular only, no activewear)
+            # Final Samples: all styles (regular only, no activewear, excluding custom line items)
             final_samples_row = find_label_row("FINAL SAMPLES")
             if final_samples_row:
-                source_range = f"B10:B{last_style_row}"
-                count_cell = ws.cell(row=final_samples_row, column=column_index_from_string("D"))
-                count_cell.value = f"=COUNT({source_range})"
+                # Use direct count instead of formula
+                count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
+                col_d_idx = column_index_from_string("D")
+                # Unmerge if needed and clear any formulas
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                # Clear the cell completely (including any formulas)
+                count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
+                count_cell.value = count_value
                 count_cell.number_format = "0"
 
     # Totals section - dynamically calculate totals row and range based on number of styles
