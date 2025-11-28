@@ -9,7 +9,8 @@ import sys
 from io import BytesIO
 import re
 from datetime import datetime
-import socket
+from typing import Optional
+import base64
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,13 +33,7 @@ except Exception:
     build = None
     MediaIoBaseUpload = None
 
-try:
-    from google_auth_oauthlib.flow import InstalledAppFlow, Flow
-    from google.auth.transport.requests import Request
-    import google.auth
-except Exception:
-    InstalledAppFlow = None
-    Flow = None
+# OAuth imports removed - using service account credentials instead
 
 
 st.set_page_config(
@@ -62,210 +57,28 @@ st.markdown(
 )
 
 
-def load_service_account_credentials():
-    """Load Google service account credentials from st.secrets."""
-    try:
-        info = st.secrets.get('google_service_account')
-        if not info or not SACredentials:
-            return None
-        scopes = [
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/presentations",
-        ]
-        return SACredentials.from_service_account_info(dict(info), scopes=scopes)
-    except Exception:
-        return None
-
-
-def load_oauth_credentials():
-    """Load user OAuth credentials from secrets and run local flow if needed (fallback)."""
-    try:
-        oauth = st.secrets.get('google_oauth')
-        if not oauth or not Flow:
-            st.error("Google OAuth secrets not found or Flow not available")
-            return None
-        
-        scopes = [
-            "https://www.googleapis.com/auth/drive",
-            "https://www.googleapis.com/auth/presentations",
-        ]
-        
-        # Check if we're in a deployed environment
-        is_production_flag = oauth.get('is_production', False) or st.secrets.get('is_production', False)
-        is_deployed = (
-            os.environ.get('STREAMLIT_SERVER_HEADLESS') == 'true' or
-            is_production_flag or
-            'streamlit.app' in socket.getfqdn() or
-            'blanklabelshop.com' in socket.getfqdn()
+def _get_credentials():
+    """Load service account credentials from Streamlit secrets (same pattern as google_sheets_uploader)."""
+    if not SACredentials:
+        raise RuntimeError(
+            "Google API libraries not available. Please install google-auth and google-api-python-client."
         )
-        
-        # Check if we have stored credentials in session state
-        if 'google_creds' in st.session_state and st.session_state.google_creds:
-            try:
-                # Try to refresh the credentials
-                creds = st.session_state.google_creds
-                if creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                    st.session_state.google_creds = creds
-                return creds
-            except Exception:
-                # If refresh fails, clear the stored credentials
-                st.session_state.google_creds = None
-        
-        if is_deployed:
-            # For deployed environments, use web-based OAuth flow
-            # Redirect back to the same page (proposal_creator) to handle the callback
-            redirect_uri = oauth.get("redirect_uri", "https://blanklabelshop.com/ads-dashboard/proposal_creator")
-            
-            flow = Flow.from_client_config(
-                {
-                    "web": {
-                        "client_id": oauth["client_id"],
-                        "client_secret": oauth["client_secret"],
-                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                        "token_uri": "https://oauth2.googleapis.com/token",
-                        "redirect_uris": [
-                            redirect_uri
-                        ]
-                    }
-                },
-                scopes=scopes,
-            )
-            flow.redirect_uri = redirect_uri
-            
-            # Check for OAuth callback with authorization code
-            query_params = st.query_params
-            if "code" in query_params:
-                try:
-                    # Verify state parameter for security
-                    if "state" in query_params and st.session_state.get('oauth_state'):
-                        if query_params["state"] != st.session_state.get("oauth_state"):
-                            st.error("❌ Invalid OAuth state. Possible security issue. Please try again.")
-                            return None
-                    
-                    # Exchange code for credentials
-                    flow.fetch_token(code=query_params["code"])
-                    creds = flow.credentials
-                    
-                    # Store credentials in session state
-                    st.session_state.google_creds = creds
-                    
-                    # Save credentials to file for persistence
-                    try:
-                        import json
-                        cred_file = "/tmp/google_creds.json"
-                        with open(cred_file, "w") as f:
-                            f.write(creds.to_json())
-                    except Exception:
-                        pass  # Ignore if we can't save to file
-                    
-                    # Set flag to indicate we're returning from OAuth
-                    st.session_state['pc_oauth_in_progress'] = True
-                    
-                    # Clear OAuth state and query parameters
-                    if 'oauth_state' in st.session_state:
-                        del st.session_state['oauth_state']
-                    st.query_params.clear()
-                    
-                    # If we have the flag set, automatically proceed with Google Slides creation
-                    if st.session_state.get('pc_create_slides_after_oauth', False):
-                        st.success("✅ Authentication successful! Creating Google Slides...")
-                    else:
-                        st.success("✅ Authentication successful!")
-                    # Return the credentials so the flow continues to create Google Slides
-                    return creds
-                    
-                except Exception as token_error:
-                    st.error(f"❌ Failed to exchange authorization code: {token_error}")
-                    st.info("Please try the authentication process again.")
-                    return None
-            
-            else:
-                # Generate authorization URL
-                try:
-                    auth_url, state = flow.authorization_url(
-                        access_type="offline",
-                        include_granted_scopes="true",
-                        prompt="consent"
-                    )
-                    
-                    # Store the flow state for verification
-                    st.session_state['oauth_state'] = state
-                    
-                    # Show direct authorization link (no auto-redirect)
-                    st.markdown(f"[🔗 Click here to authorize Google access]({auth_url})")
-                    return None
-                    
-                except Exception as e:
-                    st.error(f"❌ OAuth authentication failed: {str(e)}")
-                    return None
-        
-        else:
-            # For local development, use InstalledAppFlow with local server
-            if InstalledAppFlow:
-                flow = InstalledAppFlow.from_client_config(
-                    {
-                        "installed": {
-                            "client_id": oauth["client_id"],
-                            "client_secret": oauth["client_secret"],
-                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                            "token_uri": "https://oauth2.googleapis.com/token",
-                            "redirect_uris": [
-                                "http://localhost:8080",
-                                "http://localhost:8081", 
-                                "http://localhost:8082",
-                                "http://localhost:8083",
-                                "http://localhost:8084",
-                                "http://127.0.0.1:8080",
-                                "http://127.0.0.1:8081",
-                                "http://127.0.0.1:8082", 
-                                "http://127.0.0.1:8083",
-                                "http://127.0.0.1:8084",
-                                "http://localhost",
-                                "http://127.0.0.1"
-                            ]
-                        }
-                    },
-                    scopes=scopes,
-                )
-                
-                # Try local server ports
-                ports_to_try = [8080, 8081, 8082, 8083, 8084]
-                creds = None
-                
-                for port in ports_to_try:
-                    try:
-                        creds = flow.run_local_server(port=port)
-                        # Store credentials in session state
-                        st.session_state.google_creds = creds
-                        break
-                    except OSError as e:
-                        if "10048" in str(e) or "Address already in use" in str(e):
-                            continue
-                        else:
-                            continue
-                    except Exception as e:
-                        continue
-                
-                # Fallback to console flow
-                if not creds:
-                    try:
-                        creds = flow.run_console()
-                        # Store credentials in session state
-                        st.session_state.google_creds = creds
-                    except AttributeError:
-                        # If run_console doesn't exist, return None
-                        st.warning("Console OAuth flow not available.")
-                        return None
-                
-                return creds
-            else:
-                st.error("InstalledAppFlow not available for local development")
-                return None
-        
-    except Exception as e:
-        st.error(f"OAuth authentication failed: {str(e)}")
-        return None
+
+    info = st.secrets.get("google_service_account")
+    if not info:
+        raise RuntimeError(
+            "Google Cloud service account credentials missing in secrets. "
+            "Add `google_service_account` to your Streamlit secrets."
+        )
+
+    scopes = [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/presentations",
+    ]
+    return SACredentials.from_service_account_info(
+        info,
+        scopes=scopes
+    )
 
 
 def create_presentation(title_name: str,
@@ -898,12 +711,42 @@ def create_from_template_pptx(template_path: str,
     return out.getvalue()
 
 
-def cleanup_old_proposals(drive, max_files: int = 10):
+def cleanup_old_proposals(drive, parent_folder_id: Optional[str] = None, max_files: int = 10):
     """Clean up old proposal files to prevent quota issues."""
     try:
-        # Find all proposal files
+        # Find all proposal files in the specified folder
         query = "name contains 'Proposal -' and mimeType='application/vnd.google-apps.presentation'"
-        results = drive.files().list(q=query, orderBy='createdTime desc', fields='files(id,name,createdTime)').execute()
+        if parent_folder_id:
+            query += f" and '{parent_folder_id}' in parents"
+        
+        list_kwargs = {
+            "q": query,
+            "orderBy": "createdTime desc",
+            "fields": "files(id,name,createdTime)",
+        }
+        
+        # Check if folder is in a Shared Drive
+        shared_drive_id = None
+        if parent_folder_id:
+            try:
+                folder_info = drive.files().get(
+                    fileId=parent_folder_id,
+                    fields="driveId",
+                    supportsAllDrives=True
+                ).execute()
+                folder_drive_id = folder_info.get("driveId")
+                if folder_drive_id:
+                    shared_drive_id = folder_drive_id
+                    list_kwargs.update({
+                        "supportsAllDrives": True,
+                        "includeItemsFromAllDrives": True,
+                        "corpora": "drive",
+                        "driveId": shared_drive_id,
+                    })
+            except Exception:
+                pass
+        
+        results = drive.files().list(**list_kwargs).execute()
         files = results.get('files', [])
         
         # If we have more than max_files, delete the oldest ones
@@ -911,7 +754,10 @@ def cleanup_old_proposals(drive, max_files: int = 10):
             files_to_delete = files[max_files:]
             for file in files_to_delete:
                 try:
-                    drive.files().delete(fileId=file['id']).execute()
+                    delete_kwargs = {"fileId": file['id']}
+                    if shared_drive_id:
+                        delete_kwargs["supportsAllDrives"] = True
+                    drive.files().delete(**delete_kwargs).execute()
                     st.info(f"Cleaned up old proposal: {file['name']}")
                 except Exception as e:
                     st.warning(f"Could not delete {file['name']}: {e}")
@@ -924,16 +770,21 @@ def upload_pptx_to_google_slides(name_value: str,
                                   sourcing_items: list[str],
                                   development_items: list[str],
                                   treatment_items: list[str],
-                                  image_png_bytes: bytes | None,
-                                  creds) -> str:
+                                  image_png_bytes: bytes | None) -> str:
     """Create Google Slides from PPTX content using Drive API conversion. Returns new presentationId."""
     if not build or not MediaIoBaseUpload:
         raise RuntimeError("Google API client not available")
     
+    # Get credentials using service account (same pattern as google_sheets_uploader)
+    creds = _get_credentials()
     drive = build("drive", "v3", credentials=creds)
     
+    # Get parent folder ID for proposals from secrets
+    cfg = st.secrets.get("google_drive", {}) or {}
+    parent_folder_id = cfg.get("parent_folder_id_proposal")
+    
     # Clean up old proposal files to prevent quota issues
-    cleanup_old_proposals(drive)
+    cleanup_old_proposals(drive, parent_folder_id)
     
     # Step 1: Generate the perfect PPTX first
     # Get the template path
@@ -969,13 +820,38 @@ def upload_pptx_to_google_slides(name_value: str,
         "mimeType": "application/vnd.google-apps.presentation"  # This tells Drive to convert to Google Slides
     }
     
+    # Set parent folder if specified
+    if parent_folder_id:
+        file_metadata["parents"] = [parent_folder_id]
+    
+    # Check if folder is in a Shared Drive
+    shared_drive_id = None
+    if parent_folder_id:
+        try:
+            folder_info = drive.files().get(
+                fileId=parent_folder_id,
+                fields="id, name, driveId",
+                supportsAllDrives=True
+            ).execute()
+            folder_drive_id = folder_info.get("driveId")
+            if folder_drive_id:
+                shared_drive_id = folder_drive_id
+        except Exception:
+            # If we can't get folder info, continue without Shared Drive support
+            pass
+    
     try:
         # Upload and convert in one step
-        uploaded_file = drive.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields="id, webViewLink, name"
-        ).execute()
+        create_kwargs = {
+            "body": file_metadata,
+            "media_body": media,
+            "fields": "id, webViewLink, name"
+        }
+        # Use supportsAllDrives for Shared Drives
+        if shared_drive_id:
+            create_kwargs["supportsAllDrives"] = True
+        
+        uploaded_file = drive.files().create(**create_kwargs).execute()
         
         pres_id = uploaded_file["id"]
         web_link = uploaded_file["webViewLink"]
@@ -1001,50 +877,17 @@ def main():
     st.title("📽️ Proposal Creator")
     
     inputs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "inputs")
-    
-    # Check if we're returning from OAuth and should auto-trigger slides creation
-    auto_create_slides = False
-    if st.session_state.get('pc_create_slides_after_oauth', False) and 'google_creds' in st.session_state:
-        auto_create_slides = True
-        # Reset the flag immediately to prevent multiple triggers
-        st.session_state['pc_create_slides_after_oauth'] = False
-    
-    # Check if we just returned from OAuth callback
-    # When returning from OAuth, use backup values for widgets instead of widget state
-    is_oauth_return = st.session_state.get('pc_oauth_in_progress', False)
-    
-    # Get backup values if available and we're returning from OAuth
-    backup_name = st.session_state.get('pc_backup_name_value') if is_oauth_return else None
-    backup_s1 = st.session_state.get('pc_backup_s1') if is_oauth_return else None
-    backup_s2 = st.session_state.get('pc_backup_s2') if is_oauth_return else None
-    backup_s3 = st.session_state.get('pc_backup_s3') if is_oauth_return else None
-    backup_s4 = st.session_state.get('pc_backup_s4') if is_oauth_return else None
-    backup_pkg_sourcing = st.session_state.get('pc_backup_pkg_sourcing') if is_oauth_return else None
-    backup_pkg_treatment = st.session_state.get('pc_backup_pkg_treatment') if is_oauth_return else None
-    backup_pkg_development = st.session_state.get('pc_backup_pkg_development') if is_oauth_return else None
-    
-    # Clear the OAuth flag after we've used it to restore data
-    if is_oauth_return:
-        st.session_state['pc_oauth_in_progress'] = False
-    
-    # Show warning about OAuth flow
-    # Check if there are active credentials or if we're in the middle of OAuth
-    has_google_creds = 'google_creds' in st.session_state and st.session_state.get('google_creds') is not None
-    
-    # Only show warning if user hasn't authenticated yet
-    if not has_google_creds and not is_oauth_return:
-        st.warning("⚠️ **Important:** If you want to create Google Slides, click '**Create Google Slides**' FIRST to authorize Google access. This will avoid losing data when redirected.")
 
     # Basic variables
     st.subheader("Variables")
-    name_value = st.text_input("Client Name", value=backup_name if backup_name is not None else st.session_state.get('pc_name_value', ""), key='pc_name_value')
+    name_value = st.text_input("Client Name", value=st.session_state.get('pc_name_value', ""), key='pc_name_value')
 
     # Scope items (exact four items)
     st.subheader("Scope Items")
-    s1 = st.checkbox("SOURCE FABRIC & TRIMS EFFECTIVELY", value=backup_s1 if backup_s1 is not None else st.session_state.get('pc_s1', False), key='pc_s1')
-    s2 = st.checkbox("DEVELOP HIGH QUALITY PATTERNS & SAMPLES", value=backup_s2 if backup_s2 is not None else st.session_state.get('pc_s2', False), key='pc_s2')
-    s3 = st.checkbox("PRODUCE A SMALL VOLUME PRODUCTION RUN FOR SALES", value=backup_s3 if backup_s3 is not None else st.session_state.get('pc_s3', False), key='pc_s3')
-    s4 = st.checkbox("MANAGE FABRIC TREATMENTS WITH PRECISION", value=backup_s4 if backup_s4 is not None else st.session_state.get('pc_s4', False), key='pc_s4')
+    s1 = st.checkbox("SOURCE FABRIC & TRIMS EFFECTIVELY", value=st.session_state.get('pc_s1', False), key='pc_s1')
+    s2 = st.checkbox("DEVELOP HIGH QUALITY PATTERNS & SAMPLES", value=st.session_state.get('pc_s2', False), key='pc_s2')
+    s3 = st.checkbox("PRODUCE A SMALL VOLUME PRODUCTION RUN FOR SALES", value=st.session_state.get('pc_s3', False), key='pc_s3')
+    s4 = st.checkbox("MANAGE FABRIC TREATMENTS WITH PRECISION", value=st.session_state.get('pc_s4', False), key='pc_s4')
     group_scope = [label for flag, label in [
         (s1, "SOURCE FABRIC & TRIMS EFFECTIVELY"),
         (s2, "DEVELOP HIGH QUALITY PATTERNS & SAMPLES"),
@@ -1056,11 +899,11 @@ def main():
     st.subheader("Additional Packages")
     colp1, colp2, colp3 = st.columns(3)
     with colp1:
-        pkg_sourcing = st.checkbox("SOURCING ($1330 per style)", value=backup_pkg_sourcing if backup_pkg_sourcing is not None else st.session_state.get('pc_pkg_sourcing', False), key='pc_pkg_sourcing')
+        pkg_sourcing = st.checkbox("SOURCING ($1330 per style)", value=st.session_state.get('pc_pkg_sourcing', False), key='pc_pkg_sourcing')
     with colp2:
-        pkg_treatment = st.checkbox("TREATMENT ($760 per service)", value=backup_pkg_treatment if backup_pkg_treatment is not None else st.session_state.get('pc_pkg_treatment', False), key='pc_pkg_treatment')
+        pkg_treatment = st.checkbox("TREATMENT ($760 per service)", value=st.session_state.get('pc_pkg_treatment', False), key='pc_pkg_treatment')
     with colp3:
-        pkg_development = st.checkbox("DEVELOPMENT ($2320 per style)", value=backup_pkg_development if backup_pkg_development is not None else st.session_state.get('pc_pkg_development', False), key='pc_pkg_development')
+        pkg_development = st.checkbox("DEVELOPMENT ($2320 per style)", value=st.session_state.get('pc_pkg_development', False), key='pc_pkg_development')
 
     # Show sub-field descriptions via expanders on page
     with st.expander("SOURCING - sub-fields", expanded=False):
@@ -1128,7 +971,7 @@ def main():
     with col_dl:
         generate = st.button("Create PowerPoint", type="primary")
     with col_gs:
-        push_gslides = st.button("Create Google Slides", type="primary") or auto_create_slides
+        push_gslides = st.button("Create Google Slides", type="primary")
     
 
     if generate:
@@ -1156,122 +999,79 @@ def main():
                     development_items,
                     img_bytes,
                 )
-            st.success("PowerPoint generated")
-            st.download_button(
-                label="Download PowerPoint",
-                data=pptx_bytes,
-                file_name=f"proposal_{name_value or 'client'}.pptx",
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            )
+            
+            # Store in session state and trigger auto-download
+            st.session_state['pptx_download_data'] = pptx_bytes
+            st.session_state['pptx_download_filename'] = f"proposal_{name_value or 'client'}.pptx"
+            st.session_state['pptx_download_timestamp'] = datetime.now().timestamp()
+            st.session_state['pptx_auto_download'] = True
+            st.success("PowerPoint generated and downloaded!!!")
+            
         except Exception as e:
             st.error(f"Failed to generate PowerPoint: {e}")
+    
+    # Auto-download logic: trigger download automatically using data URL
+    if st.session_state.get('pptx_auto_download', False):
+        pptx_bytes = st.session_state.get('pptx_download_data')
+        filename = st.session_state.get('pptx_download_filename', 'proposal.pptx')
+        
+        if pptx_bytes:
+            # Reset the flag immediately to prevent multiple executions
+            st.session_state['pptx_auto_download'] = False
+            
+            # Convert to base64 for data URL download
+            b64_pptx = base64.b64encode(pptx_bytes).decode()
+            
+            # Use Streamlit components for more reliable auto-download
+            import streamlit.components.v1 as components
+            
+            # Use a unique timestamp to ensure component only renders once per generation
+            timestamp = st.session_state.get('pptx_download_timestamp', 'default')
+            
+            components.html(f"""
+            <script>
+            (function() {{
+                // Use a flag with timestamp to ensure download only happens once per generation
+                const downloadId = 'pptx_download_{timestamp}';
+                if (window.pptxDownloadTriggered === downloadId) {{
+                    return;
+                }}
+                window.pptxDownloadTriggered = downloadId;
+                
+                function triggerDownload() {{
+                    try {{
+                        const data = 'data:application/vnd.openxmlformats-officedocument.presentationml.presentation;base64,{b64_pptx}';
+                        const link = document.createElement('a');
+                        link.href = data;
+                        link.download = '{filename}';
+                        link.style.display = 'none';
+                        document.body.appendChild(link);
+                        link.click();
+                        setTimeout(() => {{
+                            if (link.parentNode) {{
+                                document.body.removeChild(link);
+                            }}
+                        }}, 100);
+                        return true;
+                    }} catch(e) {{
+                        console.error('Download failed:', e);
+                        return false;
+                    }}
+                }}
+                
+                // Try once with a small delay to ensure DOM is ready
+                setTimeout(triggerDownload, 100);
+            }})();
+            </script>
+            """, height=0)
+            
+            st.success(f"✅ PowerPoint generated: {filename}")
 
     if push_gslides:
-        # Store all form data in backup session state BEFORE initiating OAuth
-        # This ensures data persists across page redirects
-        # Using backup keys to avoid conflicts with widget keys
-        st.session_state['pc_backup_name_value'] = name_value
-        st.session_state['pc_backup_s1'] = s1
-        st.session_state['pc_backup_s2'] = s2
-        st.session_state['pc_backup_s3'] = s3
-        st.session_state['pc_backup_s4'] = s4
-        st.session_state['pc_backup_pkg_sourcing'] = pkg_sourcing
-        st.session_state['pc_backup_pkg_treatment'] = pkg_treatment
-        st.session_state['pc_backup_pkg_development'] = pkg_development
-        if img_bytes is not None:
-            st.session_state['pc_img_bytes'] = img_bytes
-        # Mark that we're ready to create slides after OAuth completes
-        st.session_state['pc_create_slides_after_oauth'] = True
-
-        # Initiate OAuth (in production shows an authorization link and returns)
-        creds = load_oauth_credentials()
-        
-        # If OAuth is in progress (waiting for user input), don't proceed with Google Slides creation
-        if creds is None:
-            # OAuth flow is in progress (showing auth URL), don't proceed
-            # Check if we're returning from OAuth callback and should auto-create
-            if st.session_state.get('pc_create_slides_after_oauth', False) and 'google_creds' in st.session_state:
-                # We have credentials from OAuth callback, use them
-                creds = st.session_state.google_creds
-                # Clear the flag
-                st.session_state['pc_create_slides_after_oauth'] = False
-            else:
-                return
-        
-        if not creds:
-            # Check if we're in deployed environment and OAuth failed
-            is_deployed = (
-                os.environ.get('STREAMLIT_SERVER_HEADLESS') == 'true' or
-                'streamlit.app' in socket.getfqdn() or
-                'blanklabelshop.com' in socket.getfqdn()
-            )
-            
-            if is_deployed:
-                st.error("OAuth authentication failed. Cannot create Google Slides.")
-                st.info("💡 **Troubleshooting Tips:**")
-                st.markdown("""
-                - Make sure you're using the correct Google account with sufficient Drive storage
-                - Try refreshing the page and starting the authentication process again
-                - If you see 'Using out-of-band OAuth flow...', follow the authentication steps carefully
-                - Ensure you copy the complete authorization code from the Google OAuth page
-                """)
-                return
-            else:
-                creds = load_service_account_credentials()
-        
-        if not creds:
-            st.error("Failed to load any Google credentials")
-            st.warning("Google Slides credentials not configured. Add service account in secrets or complete OAuth flow.")
-        elif not build:
+        if not build:
             st.error("Google API client not available")
         else:
             try:
-                # Rebuild values from backup session state (in case of OAuth redirect)
-                # Use backup keys first, then fall back to current widget values
-                name_value = st.session_state.get('pc_backup_name_value', name_value)
-                s1 = st.session_state.get('pc_backup_s1', s1)
-                s2 = st.session_state.get('pc_backup_s2', s2)
-                s3 = st.session_state.get('pc_backup_s3', s3)
-                s4 = st.session_state.get('pc_backup_s4', s4)
-                group_scope = [label for flag, label in [
-                    (s1, "SOURCE FABRIC & TRIMS EFFECTIVELY"),
-                    (s2, "DEVELOP HIGH QUALITY PATTERNS & SAMPLES"),
-                    (s3, "PRODUCE A SMALL VOLUME PRODUCTION RUN FOR SALES"),
-                    (s4, "MANAGE FABRIC TREATMENTS WITH PRECISION"),
-                ] if flag]
-                pkg_sourcing = st.session_state.get('pc_backup_pkg_sourcing', pkg_sourcing)
-                pkg_treatment = st.session_state.get('pc_backup_pkg_treatment', pkg_treatment)
-                pkg_development = st.session_state.get('pc_backup_pkg_development', pkg_development)
-                sourcing_items = [
-                    "SOURCING INTAKE SESSION",
-                    "EXPERT INPUT AND PLANNING",
-                    "SWATCHES AND TRIMS GATHERED",
-                    "NEGOTIATE PRICING AND MINIMUMS",
-                    "GUIDANCE IN POs AND ORDERING",
-                    "TRACKING RECEIPT OF ORDERS",
-                    "1-2 ROUNDS OF REVISIONS",
-                ] if pkg_sourcing else []
-                development_items = [
-                    "DEVELOPMENT ONBOARDING SESSION",
-                    "TEG SPECIFICATION SHEETS COMPLETED",
-                    "TECHNICAL INTAKE WITH PATTERN MAKER",
-                    "FIRST PATTERNS & FIRST SAMPLES",
-                    "ONE FITTING WITH PATTERN MAKER",
-                    "ONE ROUND OF FIT ADJUSTMENTS",
-                    "ONE DUPLICATE PER STYLE",
-                    "FINAL PRODUCTION READY PATTERNS",
-                ] if pkg_development else []
-                treatment_items = [
-                    "TREATMENT INTAKE SESSION",
-                    "EXPERT INPUT AND PLANNING",
-                    "ARTWORK / COLOR APPROVAL",
-                    "NEGOTIATE PRICING AND MINIMUMS",
-                    "GUIDANCE IN POs AND ORDERING",
-                    "COORDINATE SEND-OUTS",
-                    "PROJECT MANAGEMENT",
-                ] if pkg_treatment else []
-                img_bytes = st.session_state.get('pc_img_bytes', img_bytes)
-
                 new_id = upload_pptx_to_google_slides(
                     name_value,
                     group_scope,
@@ -1279,7 +1079,6 @@ def main():
                     development_items,
                     treatment_items,
                     img_bytes,
-                    creds,
                 )
                 st.success(f"Google Slides created successfully! ID: {new_id}")
                 st.info(f"View your presentation: https://docs.google.com/presentation/d/{new_id}/edit")
