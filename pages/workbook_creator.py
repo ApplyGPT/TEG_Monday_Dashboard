@@ -867,6 +867,7 @@ def apply_development_package(
         col_c_idx = column_index_from_string("C")
         col_d_idx = column_index_from_string("D")
         final_samples_row = None
+        row_final_samples_new = None  # Store the row where new FINAL SAMPLES is created
         
         # Find the "FINAL SAMPLES" row (should be around row 31-32)
         for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
@@ -1039,6 +1040,7 @@ def apply_development_package(
             
             # Row 37-38: FINAL SAMPLES (count of all styles)
             row_final_samples = insert_row + 4
+            row_final_samples_new = row_final_samples  # Store for later use
             # Clear column C to ensure no leftover values
             if get_column_letter:
                 safe_set_cell_value(ws, f"{get_column_letter(col_c_idx)}{row_final_samples}", None)
@@ -1237,109 +1239,6 @@ def apply_development_package(
             cell.value = f"=COUNT({addon_range})"
             cell.number_format = "0"
 
-        # Update pattern/sample counts in column D (the "#" column)
-        # Patterns: all styles (regular + activewear, excluding custom line items)
-        # Activewear styles count as 1.5 each for patterns (rounded up)
-        # Use formula: count all styles, then add 0.5 for each activewear style (rounded up)
-        patterns_row = find_label_row("PATTERNS")
-        if patterns_row:
-            col_d_idx = column_index_from_string("D")
-            # Check if merged and remember pattern
-            was_merged = False
-            merge_pattern = None
-            for merged_range in list(ws.merged_cells.ranges):
-                if (merged_range.min_row <= patterns_row <= merged_range.max_row and
-                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                    was_merged = True
-                    merge_pattern = (merged_range.min_row, merged_range.max_row, merged_range.min_col, merged_range.max_col)
-                    try:
-                        ws.unmerge_cells(range_string=str(merged_range))
-                    except Exception:
-                        pass
-                    break
-            # Clear the cell completely (including any formulas)
-            count_cell = ws.cell(row=patterns_row, column=col_d_idx)
-            count_cell.value = None
-            # Create formula: count all styles in column D, then add ROUNDUP(activewear_count * 0.5, 0)
-            # Formula: COUNTIF(D10:D{last_regular_style_row}, ">0") + ROUNDUP(COUNTIF(D10:D{last_regular_style_row}, 3560) * 0.5, 0)
-            # This counts all styles, then adds 0.5 for each activewear (which already counts as 1, so total is 1.5 each)
-            # Excel will automatically convert function names to local language (e.g., COUNTIF -> CONT.SE, ROUNDUP -> ARREDONDAR.PARA.CIMA)
-            if get_column_letter and last_regular_style_row:
-                # Use column letter format: D10:D{row}
-                end_col_letter_d = get_column_letter(column_index_from_string("D"))
-                formula = f"=COUNTIF({end_col_letter_d}10:{end_col_letter_d}{last_regular_style_row}, \">0\") + ROUNDUP(COUNTIF({end_col_letter_d}10:{end_col_letter_d}{last_regular_style_row}, 3560) * 0.5, 0)"
-            else:
-                # Fallback to direct calculation
-                patterns_count = num_regular + math.ceil(num_activewear * 1.5)
-                formula = patterns_count
-            # Re-merge if needed, then set formula/value
-            if was_merged and merge_pattern and safe_merge_cells:
-                min_row, max_row, min_col, max_col = merge_pattern
-                if get_column_letter:
-                    start_col_letter = get_column_letter(min_col)
-                    end_col_letter = get_column_letter(max_col)
-                    range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
-                    safe_merge_cells(ws, range_str)
-                # Set formula/value AFTER re-merging
-                count_cell = ws.cell(row=patterns_row, column=col_d_idx)
-                count_cell.value = formula
-                count_cell.number_format = "0"
-            else:
-                # Not merged, set value directly
-                count_cell.value = formula
-                count_cell.number_format = "0"
-        
-        # First Samples: all styles (regular + activewear, excluding custom line items)
-        # Activewear styles count as 1.5 each for first samples (rounded up)
-        # Use formula: count all styles, then add 0.5 for each activewear style (rounded up)
-        first_samples_row = find_label_row("FIRST SAMPLES")
-        if first_samples_row:
-            col_d_idx = column_index_from_string("D")
-            # Check if merged and remember pattern
-            was_merged = False
-            merge_pattern = None
-            for merged_range in list(ws.merged_cells.ranges):
-                if (merged_range.min_row <= first_samples_row <= merged_range.max_row and
-                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                    was_merged = True
-                    merge_pattern = (merged_range.min_row, merged_range.max_row, merged_range.min_col, merged_range.max_col)
-                    try:
-                        ws.unmerge_cells(range_string=str(merged_range))
-                    except Exception:
-                        pass
-                    break
-            # Clear the cell completely (including any formulas)
-            count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
-            count_cell.value = None
-            # Create formula: count all styles in column D, then add ROUNDUP(activewear_count * 0.5, 0)
-            # Formula: COUNTIF(D10:D{last_regular_style_row}, ">0") + ROUNDUP(COUNTIF(D10:D{last_regular_style_row}, 3560) * 0.5, 0)
-            # This counts all styles, then adds 0.5 for each activewear (which already counts as 1, so total is 1.5 each)
-            # Excel will automatically convert function names to local language (e.g., COUNTIF -> CONT.SE, ROUNDUP -> ARREDONDAR.PARA.CIMA)
-            if get_column_letter and last_regular_style_row:
-                # Use column letter format: D10:D{row}
-                end_col_letter_d = get_column_letter(column_index_from_string("D"))
-                formula = f"=COUNTIF({end_col_letter_d}10:{end_col_letter_d}{last_regular_style_row}, \">0\") + ROUNDUP(COUNTIF({end_col_letter_d}10:{end_col_letter_d}{last_regular_style_row}, 3560) * 0.5, 0)"
-            else:
-                # Fallback to direct calculation
-                first_samples_count = num_regular + math.ceil(num_activewear * 1.5)
-                formula = first_samples_count
-            # Re-merge if needed, then set formula/value
-            if was_merged and merge_pattern and safe_merge_cells:
-                min_row, max_row, min_col, max_col = merge_pattern
-                if get_column_letter:
-                    start_col_letter = get_column_letter(min_col)
-                    end_col_letter = get_column_letter(max_col)
-                    range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
-                    safe_merge_cells(ws, range_str)
-                # Set formula/value AFTER re-merging
-                count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
-                count_cell.value = formula
-                count_cell.number_format = "0"
-            else:
-                # Not merged, set value directly
-                count_cell.value = formula
-                count_cell.number_format = "0"
-        
         # Round of Fittings: always 1
         fittings_row = find_label_row("ROUND OF FITTINGS")
         if fittings_row:
@@ -1467,8 +1366,11 @@ def apply_development_package(
             
             # Final Samples: count is already set in the merge section above, but verify it's correct here
             # (This is a backup check - the count should already be set when merging FINAL SAMPLES)
-            final_samples_row = find_label_row("FINAL SAMPLES")
-            if final_samples_row:
+            # Use row_final_samples_new if available (the newly created FINAL SAMPLES row), otherwise search for it
+            # Always prefer row_final_samples_new since it's the newly created row
+            final_samples_row_to_use = row_final_samples_new if row_final_samples_new else find_label_row("FINAL SAMPLES")
+            if final_samples_row_to_use:
+                final_samples_row = final_samples_row_to_use
                 # Use direct count instead of formula
                 count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
                 col_d_idx = column_index_from_string("D")
@@ -1502,6 +1404,71 @@ def apply_development_package(
                     if Alignment:
                         cell_d = ws.cell(row=final_samples_row, column=col_d_idx)
                         cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+        
+        # Update PATTERNS and FIRST SAMPLES to have the same value as FINAL SAMPLES (num_styles)
+        # This applies to both activewear and non-activewear cases, after find_label_row is defined
+        # Note: find_label_row searches column H, but PATTERNS/FIRST SAMPLES are in column B
+        # So we need to search column B instead
+        patterns_row = None
+        for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+            value = ws.cell(row=scan_row, column=column_index_from_string("B")).value
+            if isinstance(value, str) and "pattern" in value.lower():
+                patterns_row = scan_row
+                break
+        
+        if patterns_row:
+            col_d_idx = column_index_from_string("D")
+            # Unmerge if needed and clear any formulas
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= patterns_row <= merged_range.max_row and
+                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+            # Clear the cell completely (including any formulas)
+            count_cell = ws.cell(row=patterns_row, column=col_d_idx)
+            count_cell.value = None
+            # Set direct numeric value (same as FINAL SAMPLES: num_styles)
+            count_cell.value = num_styles
+            count_cell.number_format = "0"
+            # Merge and center (PATTERNS typically spans 2 rows)
+            patterns_row_second = patterns_row + 1
+            if safe_merge_cells:
+                safe_merge_cells(ws, f"D{patterns_row}:D{patterns_row_second}")
+            if Alignment:
+                count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+        
+        first_samples_row = None
+        for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+            value = ws.cell(row=scan_row, column=column_index_from_string("B")).value
+            if isinstance(value, str) and "first" in value.lower() and "sample" in value.lower():
+                first_samples_row = scan_row
+                break
+        
+        if first_samples_row:
+            col_d_idx = column_index_from_string("D")
+            # Unmerge if needed and clear any formulas
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= first_samples_row <= merged_range.max_row and
+                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+            # Clear the cell completely (including any formulas)
+            count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
+            count_cell.value = None
+            # Set direct numeric value (same as FINAL SAMPLES: num_styles)
+            count_cell.value = num_styles
+            count_cell.number_format = "0"
+            # Merge and center (FIRST SAMPLES typically spans 2 rows)
+            first_samples_row_second = first_samples_row + 1
+            if safe_merge_cells:
+                safe_merge_cells(ws, f"D{first_samples_row}:D{first_samples_row_second}")
+            if Alignment:
+                count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            
         else:
             # Final Samples: all styles (regular only, no activewear, excluding custom line items)
             final_samples_row = find_label_row("FINAL SAMPLES")
@@ -1522,6 +1489,47 @@ def apply_development_package(
                 count_cell.value = None
                 # Set direct numeric value (not a formula)
                 count_cell.value = count_value
+                count_cell.number_format = "0"
+            
+            # Now that FINAL SAMPLES is set, update PATTERNS and FIRST SAMPLES to have the same value
+            # Patterns: all styles (regular only, no activewear, excluding custom line items)
+            # Set to the same value as FINAL SAMPLES (num_styles) - direct value, not a formula
+            patterns_row = find_label_row("PATTERNS")
+            if patterns_row:
+                col_d_idx = column_index_from_string("D")
+                # Unmerge if needed and clear any formulas
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= patterns_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                # Clear the cell completely (including any formulas)
+                count_cell = ws.cell(row=patterns_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (same as FINAL SAMPLES: num_styles)
+                count_cell.value = num_styles
+                count_cell.number_format = "0"
+            
+            # First Samples: all styles (regular only, no activewear, excluding custom line items)
+            # Set to the same value as FINAL SAMPLES (num_styles) - direct value, not a formula
+            first_samples_row = find_label_row("FIRST SAMPLES")
+            if first_samples_row:
+                col_d_idx = column_index_from_string("D")
+                # Unmerge if needed and clear any formulas
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= first_samples_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                # Clear the cell completely (including any formulas)
+                count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (same as FINAL SAMPLES: num_styles)
+                count_cell.value = num_styles
                 count_cell.number_format = "0"
 
     # Totals section - dynamically calculate totals row and range based on number of styles
