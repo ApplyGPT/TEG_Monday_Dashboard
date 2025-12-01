@@ -1,7 +1,6 @@
 """
 Standalone Database Refresh Script
 Can be run via cron job to refresh Monday.com and Calendly databases
-Also handles QuickBooks refresh token updates
 """
 import requests
 import sqlite3
@@ -89,87 +88,6 @@ def load_config():
     
     print(f"✅ Loaded configuration with sections: {list(config.keys())}")
     return config
-
-def update_quickbooks_refresh_token(config):
-    """Update QuickBooks refresh token if a new one is available"""
-    try:
-        if 'quickbooks' not in config:
-            print("⚠️ No QuickBooks configuration found")
-            return False
-        
-        qb_config = config['quickbooks']
-        client_id = qb_config.get('client_id')
-        client_secret = qb_config.get('client_secret')
-        current_refresh_token = qb_config.get('refresh_token')
-        
-        if not current_refresh_token:
-            print("⚠️ No refresh_token found in secrets.toml")
-            return False
-        
-        # Try to refresh the token
-        auth_url = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
-        
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json"
-        }
-        
-        data = {
-            "grant_type": "refresh_token",
-            "refresh_token": current_refresh_token
-        }
-        
-        response = requests.post(
-            auth_url,
-            data=data,
-            headers=headers,
-            auth=requests.auth.HTTPBasicAuth(client_id, client_secret),
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            auth_response = response.json()
-            new_refresh_token = auth_response.get("refresh_token")
-            
-            if new_refresh_token and new_refresh_token != current_refresh_token:
-                # Update the secrets.toml file using absolute path
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                secrets_path = os.path.join(script_dir, '.streamlit', 'secrets.toml')
-                
-                # Read current secrets to preserve all sections
-                with open(secrets_path, 'r') as f:
-                    secrets_config = toml.load(f)
-                
-                # Update only the refresh token
-                if 'quickbooks' in secrets_config:
-                    secrets_config['quickbooks']['refresh_token'] = new_refresh_token
-                    
-                    # Write back to file
-                    with open(secrets_path, 'w') as f:
-                        toml.dump(secrets_config, f)
-                    
-                    print(f"✅ QuickBooks refresh_token updated successfully")
-                    return True
-                else:
-                    print("⚠️ QuickBooks section not found in secrets.toml")
-                    return False
-            else:
-                print("ℹ️ Refresh token is up to date")
-                return True
-        else:
-            error_msg = "Unknown error"
-            try:
-                error_details = response.json()
-                error_msg = error_details.get('error_description', error_details.get('error', 'Unknown error'))
-            except:
-                error_msg = response.text[:200]
-            
-            print(f"⚠️ Could not refresh QuickBooks token: {response.status_code} - {error_msg}")
-            return False
-            
-    except Exception as e:
-        print(f"⚠️ Error updating QuickBooks token: {str(e)}")
-        return False
 
 def refresh_monday_database(config):
     """Refresh Monday.com database"""
@@ -592,22 +510,18 @@ def main():
         print(f"❌ Error loading configuration: {str(e)}")
         sys.exit(1)
     
-    print("\n🔄 Step 1: Updating QuickBooks refresh token...")
-    qb_success = update_quickbooks_refresh_token(config)
-    
-    print("\n🔄 Step 2: Refreshing Monday.com database...")
+    print("\n🔄 Step 1: Refreshing Monday.com database...")
     monday_success = refresh_monday_database(config)
     
-    print("\n🔄 Step 3: Refreshing Calendly database...")
+    print("\n🔄 Step 2: Refreshing Calendly database...")
     calendly_success = refresh_calendly_database(config)
     
-    print("\n🔄 Step 4: Generating New Leads month cache...")
+    print("\n🔄 Step 3: Generating New Leads month cache...")
     cache_success = generate_new_leads_cache()
     
     print("\n" + "=" * 80)
     print("SUMMARY")
     print("=" * 80)
-    print(f"QuickBooks Token: {'✅ Success' if qb_success else '⚠️ Skipped'}")
     print(f"Monday.com DB: {'✅ Success' if monday_success else '❌ Failed'}")
     print(f"Calendly DB: {'✅ Success' if calendly_success else '❌ Failed'}")
     print(f"New Leads Cache: {'✅ Success' if cache_success else '⚠️ Skipped'}")
