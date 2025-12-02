@@ -491,11 +491,11 @@ def apply_development_package(
     extra_styles = max(num_styles - base_capacity, 0)
     rows_to_insert_regular = extra_styles * 2
     
-    # Calculate how many rows we'll need for custom styles too (if any)
+    # Calculate how many rows we'll need for Custom Items too (if any)
     # This ensures we insert all rows upfront before writing any styles
     rows_to_insert_custom = 0
     if num_custom_styles > 0:
-        # Calculate where custom styles would start (after all regular styles)
+        # Calculate where Custom Items would start (after all regular styles)
         if num_styles > 5:
             custom_start_row = 20 + (num_styles - 5) * 2
         else:
@@ -509,7 +509,7 @@ def apply_development_package(
         custom_row_indices_precalc = []
         for i in range(num_custom_styles):
             custom_row_indices_precalc.append(custom_start_row + (i * 2))
-        # Check if we need more rows for custom styles
+        # Check if we need more rows for Custom Items
         if custom_row_indices_precalc:
             last_custom_row = custom_row_indices_precalc[-1]
             if last_custom_row >= totals_row_after_regular - 2:
@@ -610,9 +610,10 @@ def apply_development_package(
                 except Exception:
                     pass
 
-        # Write style number (#) - merge if new row, left-aligned
+        # Write style number (#) - use style_number from entry (101, 102, 103, etc.)
         cell_b = ws.cell(row=row_idx, column=2)
-        cell_b.value = idx + 1
+        style_number = entry.get("style_number", 101 + idx)  # Default to 101, 102, 103... if not set
+        cell_b.value = style_number
         if is_new_row:
             apply_full_border_pair(ws, 2, row_idx, row_second)
             safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
@@ -635,6 +636,13 @@ def apply_development_package(
         cell_e = ws.cell(row=row_idx, column=5)
         if complexity_pct == 0:
             cell_e.value = None
+            # Even when complexity is 0, merge and center for new rows
+            if is_new_row:
+                apply_full_border_pair(ws, 5, row_idx, row_second)
+                safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
+                apply_arial_20_font(cell_e)
+                if Alignment is not None:
+                    cell_e.alignment = Alignment(horizontal="center", vertical="center")
         else:
             cell_e.value = complexity_pct / 100.0
             cell_e.number_format = '0%'  # Percentage format
@@ -714,9 +722,9 @@ def apply_development_package(
         total_development += line_base_price * (1 + complexity_pct / 100.0)
         total_optional += row_optional_sum
 
-    # Process custom styles (user-defined price, complexity, no add-ons)
+    # Process Custom Items (user-defined price, complexity, no add-ons)
     if num_custom_styles > 0:
-        # Calculate starting row for custom styles (after all regular styles)
+        # Calculate starting row for Custom Items (after all regular styles)
         custom_start_row = dynamic_row_indices[-1] + 2 if dynamic_row_indices else 10
         custom_row_indices = []
         for i in range(num_custom_styles):
@@ -753,9 +761,10 @@ def apply_development_package(
                     except Exception:
                         pass
             
-            # Write style number (#)
+            # Write style number (#) - continue sequence from regular styles (101, 102, 103...)
             cell_b = ws.cell(row=row_idx, column=2)
-            cell_b.value = num_styles + idx + 1
+            # Start custom items from 101 + num_styles (so if regular styles are 101-106, custom starts at 107)
+            cell_b.value = 101 + num_styles + idx
             if is_new_row:
                 apply_full_border_pair(ws, 2, row_idx, row_second)
                 safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
@@ -812,7 +821,7 @@ def apply_development_package(
                 if Alignment is not None:
                     cell_f.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Clear add-ons (custom styles don't have add-ons)
+            # Clear add-ons (Custom Items don't have add-ons)
             for col_letter in ["H", "I", "J", "K"]:
                 col_num = ord(col_letter) - 64
                 cell_opt = ws.cell(row=row_idx, column=col_num)
@@ -834,18 +843,18 @@ def apply_development_package(
             
             total_development += custom_price * (1 + complexity_pct / 100.0)
         
-        # Update last_style_row to include custom styles (for totals calculations)
+        # Update last_style_row to include Custom Items (for totals calculations)
         if custom_row_indices:
             last_style_row = custom_row_indices[-1]
     
-    # Determine last_style_row if no custom styles (for totals calculations)
+    # Determine last_style_row if no Custom Items (for totals calculations)
     if num_custom_styles == 0:
         if dynamic_row_indices:
             last_style_row = dynamic_row_indices[-1]
         else:
             last_style_row = 10
 
-    # Determine last_regular_style_row (only regular + activewear, excluding custom styles)
+    # Determine last_regular_style_row (only regular + activewear, excluding Custom Items)
     # This is used for deliverables counts (Patterns, First Samples, Final Samples)
     if dynamic_row_indices:
         last_regular_style_row = dynamic_row_indices[-1]
@@ -1282,7 +1291,7 @@ def apply_development_package(
             # Formula checks if there are any cells in column D (BASE PRICE) that equal 3560 (activewear price)
             # If yes, return 2, otherwise return 1
             if get_column_letter:
-                # Use last_regular_style_row to exclude custom styles
+                # Use last_regular_style_row to exclude Custom Items
                 formula = f"=IF(COUNTIF(D10:D{last_regular_style_row}, 3560) > 0, 2, 1)"
             else:
                 # Fallback if get_column_letter is not available
@@ -1611,6 +1620,13 @@ def apply_development_package(
         if Alignment is not None:
             cell_p_discount.alignment = Alignment(horizontal="center", vertical="center")
         
+        # Clear N23 if it contains discount percentage (remove duplicate)
+        # N23 should remain empty or contain "TOTAL DUE AT SIGNING" if that's what the template has
+        cell_n23_check = ws.cell(row=23, column=SUMMARY_LABEL_COL)
+        if cell_n23_check.value and "%" in str(cell_n23_check.value):
+            # Clear the duplicate discount percentage from N23
+            cell_n23_check.value = None
+        
         # Make all cells in totals row bold
         if Font is not None:
             for col_idx in range(1, 17):  # Columns A through P
@@ -1744,6 +1760,7 @@ def build_workbook_bytes(
     style_entries: list[dict],
     custom_styles: list[dict],
     discount_percentage: float,
+    notes: list[str] = None,
 ) -> tuple[bytes, float, float]:
     """Load the template, update it, and return bytes plus totals."""
     if load_workbook is None:
@@ -1780,6 +1797,35 @@ def build_workbook_bytes(
         custom_styles=custom_styles,
         discount_percentage=discount_percentage,
     )
+    
+    # Write notes to column N starting below "PROJECT NOTES"
+    # Find "PROJECT NOTES" dynamically (it moves when more styles are added)
+    if notes:
+        project_notes_row = None
+        # Search for "PROJECT NOTES" in column N (column 14)
+        for search_row in range(20, 50):  # Search from row 20 to 50
+            cell_value = ws.cell(row=search_row, column=SUMMARY_LABEL_COL).value
+            if cell_value and isinstance(cell_value, str):
+                if "PROJECT" in cell_value.upper() and "NOTES" in cell_value.upper():
+                    project_notes_row = search_row
+                    break
+        
+        if project_notes_row:
+            # Place notes starting one row below "PROJECT NOTES" (every other row: N27, N29, etc.)
+            notes_start_row = project_notes_row + 1
+            note_index = 0
+            for note in notes:
+                if note and note.strip():
+                    # Place notes at every other row (skip one row between notes)
+                    cell_row = notes_start_row + (note_index * 2)
+                    cell = ws.cell(row=cell_row, column=SUMMARY_LABEL_COL)
+                    # Uppercase and center-align the notes
+                    cell.value = note.strip().upper()
+                    if Font is not None:
+                        cell.font = Font(name="Arial", size=20)
+                    if Alignment is not None:
+                        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                    note_index += 1
 
     buffer = BytesIO()
     wb.save(buffer)
@@ -2181,94 +2227,140 @@ def main() -> None:
         "based on the official template."
     )
 
-    # Monday.com client selection
-    sales_records = get_sales_records()
-    selected_item_id = None  # Initialize outside if block
+    # Get query parameters from Monday.com link
+    query_params = st.query_params
+    first_name = query_params.get("first_name", "").strip()
+    last_name = query_params.get("last_name", "").strip()
+    email = query_params.get("email", "").strip()
+    representative = query_params.get("representative", "").strip()
+    num_styles_param = query_params.get("num_styles", "").strip()
     
-    if sales_records:
-        # Check for query parameter (Option A: link from monday.com)
-        query_params_monday = st.query_params
-        preselected_item_id = query_params_monday.get("item_id")
-        
-        # Create options for dropdown
-        options = [" "] + [f"{name} ({item_id})" for item_id, name in sales_records]
-        
-        # Find preselected index if item_id is in query params
-        selected_index = 0
-        if preselected_item_id:
-            for idx, (item_id, name) in enumerate(sales_records, start=1):
-                if item_id == preselected_item_id:
-                    selected_index = idx
-                    break
-        
-        selected_client = st.selectbox(
-            "Link to Monday.com Client Record",
-            options=options,
-            index=selected_index,
-            help="Select a client from Monday.com to automatically update with the workbook URL after generation."
-        )
-        
-        # Extract item_id from selection
-        if selected_client and selected_client != " ":
-            # Extract item_id from format "Name (item_id)"
-            match = re.search(r'\((\d+)\)$', selected_client)
-            if match:
-                selected_item_id = match.group(1)
-    else:
-        st.info("No sales records found. Workbook will be generated without Monday.com integration.")
-
-    client_name = st.text_input("Client Name", placeholder="Enter client name")
+    # Clean up representative (remove "$" prefix if present from Monday.com formula)
+    if representative.startswith("$"):
+        representative = representative[1:].strip()
+    
+    # Combine first_name and last_name for client_name
+    client_name_default = ""
+    if first_name or last_name:
+        client_name_default = f"{first_name} {last_name}".strip()
+    
+    # Use query params as default values if available
+    client_name = st.text_input(
+        "Client Name", 
+        value=client_name_default,
+        placeholder="Enter client name"
+    )
 
     col_a, col_b = st.columns(2)
     with col_a:
         client_email = st.text_input(
-            "Client Email", placeholder="client@email.com"
+            "Client Email", 
+            value=email,
+            placeholder="client@email.com"
         )
     with col_b:
         representative = st.text_input(
-            "Representative", placeholder="Enter representative"
+            "Representative", 
+            value=representative,
+            placeholder="Enter representative"
         )
 
     # Initialize session state for style entries
     if "style_entries" not in st.session_state:
         st.session_state["style_entries"] = []
-
+    
+    # Initialize Custom Items
+    if "custom_styles" not in st.session_state:
+        st.session_state["custom_styles"] = []
+    
     st.subheader("**Styles**")
     
+    # Number of Styles field (auto-fills from query param, but editable) - in first column, half width
+    col_num_styles, col_spacer = st.columns([1, 3])
+    with col_num_styles:
+        num_styles_default = len(st.session_state["style_entries"])
+        if num_styles_param:
+            try:
+                num_styles_default = int(num_styles_param)
+            except ValueError:
+                num_styles_default = len(st.session_state["style_entries"])
+        
+        num_styles_input = st.number_input(
+            "Number of Styles",
+            min_value=0,
+            value=num_styles_default,
+            step=1,
+            key="num_styles_input",
+            help="Number of styles/items. Auto-filled from Monday.com if available."
+        )
+        
+        # Update style entries list to match num_styles_input
+        current_count = len(st.session_state["style_entries"])
+        if num_styles_input > current_count:
+            # Add new styles with blank names
+            for i in range(current_count, num_styles_input):
+                st.session_state["style_entries"].append({
+                    "name": "",  # Leave blank, don't default to "Style 1", etc.
+                    "activewear": False,
+                    "complexity": 0.0,
+                    "style_number": 101 + i,  # Default style numbers: 101, 102, 103...
+                    "options": {
+                        "wash_dye": False,
+                        "design": False,
+                        "source": False,
+                        "treatment": False,
+                    },
+                })
+        elif num_styles_input < current_count:
+            # Remove excess styles
+            st.session_state["style_entries"] = st.session_state["style_entries"][:num_styles_input]
+    
     # Column headers
-    header_cols = st.columns([1.8, 1, 1.2, 1.2, 1, 1, 1, 0.8])
+    header_cols = st.columns([1.1, 1.8, 0.8, 1.2, 1.2, 1, 1, 1.1])
     with header_cols[0]:
-        st.markdown("**Style Name**")
+        st.markdown("**Style Number**")
     with header_cols[1]:
-        st.markdown("**Activewear?**")
+        st.markdown("**Style Name**")
     with header_cols[2]:
-        st.markdown("**Complexity (%)**")
+        st.markdown("**Activewear?**")
     with header_cols[3]:
-        st.markdown("**Wash/Dye ($1,330)**")
+        st.markdown("**Complexity (%)**")
     with header_cols[4]:
-        st.markdown("**Design ($1,330)**")
+        st.markdown("**Wash/Dye ($1,330)**")
     with header_cols[5]:
-        st.markdown("**Source ($1,330)**")
+        st.markdown("**Design ($1,330)**")
     with header_cols[6]:
-        st.markdown("**Treatment ($760)**")
+        st.markdown("**Source ($1,330)**")
     with header_cols[7]:
-        st.markdown("**Remove**")
-
+        st.markdown("**Treatment ($760)**")
+    
     # Display existing style entries in horizontal rows
     if st.session_state["style_entries"]:
         for i, entry in enumerate(st.session_state["style_entries"]):
             with st.container():
-                cols = st.columns([1.8, 1, 1.2, 1.2, 1, 1, 1, 0.8])
+                cols = st.columns([1.2, 1.8, 1, 1.2, 1.2, 1, 1, 1])
                 with cols[0]:
+                    # Style Number field with default value (101, 102, 103...)
+                    default_style_number = entry.get("style_number", 101 + i)
+                    style_number = st.number_input(
+                        "Style Number",
+                        min_value=1,
+                        value=int(default_style_number),
+                        step=1,
+                        key=f"style_number_{i}",
+                        label_visibility="collapsed",
+                    )
+                    entry["style_number"] = style_number
+                with cols[1]:
                     style_name = st.text_input(
-                        "Style Name",
+                        "Custom Item Name",
                         value=entry.get("name", ""),
                         key=f"style_name_{i}",
                         label_visibility="collapsed",
                         placeholder="e.g., Dress, Winter Coat",
                     )
                     entry["name"] = style_name
-                with cols[1]:
+                with cols[2]:
                     activewear = st.checkbox(
                         "",
                         value=entry.get("activewear", False),
@@ -2276,7 +2368,7 @@ def main() -> None:
                         label_visibility="visible",
                     )
                     entry["activewear"] = activewear
-                with cols[2]:
+                with cols[3]:
                     complexity = st.number_input(
                         "Complexity (%)",
                         min_value=0,
@@ -2288,7 +2380,7 @@ def main() -> None:
                         label_visibility="collapsed",
                     )
                     entry["complexity"] = float(complexity)
-                with cols[3]:
+                with cols[4]:
                     wash_dye = st.checkbox(
                         "",
                         value=entry.get("options", {}).get("wash_dye", False),
@@ -2296,7 +2388,7 @@ def main() -> None:
                         label_visibility="visible",
                     )
                     entry.setdefault("options", {})["wash_dye"] = wash_dye
-                with cols[4]:
+                with cols[5]:
                     design = st.checkbox(
                         "",
                         value=entry.get("options", {}).get("design", False),
@@ -2304,7 +2396,7 @@ def main() -> None:
                         label_visibility="visible",
                     )
                     entry.setdefault("options", {})["design"] = design
-                with cols[5]:
+                with cols[6]:
                     source = st.checkbox(
                         "",
                         value=entry.get("options", {}).get("source", False),
@@ -2312,7 +2404,7 @@ def main() -> None:
                         label_visibility="visible",
                     )
                     entry.setdefault("options", {})["source"] = source
-                with cols[6]:
+                with cols[7]:
                     treatment = st.checkbox(
                         "",
                         value=entry.get("options", {}).get("treatment", False),
@@ -2320,120 +2412,15 @@ def main() -> None:
                         label_visibility="visible",
                     )
                     entry.setdefault("options", {})["treatment"] = treatment
-                with cols[7]:
-                    if st.button("❌", key=f"remove_{i}", help="Remove this style"):
-                        st.session_state["style_entries"].pop(i)
-                        st.rerun()
 
-    # Add new style interface
+    # Custom Item section
     st.markdown("---")
-    st.markdown("**Add New Style**")
-    add_cols = st.columns([1.8, 1, 1.2, 1.2, 1, 1, 1, 0.8])
-    # Ensure default values exist (placeholders only) without pre-filling
-    default_new_style = st.session_state.get("new_style_name", "")
-    default_new_activewear = st.session_state.get("new_activewear", False)
-    default_new_complexity = st.session_state.get("new_complexity", 0)
-    default_new_wash = st.session_state.get("new_wash_dye", False)
-    default_new_design = st.session_state.get("new_design", False)
-    default_new_source = st.session_state.get("new_source", False)
-    default_new_treatment = st.session_state.get("new_treatment", False)
-
-    with add_cols[0]:
-        new_style_name = st.text_input(
-            "Style Name",
-            value=default_new_style,
-            key="new_style_name",
-            label_visibility="collapsed",
-            placeholder="e.g., Dress, Winter Coat",
-        )
-    with add_cols[1]:
-        new_activewear = st.checkbox(
-            "",
-            value=default_new_activewear,
-            key="new_activewear",
-            label_visibility="visible",
-        )
-    with add_cols[2]:
-        new_complexity = st.number_input(
-            "Complexity (%)",
-            min_value=0,
-            max_value=200,
-            value=default_new_complexity,
-            step=5,
-            format="%d",
-            key="new_complexity",
-            label_visibility="collapsed",
-        )
-    with add_cols[3]:
-        new_wash_dye = st.checkbox(
-            "",
-            value=default_new_wash,
-            key="new_wash_dye",
-            label_visibility="visible",
-        )
-    with add_cols[4]:
-        new_design = st.checkbox(
-            "",
-            value=default_new_design,
-            key="new_design",
-            label_visibility="visible",
-        )
-    with add_cols[5]:
-        new_source = st.checkbox(
-            "",
-            value=default_new_source,
-            key="new_source",
-            label_visibility="visible",
-        )
-    with add_cols[6]:
-        new_treatment = st.checkbox(
-            "",
-            value=default_new_treatment,
-            key="new_treatment",
-            label_visibility="visible",
-        )
-    with add_cols[7]:
-        if st.button("➕ Add", key="add_style", help="Add this style"):
-            if new_style_name.strip():
-                st.session_state["style_entries"].append({
-                    "name": new_style_name.strip(),
-                    "activewear": new_activewear,
-                    "complexity": float(new_complexity),
-                    "options": {
-                        "wash_dye": new_wash_dye,
-                        "design": new_design,
-                        "source": new_source,
-                        "treatment": new_treatment,
-                    },
-                })
-                # Reset add-new-style inputs so the next style starts blank/default
-                for key in [
-                    "new_style_name",
-                    "new_activewear",
-                    "new_complexity",
-                    "new_wash_dye",
-                    "new_design",
-                    "new_source",
-                    "new_treatment",
-                ]:
-                    if key in st.session_state:
-                        del st.session_state[key]
-                st.rerun()
-            else:
-                st.warning("Please enter a style name before adding.")
-
-    # Custom Style section
-    st.markdown("---")
-    st.subheader("**Custom Style**")
+    st.subheader("**Custom Item**")
     
-    # Initialize session state for custom styles
-    if "custom_styles" not in st.session_state:
-        st.session_state["custom_styles"] = []
-    
-    # Column headers for custom styles
+    # Column headers for Custom Items
     custom_header_cols = st.columns([2, 1.5, 1.5, 0.8])
     with custom_header_cols[0]:
-        st.markdown("**Style Name**")
+        st.markdown("**Custom Item Name**")
     with custom_header_cols[1]:
         st.markdown("**Price ($)**")
     with custom_header_cols[2]:
@@ -2441,14 +2428,14 @@ def main() -> None:
     with custom_header_cols[3]:
         st.markdown("**Remove**")
     
-    # Display existing custom styles
+    # Display existing Custom Items
     if st.session_state["custom_styles"]:
         for i, entry in enumerate(st.session_state["custom_styles"]):
             with st.container():
                 custom_cols = st.columns([2, 1.5, 1.5, 0.8])
                 with custom_cols[0]:
                     custom_style_name = st.text_input(
-                        "Custom Style Name",
+                        "Custom Item Name",
                         value=entry.get("name", ""),
                         key=f"custom_style_name_{i}",
                         label_visibility="collapsed",
@@ -2479,12 +2466,12 @@ def main() -> None:
                     )
                     entry["complexity"] = float(custom_complexity)
                 with custom_cols[3]:
-                    if st.button("❌", key=f"remove_custom_{i}", help="Remove this custom style"):
+                    if st.button("❌", key=f"remove_custom_{i}", help="Remove this Custom Item"):
                         st.session_state["custom_styles"].pop(i)
                         st.rerun()
     
-    # Add new custom style interface
-    st.markdown("**Add New Custom Style**")
+    # Add new Custom Item interface
+    st.markdown("**Add New Custom Item**")
     add_custom_cols = st.columns([2, 1.5, 1.5, 0.8])
     default_new_custom_name = st.session_state.get("new_custom_style_name", "")
     default_new_custom_price = st.session_state.get("new_custom_price", 0.0)
@@ -2492,7 +2479,7 @@ def main() -> None:
     
     with add_custom_cols[0]:
         new_custom_style_name = st.text_input(
-            "Custom Style Name",
+            "Custom Item Name",
             value=default_new_custom_name,
             key="new_custom_style_name",
             label_visibility="collapsed",
@@ -2520,7 +2507,7 @@ def main() -> None:
             label_visibility="collapsed",
         )
     with add_custom_cols[3]:
-        if st.button("➕ Add", key="add_custom_style", help="Add this custom style"):
+        if st.button("➕ Add", key="add_custom_style", help="Add this Custom Item"):
             if new_custom_style_name.strip() and new_custom_price > 0:
                 st.session_state["custom_styles"].append({
                     "name": new_custom_style_name.strip(),
@@ -2537,10 +2524,10 @@ def main() -> None:
                         del st.session_state[key]
                 st.rerun()
             else:
-                st.warning("Please enter a custom style name and price before adding.")
+                st.warning("Please enter a Custom Item name and price before adding.")
 
     if not st.session_state["style_entries"] and not st.session_state["custom_styles"]:
-        st.info("Add at least one style or custom style to enable the generator.")
+        st.info("Add at least one style or Custom Item to enable the generator.")
         return
 
     st.markdown("---")
@@ -2555,6 +2542,39 @@ def main() -> None:
             step=1,
         )
     st.session_state["discount_percentage_value"] = discount_percentage
+    
+    # Notes Section
+    st.markdown("---")
+    st.subheader("Notes")
+    
+    # Initialize notes list in session state
+    if "notes_list" not in st.session_state:
+        st.session_state["notes_list"] = [""]
+    
+    # Display existing notes
+    for i, note in enumerate(st.session_state["notes_list"]):
+        note_cols = st.columns([10, 1])
+        with note_cols[0]:
+            updated_note = st.text_input(
+                "Note",
+                value=note,
+                key=f"note_{i}",
+                placeholder="Enter a note...",
+                label_visibility="collapsed"
+            )
+            st.session_state["notes_list"][i] = updated_note
+        with note_cols[1]:
+            if st.button("❌", key=f"remove_note_{i}", help="Remove this note"):
+                st.session_state["notes_list"].pop(i)
+                st.rerun()
+    
+    # Add new note button
+    if st.button("➕ Add Note", key="add_note"):
+        st.session_state["notes_list"].append("")
+        st.rerun()
+    
+    # Filter out empty notes for workbook generation
+    notes = [note for note in st.session_state["notes_list"] if note and note.strip()]
 
     try:
         excel_bytes, _, _ = build_workbook_bytes(
@@ -2564,6 +2584,7 @@ def main() -> None:
             style_entries=st.session_state["style_entries"],
             custom_styles=st.session_state.get("custom_styles", []),
             discount_percentage=discount_percentage,
+            notes=notes if notes else [],
         )
     except FileNotFoundError as exc:
         st.error(str(exc))
@@ -2607,14 +2628,6 @@ def main() -> None:
                         "Open the file in Google Drive and use **File → Save as Google Sheets** if you need an editable sheet."
                     )
 
-                # Update monday.com URL column only (no file upload)
-                if selected_item_id:
-                    with st.spinner("Updating Monday.com record..."):
-                        url_updated = update_monday_item_workbook_url(selected_item_id, sheet_url)
-                        if url_updated:
-                            st.success("✅ Monday.com record updated with workbook URL")
-                        else:
-                            st.warning("⚠️ Workbook uploaded to Google Drive, but Monday.com update failed. Please update manually.")
 
             except GoogleSheetsUploadError as exc:
                 message = str(exc)
