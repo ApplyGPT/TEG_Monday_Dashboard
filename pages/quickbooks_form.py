@@ -166,7 +166,8 @@ def main():
         client_secret=credentials['client_secret'],
         refresh_token=credentials['refresh_token'],
         company_id=credentials['company_id'],
-        sandbox=credentials.get('sandbox', False)  # Default to False for production
+        sandbox=credentials.get('sandbox', False),  # Default to False for production
+        access_token=credentials.get('access_token')  # Use access_token from secrets.toml if available
     )
     
     # Note: SSL verification is disabled to resolve QuickBooks API hostname mismatch issues

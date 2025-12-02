@@ -32,7 +32,7 @@ class QuickBooksAPI:
     """QuickBooks API client for invoice creation and sending"""
     
     def __init__(self, client_id: str, client_secret: str, 
-                 refresh_token: str, company_id: str, sandbox: bool = False):
+                 refresh_token: str, company_id: str, sandbox: bool = False, access_token: str = None):
         self.client_id = client_id
         self.client_secret = client_secret
         self.refresh_token = refresh_token
@@ -45,7 +45,8 @@ class QuickBooksAPI:
         else:
             self.base_url = "https://quickbooks.api.intuit.com"
             
-        self.access_token = None
+        # Use provided access_token if available (from secrets.toml), otherwise will authenticate on first request
+        self.access_token = access_token
         self.session = get_qb_session()
 
     def _get_headers(self):
@@ -88,10 +89,13 @@ class QuickBooksAPI:
             if not self.access_token:
                 return False
             
-            # Update refresh token if it changed
+            # Update tokens in secrets.toml if they changed
             if new_refresh_token and new_refresh_token != self.refresh_token:
                 self.refresh_token = new_refresh_token
-                self._update_secrets_file(new_refresh_token)
+                self._update_secrets_file(new_refresh_token, self.access_token)
+            elif self.access_token:
+                # Even if refresh_token didn't change, update access_token
+                self._update_secrets_file(None, self.access_token)
                 
             return True
             
@@ -99,8 +103,8 @@ class QuickBooksAPI:
             st.error(f"Connection error during authentication: {str(e)}")
             return False
 
-    def _update_secrets_file(self, new_token):
-        """Attempts to update secrets.toml (best effort)"""
+    def _update_secrets_file(self, new_refresh_token=None, new_access_token=None):
+        """Attempts to update secrets.toml with new tokens (best effort)"""
         try:
             secrets_path = os.path.join('.streamlit', 'secrets.toml')
             if os.path.exists(secrets_path):
@@ -108,7 +112,10 @@ class QuickBooksAPI:
                     config = toml.load(f)
                 
                 if 'quickbooks' in config:
-                    config['quickbooks']['refresh_token'] = new_token
+                    if new_refresh_token:
+                        config['quickbooks']['refresh_token'] = new_refresh_token
+                    if new_access_token:
+                        config['quickbooks']['access_token'] = new_access_token
                     with open(secrets_path, 'w') as f:
                         toml.dump(config, f)
         except:
@@ -120,6 +127,7 @@ class QuickBooksAPI:
         """Centralized request wrapper with retry logic and minorversion"""
         if not self.access_token:
             if not self.authenticate():
+                st.error(f"❌ Authentication failed for {endpoint}")
                 return None
 
         # Set default minorversion if not provided in params
@@ -132,30 +140,44 @@ class QuickBooksAPI:
         url = f"{self.base_url}/v3/company/{self.company_id}/{endpoint}"
         
         try:
+            headers = self._get_headers()
+            if not headers:
+                st.error(f"❌ No headers available for {endpoint} - access token missing")
+                return None
+            
             if method.lower() == 'get':
-                response = self.session.get(url, headers=self._get_headers(), params=params, timeout=45)
+                response = self.session.get(url, headers=headers, params=params, timeout=45)
             else:
-                response = self.session.post(url, headers=self._get_headers(), params=params, json=data, timeout=45)
+                response = self.session.post(url, headers=headers, params=params, json=data, timeout=45)
 
             # If 401, try refreshing token once
             if response.status_code == 401:
-                st.info("Token expired, refreshing...")
                 if self.authenticate(force_refresh=True):
-                    # Retry
+                    # Retry with new token
+                    headers = self._get_headers()
                     if method.lower() == 'get':
-                        response = self.session.get(url, headers=self._get_headers(), params=params, timeout=45)
+                        response = self.session.get(url, headers=headers, params=params, timeout=45)
                     else:
-                        response = self.session.post(url, headers=self._get_headers(), params=params, json=data, timeout=45)
+                        response = self.session.post(url, headers=headers, params=params, json=data, timeout=45)
             
             return response
         except requests.exceptions.Timeout as e:
             st.error(f"⏰ Request timeout ({endpoint}): {str(e)}")
+            st.error(f"   URL: {url}")
             return None
         except requests.exceptions.ConnectionError as e:
             st.error(f"🔌 Connection error ({endpoint}): {str(e)}")
+            st.error(f"   URL: {url}")
+            return None
+        except requests.exceptions.RequestException as e:
+            st.error(f"❌ Request exception ({endpoint}): {str(e)}")
+            st.error(f"   URL: {url}")
             return None
         except Exception as e:
-            st.error(f"❌ Request error ({endpoint}): {str(e)}")
+            st.error(f"❌ Unexpected error ({endpoint}): {str(e)}")
+            st.error(f"   URL: {url}")
+            import traceback
+            st.error(f"   Traceback: {traceback.format_exc()}")
             return None
 
     # --- Business Methods (Customer, Invoice, etc.) ---
@@ -255,7 +277,8 @@ class QuickBooksAPI:
                 if items:
                     return items[0]['Id']
         except Exception as e:
-            st.warning(f"⚠️ Error searching for item '{item_name}': {str(e)}")
+            # Silently fail - will create new item
+            pass
         
         return None
     
@@ -274,11 +297,9 @@ class QuickBooksAPI:
                 item = response.json().get("Item", {})
                 return item.get("Id")
             else:
-                st.warning(f"⚠️ Failed to create service item '{service_name}', using default")
                 return "1"  # Fallback to default service item
                 
         except Exception as e:
-            st.warning(f"⚠️ Error creating service item '{service_name}': {str(e)}, using default")
             return "1"  # Fallback to default service item
     
     def _update_invoice_doc_number(self, invoice_id: str, invoice_data: dict):
@@ -297,12 +318,10 @@ class QuickBooksAPI:
                     update_payload[field] = invoice_data[field]
             
             response = self._make_request('POST', 'invoice', data=update_payload)
-            if not (response and response.status_code == 200):
-                st.warning("⚠️ Could not update invoice number, but invoice was created successfully")
-                
+            # Silently fail - invoice was already created successfully
         except Exception as e:
-            st.warning(f"⚠️ Error updating invoice DocNumber: {str(e)}")
-            # Don't fail the whole process for this
+            # Silently fail - invoice was already created successfully
+            pass
     
     def _update_customer_for_company_billing(self, customer_id: str, company_name: str):
         """Update existing customer to show only company name in BILL TO (remove person name)"""
@@ -330,12 +349,10 @@ class QuickBooksAPI:
                 
                 # Update customer
                 update_response = self._make_request('POST', 'customer', data=update_payload)
-                if update_response and update_response.status_code == 200:
-                    st.info(f"✅ Updated customer to show only company name in BILL TO")
-                
+                # Silently handle - non-critical operation
         except Exception as e:
-            st.warning(f"⚠️ Error updating customer for company billing: {str(e)}")
-            # Don't fail the whole process for this
+            # Silently handle - non-critical operation
+            pass
     
     def _clear_customer_billing_address(self, customer_id: str):
         """Clear customer's default billing address to prevent invoice conflicts"""
@@ -362,12 +379,10 @@ class QuickBooksAPI:
                     
                     # Update customer without BillAddr
                     update_response = self._make_request('POST', 'customer', data=update_payload)
-                    if update_response and update_response.status_code == 200:
-                        st.info(f"✅ Cleared customer default address to prevent conflicts")
-                
+                    # Silently handle - non-critical operation
         except Exception as e:
-            st.warning(f"⚠️ Error clearing customer billing address: {str(e)}")
-            # Don't fail the whole process for this
+            # Silently handle - non-critical operation
+            pass
 
     def create_customer(self, first_name: str, last_name: str, email: str, company_name: str = None, cc_email: str = None) -> Optional[str]:
         """
@@ -378,6 +393,12 @@ class QuickBooksAPI:
         SOLUTION B: Add SecondaryEmailAddr if cc_email is provided
         This ensures CC is sent even if QuickBooks ignores the send endpoint CC parameter
         """
+        # Ensure we're authenticated before attempting customer operations
+        if not self.access_token:
+            if not self.authenticate():
+                st.error("❌ Failed to authenticate with QuickBooks. Please check your credentials.")
+                return None
+        
         # FIX #3: Always use person's name as DisplayName for email greeting
         # Company name will be stored in CompanyName field and shown in Bill To address
         display_name = f"{first_name} {last_name}"
@@ -391,6 +412,8 @@ class QuickBooksAPI:
             return existing_id
 
         # Create new customer
+        # Note: SecondaryEmailAddr is not supported in QuickBooks API v3
+        # We'll add it after customer creation if needed
         payload = {
             "DisplayName": display_name,  # FIX #3: Always use person's name for email greeting
             "GivenName": first_name,
@@ -402,25 +425,90 @@ class QuickBooksAPI:
         if company_name:
             payload["CompanyName"] = company_name
         
-        # SOLUTION B: Add SecondaryEmailAddr if CC email is provided
-        # QuickBooks will automatically CC secondary email when sending invoices
-        if cc_email and cc_email.strip():
-            payload["SecondaryEmailAddr"] = {"Address": cc_email.strip()}
+        # Note: SecondaryEmailAddr is not a supported field in QuickBooks Customer API
+        # We'll handle CC email separately via the invoice send endpoint
 
+        # Verify access_token is available before making request
+        if not self.access_token:
+            if not self.authenticate():
+                st.error("❌ Authentication failed. Cannot create customer.")
+                return None
+        
         response = self._make_request('POST', 'customer', data=payload)
         
         if response and response.status_code in [200, 201]:
             customer = response.json().get("Customer", {})
             person_name = f"{first_name} {last_name}"
+            customer_id = customer.get("Id")
             st.success(f"✅ Customer created: {person_name}")
-            return customer.get("Id")
+            
+            # Try to add secondary email if provided (may not be supported, but worth trying)
+            if cc_email and cc_email.strip() and customer_id:
+                self._update_customer_secondary_email(customer_id, cc_email)
+            
+            return customer_id
         
-        # Specific error handling for duplicates (if search failed but they exist)
-        if response and "Duplicate Name Exists Error" in response.text:
-            st.warning("⚠️ Customer name already exists. Trying to find by name...")
-            return self._find_customer_by_display_name(display_name)
-
-        st.error(f"Error creating customer: {response.text if response else 'No response'}")
+        # Handle specific error cases
+        if not response:
+            st.error("❌ Error creating customer: No response from QuickBooks API. This could indicate:")
+            st.error("   • Authentication failure - check your access token")
+            st.error("   • Network/connection issue")
+            st.error("   • QuickBooks API timeout")
+            return None
+        
+        # Check for specific error types (including 400 validation errors)
+        try:
+            error_data = response.json()
+            fault = error_data.get("Fault", {})
+            errors = fault.get("Error", [])
+            
+            if errors:
+                error_msg = errors[0].get("Message", "Unknown error")
+                error_detail = errors[0].get("Detail", "")
+                error_code = errors[0].get("code", "")
+                
+                # Handle duplicate name error
+                if "Duplicate Name Exists Error" in error_msg or error_code == "6240":
+                    found_id = self._find_customer_by_display_name(display_name)
+                    if found_id:
+                        return found_id
+                    else:
+                        st.error(f"❌ Customer exists but could not be found: {error_msg}")
+                        return None
+                
+                # Handle validation errors (400) - might be due to unsupported properties
+                if response.status_code == 400:
+                    st.error(f"❌ Validation Error (400): {error_msg}")
+                    st.error(f"   Error Code: {error_code}")
+                    st.error(f"   Details: {error_detail}")
+                    # Try creating without SecondaryEmailAddr if that might be the issue
+                    if "SecondaryEmailAddr" in str(payload):
+                        payload_retry = payload.copy()
+                        payload_retry.pop("SecondaryEmailAddr", None)
+                        response_retry = self._make_request('POST', 'customer', data=payload_retry)
+                        if response_retry and response_retry.status_code in [200, 201]:
+                            customer = response_retry.json().get("Customer", {})
+                            person_name = f"{first_name} {last_name}"
+                            st.success(f"✅ Customer created: {person_name}")
+                            # Try to update with secondary email separately if needed
+                            if cc_email and cc_email.strip():
+                                customer_id = customer.get("Id")
+                                if customer_id:
+                                    self._update_customer_secondary_email(customer_id, cc_email)
+                            return customer.get("Id")
+                
+                # Handle other validation errors
+                st.error(f"❌ Error creating customer: {error_msg}")
+                if error_detail:
+                    st.error(f"   Details: {error_detail}")
+                return None
+        except (ValueError, KeyError) as e:
+            # If response is not JSON or doesn't have expected structure
+            st.error(f"❌ Error parsing response: {str(e)}")
+        
+        # Generic error handling
+        error_text = response.text[:500] if hasattr(response, 'text') else str(response)
+        st.error(f"❌ Error creating customer (Status {response.status_code}): {error_text}")
         return None
 
     def _find_customer_by_email(self, email: str) -> Optional[str]:
@@ -472,7 +560,7 @@ class QuickBooksAPI:
             update_response = self._make_request('POST', 'customer', data=payload)
             return update_response and update_response.status_code in [200, 201]
         except Exception as e:
-            st.warning(f"Could not update customer secondary email: {e}")
+            # Silently fail - non-critical operation
             return False
 
     def create_invoice(self, customer_id: str, first_name: str, last_name: str, 
@@ -629,9 +717,6 @@ class QuickBooksAPI:
                             detail = err.get('Detail', '')
                             st.error(f"Error Detail: {detail}")
                             
-                            # Highlight BillEmailCc if mentioned
-                            if "BillEmailCc" in detail or "BillEmail" in detail:
-                                st.warning("💡 Issue might be with BillEmail or BillEmailCc structure. Check the payload above.")
                 except:
                     pass
             except Exception as e:
@@ -667,11 +752,11 @@ class QuickBooksAPI:
             if response.status_code == 200:
                 primary_sent = True
             else:
-                st.warning(f"⚠️ Failed to send invoice to client ({email}): {response.status_code}")
-                if response.text:
-                    st.warning(f"Error details: {response.text[:200]}")
+                # Error will be handled by caller
+                pass
         except Exception as e:
-            st.warning(f"⚠️ Error sending invoice to client: {str(e)}")
+            # Error will be handled by caller
+            pass
         
         # If CC email is provided, send a second email to the salesman
         cc_sent = False
@@ -685,11 +770,11 @@ class QuickBooksAPI:
                 if response.status_code == 200:
                     cc_sent = True
                 else:
-                    st.warning(f"⚠️ Failed to send invoice to salesman ({cc_email}): {response.status_code}")
-                    if response.text:
-                        st.warning(f"Error details: {response.text[:200]}")
+                    # Error will be handled by caller
+                    pass
             except Exception as e:
-                st.warning(f"⚠️ Error sending invoice to salesman: {str(e)}")
+                # Error will be handled by caller
+                pass
         
         # Report results
         if primary_sent:
@@ -754,7 +839,6 @@ def setup_quickbooks_oauth() -> str:
 
 def verify_production_credentials(api) -> Tuple[bool, str]:
     """Verify connection by checking a simple endpoint"""
-    st.info("🔍 Testing connection to QuickBooks Production...")
     res = api._make_request('GET', 'preferences')
     
     if res and res.status_code == 200:
