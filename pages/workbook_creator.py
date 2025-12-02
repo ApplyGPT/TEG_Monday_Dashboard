@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import urllib.parse
 from copy import copy
 from io import BytesIO
 
@@ -2234,6 +2235,7 @@ def main() -> None:
     email = query_params.get("email", "").strip()
     representative = query_params.get("representative", "").strip()
     num_styles_param = query_params.get("num_styles", "").strip()
+    item_id = query_params.get("item_id", "").strip()
     
     # Clean up representative (remove "$" prefix if present from Monday.com formula)
     if representative.startswith("$"):
@@ -2615,10 +2617,12 @@ def main() -> None:
     st.caption("Uploads will use the shared Google Drive folder configured for the service account.")
 
     if st.button("Upload to Monday.com", type="primary"):
-        with st.spinner("Uploading workbook to Google Sheets..."):
+        with st.spinner("Uploading workbook to Google Sheets and updating Monday.com..."):
             try:
+                # Upload to Google Sheets
                 sheet_url, converted = upload_workbook_to_google_sheet(excel_bytes, sheet_title)
                 st.session_state["google_sheet_url"] = sheet_url
+                
                 if converted:
                     st.success(f"✅ Google Sheet created: [Open Sheet]({sheet_url})")
                 else:
@@ -2627,7 +2631,16 @@ def main() -> None:
                         "Google denied automatic conversion because service accounts report zero Drive quota. "
                         "Open the file in Google Drive and use **File → Save as Google Sheets** if you need an editable sheet."
                     )
-
+                
+                # Update Monday.com with the Google Sheet URL if item_id is provided
+                if item_id:
+                    # Update Monday.com item with the Google Sheet link
+                    if update_monday_item_workbook_url(item_id, sheet_url):
+                        st.success(f"✅ Monday.com item updated with Google Sheet link!")
+                    else:
+                        st.warning("⚠️ Google Sheet uploaded, but failed to update Monday.com item. Please update manually.")
+                else:
+                    st.info("ℹ️ No Monday.com item ID provided. Workbook uploaded to Google Sheets only.")
 
             except GoogleSheetsUploadError as exc:
                 message = str(exc)
@@ -2635,7 +2648,7 @@ def main() -> None:
                 if "storage quota" in message.lower():
                     _show_drive_quota_help()
             except Exception as exc:  # pragma: no cover - runtime failures
-                st.error(f"❌ Unexpected Google Sheets error: {exc}")
+                st.error(f"❌ Unexpected error: {exc}")
 
 
 if __name__ == "__main__":
