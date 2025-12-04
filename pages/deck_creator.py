@@ -671,6 +671,33 @@ def set_proposal_for_name(slide, client_name: str):
                 break
 
 
+def add_or_replace_image(prs: Presentation, slide_index: int, image_png_bytes: bytes):
+    """Add or replace image on a slide. Copied from proposal_creator.py"""
+    if slide_index < 0 or slide_index >= len(prs.slides):
+        return
+    slide = prs.slides[slide_index]
+    # Remove existing pictures on the slide
+    to_remove = []
+    for shape in slide.shapes:
+        if shape.shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
+            to_remove.append(shape)
+    for shp in to_remove:
+        sp = shp._element
+        sp.getparent().remove(sp)
+    # place centered
+    max_width = Inches(9)
+    max_height = Inches(6)
+    pic = slide.shapes.add_picture(BytesIO(image_png_bytes), Inches(1), Inches(1))
+    if pic.width > max_width or pic.height > max_height:
+        ratio_w = max_width / pic.width
+        ratio_h = max_height / pic.height
+        ratio = min(ratio_w, ratio_h)
+        pic.width = int(pic.width * ratio)
+        pic.height = int(pic.height * ratio)
+        pic.left = int((prs.slide_width - pic.width) / 2)
+        pic.top = int((prs.slide_height - pic.height) / 2)
+
+
 # ============================================================================
 # Deck Creation Functions
 # ============================================================================
@@ -679,7 +706,8 @@ def create_deck_from_template(
     deck_type: str,
     client_name: str,
     priority_slide_index: Optional[int],
-    service_column_slide_index: Optional[int]
+    service_column_slide_index: Optional[int],
+    image_bytes: bytes | None = None
 ) -> bytes:
     """
     Create a deck from the selected template with customizations.
@@ -884,7 +912,8 @@ def create_deck_from_template(
     
     # Step 3: Copy entire slide content from SERVICE COLUMNS.pptx to slide 10 (index 9)
     # Since slide 10 is now empty, we just copy the entire selected slide
-    if service_column_slide_index is not None:
+    # Skip this step for Standards deck type - keep original slide 10
+    if service_column_slide_index is not None and deck_type != "Standards":
         service_columns_path = get_template_path(SERVICE_COLUMNS_FILE)
         if os.path.exists(service_columns_path):
             try:
@@ -907,6 +936,40 @@ def create_deck_from_template(
                         st.warning("Template doesn't have a 10th slide")
             except Exception as e:
                 st.warning(f"Could not copy service column slide: {e}")
+    
+    # Step 4: Set slide 12 (index 11) - replace "1ST NAME'S APPROVAL OF PROJECT" with first name only
+    if len(prs.slides) > 11 and client_name:
+        first_name = client_name.strip().split(" ")[0] if client_name else ""
+        slide12 = prs.slides[11]
+        # Use regex replacement to handle various formats, similar to slide 4
+        for shape in slide12.shapes:
+            if not getattr(shape, 'has_text_frame', False):
+                continue
+            tf = shape.text_frame
+            for p in tf.paragraphs:
+                if p.runs:
+                    for r in p.runs:
+                        t = r.text or ""
+                        # Replace "1ST NAME'S" or "1ST NAME" with first name + 'S
+                        t = re.sub(r"1ST NAME[’']?S", f"{first_name}'S", t, flags=re.IGNORECASE)
+                        t = re.sub(r"1ST NAME", f"{first_name}'S", t, flags=re.IGNORECASE)
+                        # Fix double possessive
+                        t = t.replace("'S'S", "'S").replace("'S'S", "'S")
+                        r.text = t.upper()
+                        # Preserve font if it exists, otherwise set default
+                        if not r.font.name:
+                            r.font.name = "Schibsted Grotesk Medium"
+                else:
+                    # No runs, update paragraph text directly
+                    t = p.text or ""
+                    t = re.sub(r"1ST NAME[’']?S", f"{first_name}'S", t, flags=re.IGNORECASE)
+                    t = re.sub(r"1ST NAME", f"{first_name}'S", t, flags=re.IGNORECASE)
+                    t = t.replace("'S'S", "'S").replace("'S'S", "'S")
+                    p.text = t.upper()
+    
+    # Step 5: Replace slide 11 (index 10) with PDF image if provided
+    if image_bytes and len(prs.slides) > 10:
+        add_or_replace_image(prs, 10, image_bytes)
     
     # Save to bytes
     out = BytesIO()
@@ -974,7 +1037,8 @@ def upload_deck_to_google_slides(
     deck_type: str,
     client_name: str,
     priority_slide_index: Optional[int],
-    service_column_slide_index: Optional[int]
+    service_column_slide_index: Optional[int],
+    image_bytes: bytes | None = None
 ) -> str:
     """Upload deck to Google Slides and return presentation ID."""
     if not build or not MediaIoBaseUpload:
@@ -996,7 +1060,8 @@ def upload_deck_to_google_slides(
         deck_type,
         client_name,
         priority_slide_index,
-        service_column_slide_index
+        service_column_slide_index,
+        image_bytes
     )
     
     # Upload to Google Drive
@@ -1122,9 +1187,18 @@ def render_priorities_selector() -> Optional[int]:
     return list(priorities.keys())[0] if priorities else None
 
 
-def render_service_columns_selector() -> Optional[int]:
-    """Render service columns selector and return selected slide index."""
+def render_service_columns_selector(deck_type: str) -> Optional[int]:
+    """Render service columns selector and return selected slide index.
+    
+    Args:
+        deck_type: Selected deck type - if "Standards", the selector is disabled
+    """
     st.subheader("Services")
+    
+    # Disable service columns selector for Standards deck type
+    if deck_type == "Standards":
+        st.info("Service columns are not available for Standards deck type.")
+        return None
     
     _, service_columns = extract_slides_from_service_columns()
     
@@ -1176,6 +1250,32 @@ def render_service_columns_selector() -> Optional[int]:
     return options_map.get(selected)
 
 
+def render_pdf_upload() -> bytes | None:
+    """Render PDF upload and return image bytes from first page. Copied from proposal_creator.py"""
+    st.subheader("PDF Upload")
+    pdf_file = st.file_uploader("Upload a PDF to insert as first-page image", type=["pdf"], key="dc_pdf_upload")
+    img_bytes = st.session_state.get('dc_img_bytes')
+    if pdf_file is not None:
+        try:
+            import fitz  # PyMuPDF
+            pdf_bytes = pdf_file.read()
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            if doc.page_count > 0:
+                page = doc.load_page(0)
+                pix = page.get_pixmap(dpi=180)
+                img_bytes = pix.tobytes("png")
+                st.session_state['dc_img_bytes'] = img_bytes
+                st.success("PDF converted to image")
+            doc.close()
+        except Exception as e:
+            st.warning(f"Could not convert PDF to image: {e}")
+            img_bytes = None
+    elif img_bytes is not None:
+        st.info("Using previously uploaded PDF image (restored)")
+    
+    return img_bytes
+
+
 # ============================================================================
 # Main Application
 # ============================================================================
@@ -1187,7 +1287,8 @@ def main():
     deck_type = render_deck_type_selector()
     client_name = render_proposal_for_input()
     priority_slide_index = render_priorities_selector()
-    service_column_slide_index = render_service_columns_selector()
+    service_column_slide_index = render_service_columns_selector(deck_type)
+    image_bytes = render_pdf_upload()
     
     # Action buttons
     st.divider()
@@ -1210,7 +1311,8 @@ def main():
                 deck_type,
                 client_name,
                 priority_slide_index,
-                service_column_slide_index
+                service_column_slide_index,
+                image_bytes
             )
             
             # Store in session state and trigger auto-download
@@ -1286,7 +1388,8 @@ def main():
                     deck_type,
                     client_name,
                     priority_slide_index,
-                    service_column_slide_index
+                    service_column_slide_index,
+                    image_bytes
                 )
                 st.success(f"Google Slides created successfully! ID: {new_id}")
                 st.info(f"View your presentation: https://docs.google.com/presentation/d/{new_id}/edit")
@@ -1312,4 +1415,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
