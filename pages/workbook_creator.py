@@ -40,7 +40,8 @@ except Exception:  # pragma: no cover - fallback if dependency missing at runtim
 # Pricing constants
 BASE_PRICE_LESS_THAN_5 = 2780.00
 BASE_PRICE_5_OR_MORE = 2325.00
-ACTIVEWEAR_PRICE = 3560.00
+ACTIVEWEAR_PRICE_LESS_THAN_5 = 3560.00
+ACTIVEWEAR_PRICE_5_OR_MORE = 2965.00
 
 OPTIONAL_PRICES = {
     "wash_dye": 1330.00,
@@ -80,7 +81,10 @@ def get_template_path() -> str:
 def calculate_base_price(num_styles: int, is_activewear: bool) -> float:
     """Calculate base price based on number of styles and activewear flag."""
     if is_activewear:
-        return ACTIVEWEAR_PRICE
+        if num_styles < 5:
+            return ACTIVEWEAR_PRICE_LESS_THAN_5
+        else:
+            return ACTIVEWEAR_PRICE_5_OR_MORE
     elif num_styles < 5:
         return BASE_PRICE_LESS_THAN_5
     else:
@@ -1288,15 +1292,15 @@ def apply_development_package(
             # Clear the cell completely (including any formulas)
             count_cell = ws.cell(row=revisions_row, column=col_d_idx)
             count_cell.value = None
-            # Create a formula: default 1, but if there's any Activewear (price = 3560) will be 2
-            # Formula checks if there are any cells in column D (BASE PRICE) that equal 3560 (activewear price)
+            # Create a formula: default 1, but if there's any Activewear (price = 3560 or 2965) will be 2
+            # Formula checks if there are any cells in column D (BASE PRICE) that equal 3560 or 2965 (activewear prices)
             # If yes, return 2, otherwise return 1
             if get_column_letter:
                 # Use last_regular_style_row to exclude Custom Items
-                formula = f"=IF(COUNTIF(D10:D{last_regular_style_row}, 3560) > 0, 2, 1)"
+                formula = f"=IF(COUNTIF(D10:D{last_regular_style_row}, 3560) + COUNTIF(D10:D{last_regular_style_row}, 2965) > 0, 2, 1)"
             else:
                 # Fallback if get_column_letter is not available
-                formula = f"=IF(COUNTIF(D10:D{last_regular_style_row}, 3560) > 0, 2, 1)"
+                formula = f"=IF(COUNTIF(D10:D{last_regular_style_row}, 3560) + COUNTIF(D10:D{last_regular_style_row}, 2965) > 0, 2, 1)"
             # Re-merge if needed, then set formula
             if was_merged and merge_pattern and safe_merge_cells:
                 min_row, max_row, min_col, max_col = merge_pattern
