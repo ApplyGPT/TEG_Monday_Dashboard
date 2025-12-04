@@ -11,6 +11,7 @@ import re
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 import base64
+import requests
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -42,15 +43,98 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Hide tool pages from sidebar
+# Custom CSS to hide all non-tool pages from sidebar navigation
 st.markdown(
     """
 <style>
-    [data-testid="stSidebarNav"] a[href*="tools"] { display: none !important; }
-    [data-testid="stSidebarNav"] a[href*="signnow_form"] { display: none !important; }
-    [data-testid="stSidebarNav"] a[href*="quickbooks_form"] { display: none !important; }
-    [data-testid="stSidebarNav"] a[href*="workbook_creator"] { display: none !important; }
+/* Hide ALL sidebar list items by default */
+[data-testid="stSidebarNav"] li {
+    display: none !important;
+}
+
+/* Show list items that contain allowed tool pages using :has() selector */
+[data-testid="stSidebarNav"] li:has(a[href*="quickbooks"]),
+[data-testid="stSidebarNav"] li:has(a[href*="signnow"]),
+[data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
+[data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
+[data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]) {
+    display: block !important;
+}
+
+iframe {
+    height: 0px !important;
+}
 </style>
+<script>
+// JavaScript to show only tool pages and hide everything else
+(function() {
+    function showToolPagesOnly() {
+        const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
+        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator'];
+        
+        navItems.forEach(item => {
+            const link = item.querySelector('a');
+            if (!link) {
+                item.style.setProperty('display', 'none', 'important');
+                return;
+            }
+            
+            const href = (link.getAttribute('href') || '').toLowerCase();
+            const text = link.textContent.trim().toLowerCase();
+            
+            // Check if this is an allowed tool page
+            const isToolPage = allowedPages.some(page => {
+                return href.includes(page) || text.includes(page.toLowerCase());
+            });
+            
+            // Make sure it's not ads dashboard or other dashboards
+            const isDashboard = (text.includes('ads') && text.includes('dashboard')) || 
+                              (text.includes('burki') && text.includes('dashboard')) ||
+                              (text.includes('sales') && text.includes('dashboard')) ||
+                              (text.includes('database') && text.includes('refresh')) ||
+                              (text.includes('new') && text.includes('leads')) ||
+                              (text.includes('seo') && text.includes('metrics')) ||
+                              (href.includes('ads') && href.includes('dashboard')) ||
+                              (href.includes('burki')) ||
+                              (href.includes('sales_dashboard')) ||
+                              (href.includes('database_refresh')) ||
+                              (href.includes('new_leads')) ||
+                              (href.includes('seo_metrics'));
+            
+            if (isToolPage && !isDashboard) {
+                item.style.setProperty('display', 'block', 'important');
+                link.style.setProperty('display', 'block', 'important');
+            } else {
+                item.style.setProperty('display', 'none', 'important');
+            }
+        });
+    }
+    
+    // Run immediately and on load
+    showToolPagesOnly();
+    window.addEventListener('load', function() {
+        setTimeout(showToolPagesOnly, 50);
+        setTimeout(showToolPagesOnly, 200);
+        setTimeout(showToolPagesOnly, 500);
+    });
+    
+    // Watch for DOM changes
+    const observer = new MutationObserver(function() {
+        showToolPagesOnly();
+    });
+    
+    setTimeout(function() {
+        const sidebar = document.querySelector('[data-testid="stSidebarNav"]');
+        if (sidebar) {
+            observer.observe(sidebar, { 
+                childList: true, 
+                subtree: true,
+                attributes: true
+            });
+        }
+    }, 100);
+})();
+</script>
 """,
     unsafe_allow_html=True,
 )
@@ -672,7 +756,7 @@ def set_proposal_for_name(slide, client_name: str):
 
 
 def add_or_replace_image(prs: Presentation, slide_index: int, image_png_bytes: bytes):
-    """Add or replace image on a slide. Copied from proposal_creator.py"""
+    """Add or replace image on a slide."""
     if slide_index < 0 or slide_index >= len(prs.slides):
         return
     slide = prs.slides[slide_index]
@@ -763,7 +847,7 @@ def create_deck_from_template(
                         p.text = newt
                     break
         
-        # Also use token replacement as fallback (similar to proposal_creator.py)
+        # Also use token replacement as fallback
         # This handles cases where the text might be in a different format
         # Fix double possessive issue like "NAME'S'S" -> "NAME'S"
         for shape in slide4.shapes:
@@ -1033,14 +1117,14 @@ def cleanup_old_decks(drive, parent_folder_id: Optional[str] = None, max_files: 
         st.warning(f"Could not clean up old files: {e}")
 
 
-def upload_deck_to_google_slides(
+def upload_deck_to_google_drive(
     deck_type: str,
     client_name: str,
     priority_slide_index: Optional[int],
     service_column_slide_index: Optional[int],
     image_bytes: bytes | None = None
 ) -> str:
-    """Upload deck to Google Slides and return presentation ID."""
+    """Upload deck PPTX to Google Drive and return file URL. Similar to upload_workbook_to_google_sheet."""
     if not build or not MediaIoBaseUpload:
         raise RuntimeError("Google API client not available")
     
@@ -1048,9 +1132,10 @@ def upload_deck_to_google_slides(
     creds = _get_credentials()
     drive = build("drive", "v3", credentials=creds)
     
-    # Get parent folder ID from secrets
+    # Get parent folder ID for decks from secrets
     cfg = st.secrets.get("google_drive", {}) or {}
-    parent_folder_id = cfg.get("parent_folder_id_proposal")
+    parent_folder_id = cfg.get("parent_folder_id_deck")
+    shared_drive_id = cfg.get("shared_drive_id")
     
     # Clean up old files
     cleanup_old_decks(drive, parent_folder_id)
@@ -1064,25 +1149,8 @@ def upload_deck_to_google_slides(
         image_bytes
     )
     
-    # Upload to Google Drive
-    media = MediaIoBaseUpload(
-        BytesIO(pptx_bytes),
-        mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        resumable=False
-    )
-    
-    presentation_name = f"Deck - {client_name or 'Client'} ({deck_type})"
-    file_metadata = {
-        "name": presentation_name,
-        "mimeType": "application/vnd.google-apps.presentation"
-    }
-    
-    if parent_folder_id:
-        file_metadata["parents"] = [parent_folder_id]
-    
-    # Check for Shared Drive
-    shared_drive_id = None
-    if parent_folder_id:
+    # Check if parent_folder_id is in a Shared Drive
+    if parent_folder_id and not shared_drive_id:
         try:
             folder_info = drive.files().get(
                 fileId=parent_folder_id,
@@ -1095,28 +1163,157 @@ def upload_deck_to_google_slides(
         except Exception:
             pass
     
+    # Upload to Google Drive as PPTX file
+    media = MediaIoBaseUpload(
+        BytesIO(pptx_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        resumable=False
+    )
+    
+    deck_name = f"Deck - {client_name or 'Client'} ({deck_type})"
+    file_metadata = {
+        "name": deck_name,
+        "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    }
+    
+    if parent_folder_id:
+        file_metadata["parents"] = [parent_folder_id]
+    elif shared_drive_id:
+        file_metadata["parents"] = [shared_drive_id]
+    
     try:
         create_kwargs = {
             "body": file_metadata,
             "media_body": media,
-            "fields": "id, webViewLink, name"
+            "fields": "id, webViewLink"
         }
         if shared_drive_id:
             create_kwargs["supportsAllDrives"] = True
         
         uploaded_file = drive.files().create(**create_kwargs).execute()
-        return uploaded_file["id"]
+        file_id = uploaded_file.get("id")
+        web_view = uploaded_file.get("webViewLink")
+        
+        if not file_id:
+            raise RuntimeError("Upload succeeded but Google Drive did not return a file ID.")
+        
+        return web_view or f"https://drive.google.com/file/d/{file_id}/view"
     except Exception as e:
         error_msg = str(e)
         if "quota" in error_msg.lower():
-            st.error("❌ Google Drive quota exceeded. Please try again later or check your Google Drive storage.")
-        elif "permission" in error_msg.lower():
-            st.error("❌ Permission denied. Please check your Google API credentials and permissions.")
-        elif "not found" in error_msg.lower():
-            st.error("❌ Template file not found. Please ensure the template PPTX file exists in the inputs folder.")
+            raise RuntimeError("Google Drive storage quota has been exceeded. Please delete older files or empty the Drive trash, then try again.")
+        raise RuntimeError(f"Google Drive upload failed: {error_msg}")
+
+
+def update_monday_item_deck_url(item_id: str, deck_url: str) -> bool:
+    """Update a monday.com item with the deck URL in a 'Deck Link' field. Copied from update_monday_item_workbook_url."""
+    try:
+        monday_config = st.secrets.get("monday", {})
+        api_token = monday_config.get("api_token")
+        
+        if not api_token:
+            st.error("Monday.com API token not found in secrets.")
+            return False
+        
+        # Query to get board columns to find the "Deck Link" column
+        query = f"""
+        query {{
+            items(ids: [{item_id}]) {{
+                board {{
+                    id
+                    columns {{
+                        id
+                        title
+                        type
+                    }}
+                }}
+            }}
+        }}
+        """
+        
+        url = "https://api.monday.com/v2"
+        headers = {
+            "Authorization": api_token,
+            "Content-Type": "application/json",
+        }
+        
+        response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
+        data = response.json()
+        
+        if "errors" in data:
+            st.error(f"Error fetching monday.com columns: {data['errors']}")
+            return False
+        
+        items = data.get("data", {}).get("items", [])
+        if not items:
+            st.error("Item not found in monday.com")
+            return False
+        
+        board = items[0].get("board", {})
+        board_id = board.get("id")
+        columns = board.get("columns", [])
+        
+        if not board_id:
+            st.error("Could not determine board ID from monday.com item")
+            return False
+        
+        # Find "Deck Link" column
+        deck_column = None
+        for col in columns:
+            title_lower = col.get("title", "").lower()
+            if "deck" in title_lower and "link" in title_lower:
+                deck_column = col
+                break
+        
+        if not deck_column:
+            st.warning("⚠️ 'Deck Link' column not found in monday.com. Please create a URL column named 'Deck Link' in the Sales board.")
+            return False
+        
+        column_id = deck_column.get("id")
+        column_type = deck_column.get("type")
+        
+        # Update the item with the deck URL
+        # For URL columns, the value format is: {"url": "https://...", "text": "Link Text"}
+        if column_type == "link":
+            mutation = f"""
+            mutation {{
+                change_column_value(
+                    board_id: {board_id},
+                    item_id: {item_id},
+                    column_id: "{column_id}",
+                    value: "{{\\"url\\": \\"{deck_url}\\", \\"text\\": \\"View Deck\\"}}"
+                ) {{
+                    id
+                }}
+            }}
+            """
         else:
-            st.error(f"❌ Failed to upload and convert PPTX: {error_msg}")
-        raise
+            # For text columns, just use the URL as text
+            mutation = f"""
+            mutation {{
+                change_column_value(
+                    board_id: {board_id},
+                    item_id: {item_id},
+                    column_id: "{column_id}",
+                    value: "{deck_url}"
+                ) {{
+                    id
+                }}
+            }}
+            """
+        
+        response = requests.post(url, json={"query": mutation}, headers=headers, timeout=30)
+        result = response.json()
+        
+        if "errors" in result:
+            st.error(f"Error updating monday.com: {result['errors']}")
+            return False
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Failed to update monday.com: {e}")
+        return False
 
 
 # ============================================================================
@@ -1136,14 +1333,21 @@ def render_deck_type_selector() -> str:
     return deck_type
 
 
-def render_proposal_for_input() -> str:
-    """Render proposal for input and return client name."""
+def render_proposal_for_input(default_value: str = "") -> str:
+    """Render proposal for input and return client name.
+    
+    Args:
+        default_value: Default value for the client name input (from query params)
+    """
     st.subheader("Proposal For")
+    # Use default_value if provided, otherwise use session state
+    initial_value = default_value if default_value else st.session_state.get("dc_client_name", "")
     client_name = st.text_input(
         "Client Name",
-        value=st.session_state.get("dc_client_name", ""),
+        value=initial_value,
         key="dc_client_name",
-        help="Enter the client name for the 'Proposal For' slide"
+        help="Enter the client name for the 'Proposal For' slide",
+        placeholder="Enter client name"
     )
     return client_name
 
@@ -1251,7 +1455,7 @@ def render_service_columns_selector(deck_type: str) -> Optional[int]:
 
 
 def render_pdf_upload() -> bytes | None:
-    """Render PDF upload and return image bytes from first page. Copied from proposal_creator.py"""
+    """Render PDF upload and return image bytes from first page."""
     st.subheader("PDF Upload")
     pdf_file = st.file_uploader("Upload a PDF to insert as first-page image", type=["pdf"], key="dc_pdf_upload")
     img_bytes = st.session_state.get('dc_img_bytes')
@@ -1283,12 +1487,28 @@ def render_pdf_upload() -> bytes | None:
 def main():
     st.title("📽️ Deck Creator")
     
+    # Get query parameters from Monday.com link
+    query_params = st.query_params
+    first_name = query_params.get("first_name", "").strip()
+    last_name = query_params.get("last_name", "").strip()
+    item_id = query_params.get("item_id", "").strip()
+    
+    # Combine first_name and last_name for client_name default
+    client_name_default = ""
+    if first_name or last_name:
+        client_name_default = f"{first_name} {last_name}".strip()
+    
     # Render UI components
     deck_type = render_deck_type_selector()
-    client_name = render_proposal_for_input()
+    client_name = render_proposal_for_input(client_name_default)
     priority_slide_index = render_priorities_selector()
     service_column_slide_index = render_service_columns_selector(deck_type)
     image_bytes = render_pdf_upload()
+    
+    # Show Monday.com upload section
+    st.markdown("---")
+    st.subheader("Google Sheets --> Monday.com Upload")
+    st.caption("Uploads will use the shared Google Drive folder configured for the service account.")
     
     # Action buttons
     st.divider()
@@ -1298,7 +1518,7 @@ def main():
         generate_button = st.button("Create PowerPoint", type="primary")
     
     with col_gs:
-        push_gslides_button = st.button("Create Google Slides", type="primary")
+        push_gslides_button = st.button("Google Sheets --> Monday.com Upload", type="primary")
     
     # Handle PowerPoint generation
     if generate_button:
@@ -1378,39 +1598,49 @@ def main():
             
             st.success(f"✅ PowerPoint generated: {filename}")
     
-    # Handle Google Slides upload
+    # Handle Google Drive --> Monday.com upload
     if push_gslides_button:
         if not build:
             st.error("Google API client not available")
         else:
-            try:
-                new_id = upload_deck_to_google_slides(
-                    deck_type,
-                    client_name,
-                    priority_slide_index,
-                    service_column_slide_index,
-                    image_bytes
-                )
-                st.success(f"Google Slides created successfully! ID: {new_id}")
-                st.info(f"View your presentation: https://docs.google.com/presentation/d/{new_id}/edit")
-                
-            except Exception as e:
-                error_msg = str(e)
-                if "quota" in error_msg.lower():
-                    st.error("❌ Google Drive quota exceeded. Please try again later or check your Google Drive storage.")
-                    st.info("💡 **Solutions:**")
-                    st.markdown("""
-                    - Free up space in your Google Drive
-                    - Delete old deck files from Google Drive
-                    - Try using a different Google account with more storage
-                    - Wait a few hours and try again (quotas reset periodically)
-                    """)
-                elif "permission" in error_msg.lower():
-                    st.error("❌ Permission denied. Please check your Google API credentials and permissions.")
-                elif "not found" in error_msg.lower():
-                    st.error("❌ Template file not found. Please ensure the template PPTX file exists in the inputs folder.")
-                else:
-                    st.error(f"❌ Failed to create Google Slides: {error_msg}")
+            with st.spinner("Uploading deck to Google Drive and updating Monday.com..."):
+                try:
+                    # Upload to Google Drive
+                    deck_url = upload_deck_to_google_drive(
+                        deck_type,
+                        client_name,
+                        priority_slide_index,
+                        service_column_slide_index,
+                        image_bytes
+                    )
+                    st.success(f"✅ Deck uploaded to Google Drive: [Open Deck]({deck_url})")
+                    
+                    # Update Monday.com with the deck URL if item_id is provided
+                    if item_id:
+                        if update_monday_item_deck_url(item_id, deck_url):
+                            st.success(f"✅ Monday.com item updated with Deck Link!")
+                        else:
+                            st.warning("⚠️ Deck uploaded to Google Drive, but failed to update Monday.com item. Please update manually.")
+                    else:
+                        st.info("ℹ️ No Monday.com item ID provided. Deck uploaded to Google Drive only.")
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    if "quota" in error_msg.lower():
+                        st.error("❌ Google Drive quota exceeded. Please try again later or check your Google Drive storage.")
+                        st.markdown("""
+                        **To resolve this issue:**
+                        - Free up space in your Google Drive
+                        - Delete old deck files from Google Drive
+                        - Try using a different Google account with more storage
+                        - Wait a few hours and try again (quotas reset periodically)
+                        """)
+                    elif "permission" in error_msg.lower():
+                        st.error("❌ Permission denied. Please check your Google API credentials and permissions.")
+                    elif "not found" in error_msg.lower():
+                        st.error("❌ Template file not found. Please ensure the template PPTX file exists in the inputs folder.")
+                    else:
+                        st.error(f"❌ Failed to upload deck: {error_msg}")
 
 
 if __name__ == "__main__":

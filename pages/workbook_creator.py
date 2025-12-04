@@ -2154,7 +2154,8 @@ def main() -> None:
     [data-testid="stSidebarNav"] li:has(a[href*="quickbooks"]),
     [data-testid="stSidebarNav"] li:has(a[href*="signnow"]),
     [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
-    [data-testid="stSidebarNav"] li:has(a[href*="workbook"]) {
+    [data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
+    [data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]) {
         display: block !important;
     }
 
@@ -2164,7 +2165,7 @@ def main() -> None:
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook'];
+        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator'];
         
         navItems.forEach(item => {
             const link = item.querySelector('a');

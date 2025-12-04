@@ -97,7 +97,8 @@ st.markdown("""
     [data-testid="stSidebarNav"] a[href*="tools"],
     [data-testid="stSidebarNav"] a[href*="quickbooks_form"],
     [data-testid="stSidebarNav"] a[href*="signnow_form"],
-    [data-testid="stSidebarNav"] a[href*="workbook_creator"] {
+    [data-testid="stSidebarNav"] a[href*="workbook_creator"],
+    [data-testid="stSidebarNav"] a[href*="deck_creator"] {
         display: none !important;
     }
     @media (max-width: 768px) {

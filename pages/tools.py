@@ -25,7 +25,8 @@ st.markdown("""
 [data-testid="stSidebarNav"] li:has(a[href*="quickbooks"]),
 [data-testid="stSidebarNav"] li:has(a[href*="signnow"]),
 [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
-[data-testid="stSidebarNav"] li:has(a[href*="workbook"]) {
+[data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
+[data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]) {
     display: block !important;
 }
 </style>
@@ -34,7 +35,7 @@ st.markdown("""
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook'];
+        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator'];
         
         navItems.forEach(item => {
             const link = item.querySelector('a');
@@ -97,11 +98,11 @@ def main():
     st.markdown("Access employee tools for contracts, invoices, and workbooks")
     
     # Create columns for tool cards
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.markdown("### 📝 Sign Now")
-        st.markdown("Review and send contracts for electronic signature")
+        st.markdown("Send contracts for electronic signature")
         if st.button("🚀 Open Sign Now", key="signnow_button", use_container_width=True):
             st.switch_page("pages/signnow_form.py")
     
@@ -113,9 +114,15 @@ def main():
     
     with col3:
         st.markdown("### 📊 Workbook Creator")
-        st.markdown("Generate Excel workbooks for development packages")
+        st.markdown("Generate Excel workbooks")
         if st.button("🚀 Open Workbook Creator", key="workbook_button", use_container_width=True):
             st.switch_page("pages/workbook_creator.py")
+
+    with col4:
+        st.markdown("### 📽️ Deck Creator")
+        st.markdown("Generate Google Slides decks")
+        if st.button("🚀 Open Deck Creator", key="deck_button", use_container_width=True):
+            st.switch_page("pages/deck_creator.py")
 
 if __name__ == "__main__":
     main()
