@@ -852,3 +852,61 @@ def verify_production_credentials(api) -> Tuple[bool, str]:
         return False, "❌ Error 403: Access Denied. App may not have permission."
         
     return False, f"❌ Connection failed. Status: {code}"
+
+
+def create_monday_update(item_id: str, message: str) -> bool:
+    """Create an update (comment) on a Monday.com item.
+    
+    Args:
+        item_id: The Monday.com item ID
+        message: The message to post as an update
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        monday_config = st.secrets.get("monday", {})
+        api_token = monday_config.get("api_token")
+        
+        if not api_token:
+            st.error("Monday.com API token not found in secrets.")
+            return False
+        
+        url = "https://api.monday.com/v2"
+        headers = {
+            "Authorization": api_token,
+            "Content-Type": "application/json",
+        }
+        
+        # Escape special characters in message for GraphQL
+        # Replace newlines with <br> for HTML formatting, escape quotes and backslashes
+        escaped_message = (message
+                          .replace('\\', '\\\\')  # Escape backslashes first
+                          .replace('"', '\\"')   # Escape double quotes
+                          .replace('\n', '<br>')  # Replace newlines with HTML breaks
+                          .replace('\r', ''))     # Remove carriage returns
+        
+        # GraphQL mutation to create update
+        mutation = f"""
+        mutation {{
+            create_update(
+                item_id: {item_id}
+                body: "{escaped_message}"
+            ) {{
+                id
+            }}
+        }}
+        """
+        
+        response = requests.post(url, json={"query": mutation}, headers=headers, timeout=30)
+        result = response.json()
+        
+        if "errors" in result:
+            st.error(f"Error creating Monday.com update: {result['errors']}")
+            return False
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Failed to create Monday.com update: {e}")
+        return False

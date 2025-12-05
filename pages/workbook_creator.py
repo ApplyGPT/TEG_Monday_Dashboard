@@ -20,6 +20,15 @@ from google_sheets_uploader import (
     upload_workbook_to_google_sheet,
 )
 
+# Google API imports for PDF export
+try:
+    from google.oauth2.service_account import Credentials as SACredentials
+    from googleapiclient.discovery import build
+    from google.auth.transport.requests import Request as GoogleRequest
+    GOOGLE_API_AVAILABLE = True
+except ImportError:
+    GOOGLE_API_AVAILABLE = False
+
 try:
     from openpyxl import load_workbook
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, NamedStyle
@@ -38,8 +47,7 @@ except Exception:  # pragma: no cover - fallback if dependency missing at runtim
 
 
 # Pricing constants
-BASE_PRICE_LESS_THAN_5 = 2780.00
-BASE_PRICE_5_OR_MORE = 2325.00
+BASE_PRICE_STANDARD = 2790.00  # Standard pricing is now fixed at $2,790
 ACTIVEWEAR_PRICE_LESS_THAN_5 = 3560.00
 ACTIVEWEAR_PRICE_5_OR_MORE = 2965.00
 
@@ -79,16 +87,21 @@ def get_template_path() -> str:
 
 
 def calculate_base_price(num_styles: int, is_activewear: bool) -> float:
-    """Calculate base price based on number of styles and activewear flag."""
+    """Calculate base price based on number of styles and activewear flag.
+    
+    Standard pricing is fixed at $2,790.
+    Activewear pricing is based on total styles:
+    - Less than 5 total styles: $3,560
+    - 5 or more total styles: $2,965
+    """
     if is_activewear:
         if num_styles < 5:
             return ACTIVEWEAR_PRICE_LESS_THAN_5
         else:
             return ACTIVEWEAR_PRICE_5_OR_MORE
-    elif num_styles < 5:
-        return BASE_PRICE_LESS_THAN_5
     else:
-        return BASE_PRICE_5_OR_MORE
+        # Standard pricing is fixed at $2,790
+        return BASE_PRICE_STANDARD
 
 
 def copy_cell_formatting(source_cell, target_cell) -> None:
@@ -766,10 +779,11 @@ def apply_development_package(
                     except Exception:
                         pass
             
-            # Write style number (#) - continue sequence from regular styles (101, 102, 103...)
+            # Write style number (#) - use the style_number from entry if available, otherwise default
             cell_b = ws.cell(row=row_idx, column=2)
-            # Start custom items from 101 + num_styles (so if regular styles are 101-106, custom starts at 107)
-            cell_b.value = 101 + num_styles + idx
+            # Use style_number from entry if set, otherwise default to 101 + num_styles + idx
+            style_number = entry.get("style_number", 101 + num_styles + idx)
+            cell_b.value = style_number
             if is_new_row:
                 apply_full_border_pair(ws, 2, row_idx, row_second)
                 safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
@@ -1970,6 +1984,135 @@ def update_monday_item_workbook_url(item_id: str, workbook_url: str) -> bool:
         return False
 
 
+def extract_spreadsheet_id_from_url(url: str) -> str | None:
+    """Extract spreadsheet ID from Google Sheets or Google Drive URL.
+    
+    Args:
+        url: Google Sheets URL (e.g., https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit)
+             or Google Drive URL (e.g., https://drive.google.com/file/d/FILE_ID/view)
+    
+    Returns:
+        Spreadsheet/file ID or None if not found
+    """
+    import re
+    
+    # Pattern for Google Sheets URL: /spreadsheets/d/{id}/
+    sheets_pattern = r'/spreadsheets/d/([a-zA-Z0-9-_]+)'
+    match = re.search(sheets_pattern, url)
+    if match:
+        return match.group(1)
+    
+    # Pattern for Google Drive URL: /file/d/{id}/
+    drive_pattern = r'/file/d/([a-zA-Z0-9-_]+)'
+    match = re.search(drive_pattern, url)
+    if match:
+        return match.group(1)
+    
+    return None
+
+
+def export_google_sheet_as_pdf(sheet_url: str) -> bytes:
+    """Export Google Sheet as PDF using Google Sheets export API.
+    
+    Args:
+        sheet_url: The Google Sheet URL
+        
+    Returns:
+        PDF file as bytes
+        
+    Raises:
+        RuntimeError: If spreadsheet ID cannot be extracted or export fails
+    """
+    # Extract spreadsheet ID from URL
+    spreadsheet_id = extract_spreadsheet_id_from_url(sheet_url)
+    if not spreadsheet_id:
+        raise RuntimeError(f"Could not extract spreadsheet ID from URL: {sheet_url}")
+    
+    # Build export URL with PDF format
+    # Using landscape orientation and removing gridlines for better readability
+    export_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=pdf&portrait=false&gridlines=false"
+    
+    # Get Google credentials for authentication
+    if not GOOGLE_API_AVAILABLE:
+        raise RuntimeError("Google API libraries not available. Please install google-auth and google-api-python-client.")
+    
+    try:
+        info = st.secrets.get("google_service_account")
+        if not info:
+            raise RuntimeError("Google service account credentials not found in secrets")
+        
+        credentials = SACredentials.from_service_account_info(
+            info,
+            scopes=["https://www.googleapis.com/auth/drive.readonly"]
+        )
+        
+        # Refresh credentials to get access token
+        if not credentials.valid:
+            credentials.refresh(GoogleRequest())
+        
+        # Fetch the PDF using authenticated request
+        import urllib.request
+        
+        req = urllib.request.Request(export_url)
+        req.add_header('Authorization', f'Bearer {credentials.token}')
+        
+        with urllib.request.urlopen(req) as response:
+            pdf_bytes = response.read()
+            return pdf_bytes
+            
+    except Exception as e:
+        raise RuntimeError(f"Failed to export Google Sheet as PDF: {e}")
+
+
+def get_board_id_from_item(item_id: str) -> str | None:
+    """Get board ID from a Monday.com item ID.
+    
+    Args:
+        item_id: The Monday.com item ID
+        
+    Returns:
+        Board ID or None if not found
+    """
+    try:
+        monday_config = st.secrets.get("monday", {})
+        api_token = monday_config.get("api_token")
+        
+        if not api_token:
+            return None
+        
+        query = f"""
+        query {{
+            items(ids: [{item_id}]) {{
+                board {{
+                    id
+                }}
+            }}
+        }}
+        """
+        
+        url = "https://api.monday.com/v2"
+        headers = {
+            "Authorization": api_token,
+            "Content-Type": "application/json",
+        }
+        
+        response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
+        data = response.json()
+        
+        if "errors" in data:
+            return None
+        
+        items = data.get("data", {}).get("items", [])
+        if not items:
+            return None
+        
+        board = items[0].get("board", {})
+        return board.get("id")
+        
+    except Exception:
+        return None
+
+
 def upload_file_to_monday_item(item_id: str, board_id: str, file_bytes: bytes, filename: str) -> bool:
     """Upload a file to a monday.com item using the GraphQL file upload API."""
     try:
@@ -2056,12 +2199,20 @@ def upload_file_to_monday_item(item_id: str, board_id: str, file_bytes: bytes, f
             "file": ["variables.file"]
         }
         
+        # Determine MIME type based on file extension
+        if filename.lower().endswith('.pdf'):
+            mime_type = 'application/pdf'
+        elif filename.lower().endswith('.xlsx'):
+            mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        else:
+            mime_type = 'application/octet-stream'
+        
         # Create multipart form data
         files_data = {
             'query': (None, mutation),
             'variables': (None, json.dumps(variables)),
             'map': (None, json.dumps(file_map)),
-            'file': (filename, file_bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            'file': (filename, file_bytes, mime_type)
         }
         
         # Upload the file
@@ -2424,23 +2575,40 @@ def main() -> None:
     st.markdown("---")
     st.subheader("**Custom Item**")
     
+    # Calculate number of regular styles for custom item numbering
+    num_regular_styles = len(st.session_state.get("style_entries", []))
+    
     # Column headers for Custom Items
-    custom_header_cols = st.columns([2, 1.5, 1.5, 0.8])
+    custom_header_cols = st.columns([1.2, 2, 1.5, 1.5, 0.8])
     with custom_header_cols[0]:
-        st.markdown("**Custom Item Name**")
+        st.markdown("**Style Number**")
     with custom_header_cols[1]:
-        st.markdown("**Price ($)**")
+        st.markdown("**Custom Item Name**")
     with custom_header_cols[2]:
-        st.markdown("**Complexity (%)**")
+        st.markdown("**Price ($)**")
     with custom_header_cols[3]:
+        st.markdown("**Complexity (%)**")
+    with custom_header_cols[4]:
         st.markdown("**Remove**")
     
     # Display existing Custom Items
     if st.session_state["custom_styles"]:
         for i, entry in enumerate(st.session_state["custom_styles"]):
             with st.container():
-                custom_cols = st.columns([2, 1.5, 1.5, 0.8])
+                custom_cols = st.columns([1.2, 2, 1.5, 1.5, 0.8])
                 with custom_cols[0]:
+                    # Style Number field with default value (101 + num_regular_styles + i)
+                    default_style_number = entry.get("style_number", 101 + num_regular_styles + i)
+                    style_number = st.number_input(
+                        "Style Number",
+                        min_value=1,
+                        value=int(default_style_number),
+                        step=1,
+                        key=f"custom_style_number_{i}",
+                        label_visibility="collapsed",
+                    )
+                    entry["style_number"] = style_number
+                with custom_cols[1]:
                     custom_style_name = st.text_input(
                         "Custom Item Name",
                         value=entry.get("name", ""),
@@ -2449,7 +2617,7 @@ def main() -> None:
                         placeholder="e.g., Custom Item",
                     )
                     entry["name"] = custom_style_name
-                with custom_cols[1]:
+                with custom_cols[2]:
                     custom_price = st.number_input(
                         "Price",
                         min_value=0.0,
@@ -2460,7 +2628,7 @@ def main() -> None:
                         label_visibility="collapsed",
                     )
                     entry["price"] = float(custom_price)
-                with custom_cols[2]:
+                with custom_cols[3]:
                     custom_complexity = st.number_input(
                         "Complexity (%)",
                         min_value=0,
@@ -2472,19 +2640,29 @@ def main() -> None:
                         label_visibility="collapsed",
                     )
                     entry["complexity"] = float(custom_complexity)
-                with custom_cols[3]:
+                with custom_cols[4]:
                     if st.button("❌", key=f"remove_custom_{i}", help="Remove this Custom Item"):
                         st.session_state["custom_styles"].pop(i)
                         st.rerun()
     
     # Add new Custom Item interface
     st.markdown("**Add New Custom Item**")
-    add_custom_cols = st.columns([2, 1.5, 1.5, 0.8])
+    add_custom_cols = st.columns([1.2, 2, 1.5, 1.5, 0.8])
     default_new_custom_name = st.session_state.get("new_custom_style_name", "")
     default_new_custom_price = st.session_state.get("new_custom_price", 0.0)
     default_new_custom_complexity = st.session_state.get("new_custom_complexity", 0)
+    default_new_custom_style_number = st.session_state.get("new_custom_style_number", 101 + num_regular_styles + len(st.session_state.get("custom_styles", [])))
     
     with add_custom_cols[0]:
+        new_custom_style_number = st.number_input(
+            "Style Number",
+            min_value=1,
+            value=int(default_new_custom_style_number),
+            step=1,
+            key="new_custom_style_number",
+            label_visibility="collapsed",
+        )
+    with add_custom_cols[1]:
         new_custom_style_name = st.text_input(
             "Custom Item Name",
             value=default_new_custom_name,
@@ -2492,7 +2670,7 @@ def main() -> None:
             label_visibility="collapsed",
             placeholder="e.g., Custom Item",
         )
-    with add_custom_cols[1]:
+    with add_custom_cols[2]:
         new_custom_price = st.number_input(
             "Price",
             min_value=0.0,
@@ -2502,7 +2680,7 @@ def main() -> None:
             key="new_custom_price",
             label_visibility="collapsed",
         )
-    with add_custom_cols[2]:
+    with add_custom_cols[3]:
         new_custom_complexity = st.number_input(
             "Complexity (%)",
             min_value=0,
@@ -2513,19 +2691,21 @@ def main() -> None:
             key="new_custom_complexity",
             label_visibility="collapsed",
         )
-    with add_custom_cols[3]:
+    with add_custom_cols[4]:
         if st.button("➕ Add", key="add_custom_style", help="Add this Custom Item"):
             if new_custom_style_name.strip() and new_custom_price > 0:
                 st.session_state["custom_styles"].append({
                     "name": new_custom_style_name.strip(),
                     "price": float(new_custom_price),
                     "complexity": float(new_custom_complexity),
+                    "style_number": int(new_custom_style_number),
                 })
                 # Reset add-new-custom-style inputs
                 for key in [
                     "new_custom_style_name",
                     "new_custom_price",
                     "new_custom_complexity",
+                    "new_custom_style_number",
                 ]:
                     if key in st.session_state:
                         del st.session_state[key]
@@ -2644,6 +2824,28 @@ def main() -> None:
                         st.success(f"✅ Monday.com item updated with Google Sheet link!")
                     else:
                         st.warning("⚠️ Google Sheet uploaded, but failed to update Monday.com item. Please update manually.")
+                    
+                    # Also upload PDF version to Files column (only if converted to Google Sheet)
+                    if converted:
+                        try:
+                            # Get board_id from item_id
+                            board_id = get_board_id_from_item(item_id)
+                            if board_id:
+                                # Export Google Sheet as PDF using Google Sheets export API
+                                pdf_bytes = export_google_sheet_as_pdf(sheet_url)
+                                pdf_filename = f"{safe_client}_workbook.pdf"
+                                
+                                # Upload PDF to Monday.com Files column
+                                if upload_file_to_monday_item(item_id, board_id, pdf_bytes, pdf_filename):
+                                    st.success(f"✅ PDF version uploaded to Monday.com Files column!")
+                                else:
+                                    st.warning("⚠️ PDF upload to Monday.com Files column failed. Link was updated successfully.")
+                            else:
+                                st.warning("⚠️ Could not retrieve board ID. PDF upload skipped.")
+                        except Exception as pdf_error:
+                            st.warning(f"⚠️ PDF export/upload failed: {pdf_error}. Link was updated successfully.")
+                    else:
+                        st.info("ℹ️ PDF export skipped (workbook not converted to Google Sheet format).")
                 else:
                     st.info("ℹ️ No Monday.com item ID provided. Workbook uploaded to Google Sheets only.")
 

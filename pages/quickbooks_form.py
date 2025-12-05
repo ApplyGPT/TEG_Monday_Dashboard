@@ -119,6 +119,7 @@ def main():
     
     # Get data from session state (from redirect) or URL parameters
     # This must be done BEFORE any form fields that use these defaults
+    item_id = ''
     if 'quickbooks_data' in st.session_state:
         # Data from redirect page
         data = st.session_state['quickbooks_data']
@@ -128,6 +129,7 @@ def main():
         contract_amount_default = data.get('contract_amount', '')
         cc_email_default = data.get('cc_email', '')
         company_name_default = data.get('company_name', '')
+        item_id = data.get('item_id', '').strip()
         st.success("✅ Data loaded from Monday.com")
     else:
         # Fallback to URL parameters
@@ -138,6 +140,7 @@ def main():
         contract_amount_default = query_params.get('contract_amount', '')
         cc_email_default = query_params.get('cc_email', '')
         company_name_default = query_params.get('company_name', '')
+        item_id = query_params.get('item_id', '').strip()
     
     # Salesman Email Address (CC) field
     cc_col1, cc_col2 = st.columns(2)
@@ -591,6 +594,15 @@ def main():
                 st.success(f"✅ {message}")
                 if enable_payment_link:
                     st.success("🔗 Payment link included in invoice - customer can pay online via ACH")
+                
+                # Post update to Monday.com if item_id is provided
+                if item_id:
+                    from quickbooks_integration import create_monday_update
+                    if create_monday_update(item_id, message):
+                        st.success("✅ Update posted to Monday.com item!")
+                    else:
+                        st.warning("⚠️ Invoice created successfully, but failed to post update to Monday.com.")
+                
                 st.balloons()
                 # Clear line items and credits after successful creation
                 st.session_state['line_items'] = []
