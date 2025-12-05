@@ -593,13 +593,13 @@ def main():
             if success:
                 st.success(f"✅ {message}")
                 if enable_payment_link:
-                    st.success("🔗 Payment link included in invoice - customer can pay online via ACH")
+                    print("🔗 Payment link included in invoice - customer can pay online via ACH")
                 
                 # Post update to Monday.com if item_id is provided
                 if item_id:
                     from quickbooks_integration import create_monday_update
                     if create_monday_update(item_id, message):
-                        st.success("✅ Update posted to Monday.com item!")
+                        print("✅ Update posted to Monday.com item!")
                     else:
                         st.warning("⚠️ Invoice created successfully, but failed to post update to Monday.com.")
                 

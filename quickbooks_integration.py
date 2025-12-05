@@ -692,10 +692,6 @@ class QuickBooksAPI:
                 invoice_resp = response.json()
                 invoice_id = invoice_resp.get("Invoice", {}).get("Id")
                 self._update_invoice_doc_number(invoice_id, invoice_resp.get("Invoice", {}))
-                success_msg = f"✅ Invoice created successfully (ID: {invoice_id})"
-                if cc_email and cc_email.strip():
-                    success_msg += f" (CC: {cc_email})"
-                st.success(success_msg)
                 return invoice_id
             except Exception as e:
                 st.error(f"❌ Error parsing invoice response: {str(e)}")
@@ -780,11 +776,11 @@ class QuickBooksAPI:
         if primary_sent:
             if cc_email and cc_email.strip():
                 if cc_sent:
-                    st.success(f"📧 Invoice sent to {email} and {cc_email}")
+                    print(f"📧 Invoice sent to {email} and {cc_email}")
                 else:
-                    st.success(f"📧 Invoice sent to {email} (salesman email failed)")
+                    print(f"📧 Invoice sent to {email} (salesman email failed)")
             else:
-                st.success(f"📧 Invoice sent to {email}")
+                print(f"📧 Invoice sent to {email}")
             return True
         else:
             return False

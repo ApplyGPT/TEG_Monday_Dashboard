@@ -882,7 +882,7 @@ def apply_development_package(
 
     # Count activewear and regular styles
     num_activewear = sum(1 for entry in style_entries if entry.get("activewear", False))
-    num_regular = num_styles - num_activewear
+    num_regular = sum(1 for entry in style_entries if not entry.get("activewear", False))
     
     total_extra_rows = max(total_styles_count - len(ROW_INDICES), 0) * 2
     deliverables_block_start = DELIVERABLE_BLOCK_START + total_extra_rows
@@ -1286,8 +1286,18 @@ def apply_development_package(
             count_cell.value = 1
             count_cell.number_format = "0"
         
-        # Round of Revisions: count of types (2 if both regular and activewear exist, otherwise 1)
-        revisions_row = find_label_row("ROUND OF REVISIONS")
+        # Round of Revisions: 
+        # - 1 if there's ONLY Regular styles (non-Activewear) OR ONLY Activewear styles
+        # - 2 if there's BOTH Regular AND Activewear styles
+        # Note: ROUND OF REVISIONS is in column B, not column H, so we need to search column B
+        label_col_b = column_index_from_string("B")
+        revisions_row = None
+        revisions_label_lower = "round of revisions"
+        for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+            value = ws.cell(row=scan_row, column=label_col_b).value
+            if isinstance(value, str) and revisions_label_lower in value.strip().lower():
+                revisions_row = scan_row
+                break
         if revisions_row:
             col_d_idx = column_index_from_string("D")
             # Check if this cell is part of a merged range and remember the merge pattern
@@ -1303,19 +1313,25 @@ def apply_development_package(
                     except Exception:
                         pass
                     break
+            # SIMPLEST APPROACH: Use num_regular and num_activewear already calculated from style_entries
+            # These are calculated above from the actual style_entries data - 100% reliable
+            # No need to read from Excel cells which might have text/number issues
+            
+            # Calculate revisions count: 2 if both regular AND activewear exist, 1 otherwise
+            # num_regular and num_activewear are calculated at lines 884-885 from style_entries
+            revisions_count = 2 if (num_regular > 0 and num_activewear > 0) else 1
+            
             # Clear the cell completely (including any formulas)
             count_cell = ws.cell(row=revisions_row, column=col_d_idx)
             count_cell.value = None
-            # Create a formula: default 1, but if there's any Activewear (price = 3560 or 2965) will be 2
-            # Formula checks if there are any cells in column D (BASE PRICE) that equal 3560 or 2965 (activewear prices)
-            # If yes, return 2, otherwise return 1
-            if get_column_letter:
-                # Use last_regular_style_row to exclude Custom Items
-                formula = f"=IF(COUNTIF(D10:D{last_regular_style_row}, 3560) + COUNTIF(D10:D{last_regular_style_row}, 2965) > 0, 2, 1)"
-            else:
-                # Fallback if get_column_letter is not available
-                formula = f"=IF(COUNTIF(D10:D{last_regular_style_row}, 3560) + COUNTIF(D10:D{last_regular_style_row}, 2965) > 0, 2, 1)"
-            # Re-merge if needed, then set formula
+            
+            # Set the calculated value directly (not a formula) - this will ALWAYS work
+            count_cell.value = revisions_count
+            count_cell.number_format = "0"
+            if Alignment is not None:
+                count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            
+            # Re-merge AFTER setting the value
             if was_merged and merge_pattern and safe_merge_cells:
                 min_row, max_row, min_col, max_col = merge_pattern
                 if get_column_letter:
@@ -1323,14 +1339,10 @@ def apply_development_package(
                     end_col_letter = get_column_letter(max_col)
                     range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
                     safe_merge_cells(ws, range_str)
-                # Set formula AFTER re-merging (same pattern as PATTERNS and FIRST SAMPLES)
-                count_cell = ws.cell(row=revisions_row, column=col_d_idx)
-                count_cell.value = formula
-                count_cell.number_format = "0"
-            else:
-                # Not merged, set formula directly
-                count_cell.value = formula
-                count_cell.number_format = "0"
+                    # Re-apply alignment after merging
+                    if Alignment is not None:
+                        merged_cell = ws.cell(row=revisions_row, column=col_d_idx)
+                        merged_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
         
         # If activewear exists, handle SECOND SAMPLES and the new rows
         if num_activewear > 0:
@@ -1620,24 +1632,66 @@ def apply_development_package(
             cell_l_totals.fill = PatternFill(start_color="F0CFBB", end_color="F0CFBB", fill_type="solid")
 
         # Discount row (fixed location in template at row 14 / columns N-P)
+        # Only show discount if discount_percentage > 0, otherwise clear the cells
         discount_row = SUMMARY_DISCOUNT_ROW
         discount_decimal = discount_percentage / 100.0 if discount_percentage else 0.0
         cell_n_discount = ws.cell(row=discount_row, column=SUMMARY_LABEL_COL)
-        cell_n_discount.value = f"DISCOUNT ({discount_percentage:.0f}%)"
-        if Font is not None:
-            cell_n_discount.font = Font(name="Arial", size=20, bold=True, color=cell_n_discount.font.color if cell_n_discount.font else None)
-        if Alignment is not None:
-            cell_n_discount.alignment = Alignment(horizontal="center", vertical="center")
         cell_p_discount = ws.cell(row=discount_row, column=SUMMARY_VALUE_COL)
-        if discount_decimal > 0:
+        
+        if discount_percentage > 0:
+            # Set discount label and value
+            cell_n_discount.value = f"DISCOUNT ({discount_percentage:.0f}%)"
+            if Font is not None:
+                cell_n_discount.font = Font(name="Arial", size=20, bold=True, color=cell_n_discount.font.color if cell_n_discount.font else None)
+            if Alignment is not None:
+                cell_n_discount.alignment = Alignment(horizontal="center", vertical="center")
+            
             cell_p_discount.value = f"=SUM(P10:P13)*{discount_decimal}"
+            cell_p_discount.number_format = '$#,##0'
+            if Font is not None:
+                cell_p_discount.font = Font(name="Arial", size=20, bold=True, color=cell_p_discount.font.color if cell_p_discount.font else None)
+            if Alignment is not None:
+                cell_p_discount.alignment = Alignment(horizontal="center", vertical="center")
         else:
-            cell_p_discount.value = 0
-        cell_p_discount.number_format = '$#,##0'
-        if Font is not None:
-            cell_p_discount.font = Font(name="Arial", size=20, bold=True, color=cell_p_discount.font.color if cell_p_discount.font else None)
-        if Alignment is not None:
-            cell_p_discount.alignment = Alignment(horizontal="center", vertical="center")
+            # Clear discount row if discount is 0% - remove/clean N14:P15
+            safe_set_cell_value(ws, f"N{discount_row}", None)
+            safe_set_cell_value(ws, f"P{discount_row}", None)
+            # Also clear row 15 (the second row of the discount pair)
+            safe_set_cell_value(ws, f"N{discount_row + 1}", None)
+            safe_set_cell_value(ws, f"P{discount_row + 1}", None)
+            
+            # Merge and center N14:P15 after clearing
+            if safe_merge_cells:
+                safe_merge_cells(ws, f"N{discount_row}:P{discount_row + 1}")
+                # Center align the merged cell
+                if Alignment is not None:
+                    merged_cell = ws.cell(row=discount_row, column=SUMMARY_LABEL_COL)
+                    merged_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            
+            # Ensure N12 and P12 have inferior (bottom) borders
+            if Border is not None and Side is not None:
+                bottom_side = Side(style="thin")
+                # Get existing borders for N12 and P12, then add bottom border
+                row_12 = discount_row - 2  # Row 12 (discount_row is 14)
+                cell_n12 = ws.cell(row=row_12, column=SUMMARY_LABEL_COL)
+                cell_p12 = ws.cell(row=row_12, column=SUMMARY_VALUE_COL)
+                
+                # Preserve existing borders and add bottom border
+                existing_n12_border = cell_n12.border if cell_n12.border else Border()
+                existing_p12_border = cell_p12.border if cell_p12.border else Border()
+                
+                cell_n12.border = Border(
+                    left=existing_n12_border.left,
+                    right=existing_n12_border.right,
+                    top=existing_n12_border.top,
+                    bottom=bottom_side
+                )
+                cell_p12.border = Border(
+                    left=existing_p12_border.left,
+                    right=existing_p12_border.right,
+                    top=existing_p12_border.top,
+                    bottom=bottom_side
+                )
         
         # Clear N23 if it contains discount percentage (remove duplicate)
         # N23 should remain empty or contain "TOTAL DUE AT SIGNING" if that's what the template has
@@ -1731,7 +1785,11 @@ def apply_development_package(
         if cell_n_totals.value and "TOTAL DUE AT SIGNING" in str(cell_n_totals.value).upper():
             # Update the formula in column P to reference the dynamic totals row
             cell_p_totals = ws.cell(row=totals_row, column=16)  # Column P
-            cell_p_totals.value = f"=SUM(P10:P13)-P{discount_row}"
+            # If discount is 0, don't subtract discount; otherwise subtract P{discount_row}
+            if discount_percentage > 0:
+                cell_p_totals.value = f"=SUM(P10:P13)-P{discount_row}"
+            else:
+                cell_p_totals.value = f"=SUM(P10:P13)"
             cell_p_totals.number_format = '$#,##0'  # Currency format
             # Apply font size 20 and bold to TOTAL DUE AT SIGNING formula
             if Font is not None:
