@@ -5,6 +5,7 @@ Builds the Development Package section of the workbook using a template.
 
 from __future__ import annotations
 
+import io
 import math
 import os
 import re
@@ -2238,6 +2239,10 @@ def apply_ala_carte_package(
                 
                 # Skip formulas in totals row (columns K and Q) - we'll update them after
                 # col_k = 11, col_q = 17
+                # Also skip formulas in column O (15) for deliverables section - we'll update them after
+                col_o = 15
+                is_deliverables_section = (target_row >= 22 + rows_to_insert and target_row <= 36 + rows_to_insert)
+                
                 if is_totals_row and target_col == col_k:
                     # Don't restore the formula value for column K, just formatting
                     # The formula will be set after restore
@@ -2245,6 +2250,10 @@ def apply_ala_carte_package(
                 elif is_totals_row and target_col == col_q:
                     # Don't restore the formula value for column Q, just formatting
                     # The formula will be set after restore
+                    pass
+                elif is_deliverables_section and target_col == col_o and isinstance(value, str) and (value.startswith("=") or value.startswith("=@")):
+                    # Don't restore formulas in column O for deliverables section, we'll update them after
+                    # Skip both regular formulas (=) and formulas with @ symbol (=@)
                     pass
                 else:
                     if coord:
@@ -2401,6 +2410,138 @@ def apply_ala_carte_package(
             row_second = row_idx + 1
             if safe_merge_cells:
                 safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
+    
+    # Update deliverables counts in column O (OPTIONAL ADD-ONS counts)
+    # These formulas count the optional add-ons selected for A La Carte items
+    # Use the same approach as DEVELOPMENT ONLY tab
+    if len(a_la_carte_items) > 0 and column_index_from_string is not None:
+        label_column_idx = column_index_from_string("M")  # Labels are in column M for A LA CARTE tab
+        target_col_o = column_index_from_string("O")      # Counts go in column O
+        deliverable_addon_map = [
+            ("WASH/TREATMENT", "M", "M"),  # WASH/TREATMENT counts only column M (WASH/DYE)
+            ("DESIGN", "N", "N"),          # DESIGN counts only column N
+            ("SOURCING", "O", "O"),        # SOURCING counts only column O
+            ("TREATMENT", "P", "P"),       # TREATMENT counts only column P
+        ]
+        
+        # Deliverables section starts at row 22, shifted down by rows_to_insert
+        deliverables_block_start = 22 + rows_to_insert
+        deliverables_block_end = 36 + rows_to_insert
+        
+        def find_label_row(label_text: str) -> int | None:
+            """Locate the row index for a given deliverable label (same as DEVELOPMENT ONLY)."""
+            lowered = label_text.strip().lower()
+            # Also create a key word version (e.g., "wash/treatment" -> "wash")
+            key_words = lowered.replace("/", " ").split()
+            primary_key = key_words[0] if key_words else lowered
+            
+            partial_match_row = None
+            for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+                value = ws.cell(row=scan_row, column=label_column_idx).value
+                if not isinstance(value, str):
+                    continue
+                value_clean = value.strip().lower()
+                # Exact match first
+                if value_clean == lowered:
+                    return scan_row
+                # Partial match (label text contained in cell value)
+                if lowered in value_clean and partial_match_row is None:
+                    partial_match_row = scan_row
+                # Also check reverse (cell value contained in label text)
+                if value_clean in lowered and partial_match_row is None:
+                    partial_match_row = scan_row
+                # Check if primary key word matches (e.g., "design" matches "DESIGN")
+                if primary_key in value_clean and partial_match_row is None:
+                    partial_match_row = scan_row
+            return partial_match_row
+        
+        # Calculate the last row with an A La Carte item
+        first_ala_row = 10
+        last_ala_row = 10 + ((len(a_la_carte_items) - 1) * 2)
+        
+        # Update formulas for each optional add-on (same approach as DEVELOPMENT ONLY)
+        for label_text, start_col_letter, end_col_letter in deliverable_addon_map:
+            row_idx = find_label_row(label_text)
+            
+            # If not found, try searching all columns in the deliverables section
+            if row_idx is None:
+                # Search in columns H, N, and other potential label columns
+                search_columns = [label_column_idx]  # Column H
+                if column_index_from_string:
+                    # Also try column N (14) which might have labels
+                    search_columns.append(column_index_from_string("N"))
+                
+                for search_col in search_columns:
+                    for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+                        value = ws.cell(row=scan_row, column=search_col).value
+                        if isinstance(value, str):
+                            value_lower = value.strip().lower()
+                            label_lower = label_text.strip().lower()
+                            # Check if label is in value or value is in label
+                            if label_lower in value_lower or value_lower in label_lower:
+                                # Also check key words
+                                key_words = label_lower.replace("/", " ").split()
+                                for key in key_words:
+                                    if key in value_lower and len(key) > 2:  # Only if key word is meaningful
+                                        row_idx = scan_row
+                                        break
+                                if row_idx:
+                                    break
+                    if row_idx:
+                        break
+            
+            if row_idx is None:
+                # Still not found - skip this one (but continue with others)
+                continue
+            
+            # Unmerge column O if needed (do this multiple times to ensure it's unmerged)
+            for _ in range(3):
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= row_idx <= merged_range.max_row and
+                        merged_range.min_col <= target_col_o <= merged_range.max_col):
+                        try:
+                            min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                            max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
+                            ws.unmerge_cells(f"{min_cell.coordinate}:{max_cell.coordinate}")
+                        except Exception:
+                            pass
+            
+            addon_range = f"{start_col_letter}{first_ala_row}:{end_col_letter}{last_ala_row}"
+            formula_text = f"=COUNT({addon_range})"
+            
+            # Get the cell and clear it completely
+            cell = ws.cell(row=row_idx, column=target_col_o)
+            
+            # Remove any array formula designation first
+            try:
+                if hasattr(ws, 'array_formulae'):
+                    array_formulae_to_remove = []
+                    for array_range in ws.array_formulae:
+                        if (array_range.min_row <= row_idx <= array_range.max_row and
+                            array_range.min_col <= target_col_o <= array_range.max_col):
+                            array_formulae_to_remove.append(array_range)
+                    for arr in array_formulae_to_remove:
+                        ws.array_formulae.remove(arr)
+            except Exception:
+                pass
+            
+            # Clear the cell value
+            cell.value = None
+            
+            # Set the formula - openpyxl will save it as a regular formula
+            # The @ symbol is sometimes added by Excel when opening, but we set it without @
+            cell.value = formula_text
+            
+            # Format the cell
+            cell.number_format = "0"
+            apply_font_20(cell)
+            if Alignment is not None:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # Re-merge if it was merged (typically O23:O24, O25:O26, etc.)
+            row_second = row_idx + 1
+            if safe_merge_cells:
+                safe_merge_cells(ws, f"O{row_idx}:O{row_second}")
     
     # Apply font size 20 to all cells in the A LA CARTE tab (rows 8-36+rows_to_insert, columns B-Q)
     end_row = 36 + rows_to_insert
@@ -2588,8 +2729,8 @@ def get_sales_records():
         return []
 
 
-def update_monday_item_workbook_url(item_id: str, workbook_url: str) -> bool:
-    """Update a monday.com item with the workbook URL in a 'Workbook Link' field."""
+def update_monday_item_dev_inspection_link(item_id: str, workbook_url: str) -> bool:
+    """Update a monday.com item with the workbook URL in a 'Dev & Inspection Link' field."""
     try:
         monday_config = st.secrets.get("monday", {})
         api_token = monday_config.get("api_token")
@@ -2598,11 +2739,7 @@ def update_monday_item_workbook_url(item_id: str, workbook_url: str) -> bool:
             st.error("Monday.com API token not found in secrets.")
             return False
         
-        # First, we need to find the column ID for "Workbook Link" or create it
-        # For now, we'll use a URL column type. The column ID needs to be found or created in monday.com
-        # This is a placeholder - the actual column ID needs to be configured
-        
-        # Query to get board columns to find the "Workbook Link" column
+        # Query to get board columns to find the "Dev & Inspection Link" column
         query = f"""
         query {{
             items(ids: [{item_id}]) {{
@@ -2644,20 +2781,21 @@ def update_monday_item_workbook_url(item_id: str, workbook_url: str) -> bool:
             st.error("Could not determine board ID from monday.com item")
             return False
         
-        # Find "Workbook Link" or "Workbook URL Link" column
-        workbook_column = None
+        # Find "Dev & Inspection Link" column (case-insensitive, flexible matching)
+        dev_inspection_column = None
         for col in columns:
             title_lower = col.get("title", "").lower()
-            if "workbook" in title_lower and ("link" in title_lower or "url" in title_lower):
-                workbook_column = col
+            if ("dev" in title_lower and "inspection" in title_lower and "link" in title_lower) or \
+               ("dev" in title_lower and "inspection" in title_lower and "url" in title_lower):
+                dev_inspection_column = col
                 break
         
-        if not workbook_column:
-            st.warning("⚠️ 'Workbook Link' column not found in monday.com. Please create a URL column named 'Workbook Link' or 'Workbook URL Link' in the Sales board.")
+        if not dev_inspection_column:
+            st.warning("⚠️ 'Dev & Inspection Link' column not found in monday.com. Please create a URL column named 'Dev & Inspection Link' in the Sales board.")
             return False
         
-        column_id = workbook_column.get("id")
-        column_type = workbook_column.get("type")
+        column_id = dev_inspection_column.get("id")
+        column_type = dev_inspection_column.get("type")
         
         # Update the item with the workbook URL
         # For URL columns, the value format is: {"url": "https://...", "text": "Link Text"}
@@ -2668,7 +2806,7 @@ def update_monday_item_workbook_url(item_id: str, workbook_url: str) -> bool:
                     board_id: {board_id},
                     item_id: {item_id},
                     column_id: "{column_id}",
-                    value: "{{\\"url\\": \\"{workbook_url}\\", \\"text\\": \\"View Workbook\\"}}"
+                    value: "{{\\"url\\": \\"{workbook_url}\\", \\"text\\": \\"View Dev & Inspection\\"}}"
                 ) {{
                     id
                 }}
@@ -2701,6 +2839,152 @@ def update_monday_item_workbook_url(item_id: str, workbook_url: str) -> bool:
     except Exception as e:
         st.error(f"Failed to update monday.com: {e}")
         return False
+
+
+def upload_workbook_to_google_sheet_dev_inspection(
+    workbook_bytes: bytes, sheet_name: str
+) -> tuple[str, bool]:
+    """
+    Upload the XLSX workbook bytes to Google Drive using dev_inspection specific folder.
+    
+    Returns (web_url, converted_to_google_sheet).
+    """
+    from google_sheets_uploader import GoogleSheetsUploadError
+    
+    if not workbook_bytes:
+        raise GoogleSheetsUploadError("Workbook data is empty; nothing to upload.")
+    
+    try:
+        from google.oauth2.service_account import Credentials as SACredentials
+        from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
+        from googleapiclient.http import MediaIoBaseUpload
+    except ImportError:
+        raise GoogleSheetsUploadError(
+            "Google API libraries not available. Please install google-auth and google-api-python-client."
+        )
+    
+    # Get dev_inspection specific folder ID from secrets
+    cfg = st.secrets.get("google_drive", {}) or {}
+    parent_folder_id = cfg.get("parent_folder_id_dev_inspection")
+    
+    if not parent_folder_id:
+        raise GoogleSheetsUploadError(
+            "parent_folder_id_dev_inspection not found in secrets. "
+            "Add it to your Streamlit secrets under google_drive section."
+        )
+    
+    # Get credentials
+    info = st.secrets.get("google_service_account")
+    if not info:
+        raise GoogleSheetsUploadError(
+            "Google Cloud service account credentials missing in secrets."
+        )
+    
+    credentials = SACredentials.from_service_account_info(
+        info,
+        scopes=[
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/drive.file",
+        ]
+    )
+    
+    drive_service = build("drive", "v3", credentials=credentials)
+    
+    # Check if folder is in a Shared Drive
+    shared_drive_id = None
+    try:
+        folder_info = drive_service.files().get(
+            fileId=parent_folder_id,
+            fields="id, name, driveId",
+            supportsAllDrives=True
+        ).execute()
+        folder_drive_id = folder_info.get("driveId")
+        if folder_drive_id:
+            shared_drive_id = folder_drive_id
+    except Exception:
+        pass
+    
+    file_metadata = {
+        "name": sheet_name or "Dev & Inspection Workbook",
+        "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "parents": [parent_folder_id],
+    }
+    
+    media = MediaIoBaseUpload(
+        io.BytesIO(workbook_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        resumable=False,
+    )
+    
+    try:
+        create_kwargs = {
+            "body": file_metadata,
+            "media_body": media,
+            "fields": "id, webViewLink",
+        }
+        if shared_drive_id:
+            create_kwargs["supportsAllDrives"] = True
+        created_file = drive_service.files().create(**create_kwargs).execute()
+    except HttpError as exc:
+        error_text = str(exc)
+        if getattr(exc, "resp", None) and getattr(exc.resp, "status", None) == 403:
+            if "storageQuotaExceeded" in error_text:
+                raise GoogleSheetsUploadError(
+                    "Google Drive storage quota has been exceeded. "
+                    "Please delete older files or empty the Drive trash, then try again."
+                ) from exc
+        raise GoogleSheetsUploadError(f"Google Drive upload failed: {exc}") from exc
+    except Exception as exc:
+        raise GoogleSheetsUploadError(f"Google Drive upload failed: {exc}") from exc
+    
+    file_id = created_file.get("id")
+    web_view = created_file.get("webViewLink")
+    if not file_id:
+        raise GoogleSheetsUploadError("Upload succeeded but Google Drive did not return a file ID.")
+    
+    converted = False
+    try:
+        copy_body = {
+            "name": sheet_name or "Dev & Inspection Workbook",
+            "mimeType": "application/vnd.google-apps.spreadsheet",
+            "parents": [parent_folder_id],
+        }
+        copy_kwargs = {
+            "fileId": file_id,
+            "body": copy_body,
+            "fields": "id, webViewLink",
+        }
+        if shared_drive_id:
+            copy_kwargs["supportsAllDrives"] = True
+        converted_file = drive_service.files().copy(**copy_kwargs).execute()
+        new_id = converted_file.get("id")
+        new_link = converted_file.get("webViewLink")
+        if new_id:
+            try:
+                delete_kwargs = {"fileId": file_id}
+                if shared_drive_id:
+                    delete_kwargs["supportsAllDrives"] = True
+                drive_service.files().delete(**delete_kwargs).execute()
+            except Exception:
+                pass
+            file_id = new_id
+            web_view = new_link or web_view
+            converted = True
+    except HttpError as exc:
+        if getattr(exc, "resp", None) and getattr(exc.resp, "status", None) == 403:
+            if "storageQuotaExceeded" in str(exc):
+                st.warning(
+                    "Google Sheets conversion failed because the service account has zero Drive quota. "
+                    "The XLSX workbook is still uploaded to the shared folder."
+                )
+            else:
+                st.warning(f"Google Sheets conversion failed: {exc}")
+        else:
+            st.warning(f"Google Sheets conversion failed: {exc}")
+    
+    final_url = web_view or f"https://drive.google.com/file/d/{file_id}/view"
+    return final_url, converted
 
 
 def extract_spreadsheet_id_from_url(url: str) -> str | None:
@@ -3029,7 +3313,8 @@ def main() -> None:
     [data-testid="stSidebarNav"] li:has(a[href*="signnow"]),
     [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
     [data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
-    [data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]) {
+    [data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]),
+    [data-testid="stSidebarNav"] li:has(a[href*="dev_inspection"]) {
         display: block !important;
     }
 
@@ -3039,7 +3324,7 @@ def main() -> None:
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator'];
+        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'dev_inspection'];
         
         navItems.forEach(item => {
             const link = item.querySelector('a');
@@ -3857,15 +4142,15 @@ def main() -> None:
     st.subheader("Google Sheets --> Monday.com Upload")
 
     sheet_title = (client_name or "Workbook").strip() or "Workbook"
-    sheet_title = f"{sheet_title} - Development Package"
+    sheet_title = f"{sheet_title} - Dev & Inspection"
 
     st.caption("Uploads will use the shared Google Drive folder configured for the service account.")
 
     if st.button("Upload to Monday.com", type="primary"):
         with st.spinner("Uploading workbook to Google Sheets and updating Monday.com..."):
             try:
-                # Upload to Google Sheets
-                sheet_url, converted = upload_workbook_to_google_sheet(excel_bytes, sheet_title)
+                # Upload to Google Sheets using dev_inspection specific folder
+                sheet_url, converted = upload_workbook_to_google_sheet_dev_inspection(excel_bytes, sheet_title)
                 st.session_state["google_sheet_url"] = sheet_url
                 
                 if converted:
@@ -3880,7 +4165,7 @@ def main() -> None:
                 # Update Monday.com with the Google Sheet URL if item_id is provided
                 if item_id:
                     # Update Monday.com item with the Google Sheet link
-                    if update_monday_item_workbook_url(item_id, sheet_url):
+                    if update_monday_item_dev_inspection_link(item_id, sheet_url):
                         st.success(f"✅ Monday.com item updated with Google Sheet link!")
                     else:
                         st.warning("⚠️ Google Sheet uploaded, but failed to update Monday.com item. Please update manually.")
@@ -3912,8 +4197,6 @@ def main() -> None:
             except GoogleSheetsUploadError as exc:
                 message = str(exc)
                 st.error(f"❌ Google Sheets upload failed: {message}")
-                if "storage quota" in message.lower():
-                    _show_drive_quota_help()
             except Exception as exc:  # pragma: no cover - runtime failures
                 st.error(f"❌ Unexpected error: {exc}")
 
