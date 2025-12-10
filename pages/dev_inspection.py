@@ -1470,17 +1470,9 @@ def apply_development_package(
             if row_idx is None:
                 continue
             addon_range = f"{addon_col_letter}10:{addon_col_letter}{last_style_row}"
-            safe_set_cell_value(ws, f"{get_column_letter(target_col_j)}{row_idx}", f"=COUNT({addon_range})")
             cell = ws.cell(row=row_idx, column=target_col_j)
+            cell.value = f"=COUNT({addon_range})"
             cell.number_format = "0"
-            # Merge count cells across the paired rows for readability
-            row_pair_end = row_idx + 1
-            if row_pair_end <= deliverables_block_end and safe_merge_cells:
-                range_str = f"{get_column_letter(target_col_j)}{row_idx}:{get_column_letter(target_col_j)}{row_pair_end}"
-                safe_merge_cells(ws, range_str)
-                if Alignment is not None:
-                    merged_cell = ws.cell(row=row_idx, column=target_col_j)
-                    merged_cell.alignment = Alignment(horizontal="center", vertical="center")
 
         # Round of Fittings: always 1
         fittings_row = find_label_row("ROUND OF FITTINGS")
@@ -1495,10 +1487,10 @@ def apply_development_package(
                     except Exception:
                         pass
             # Clear the cell completely (including any formulas)
-            safe_set_cell_value(ws, f"D{fittings_row}", None)
-            # Set direct numeric value (not a formula)
-            safe_set_cell_value(ws, f"D{fittings_row}", 1)
             count_cell = ws.cell(row=fittings_row, column=col_d_idx)
+            count_cell.value = None
+            # Set direct numeric value (not a formula)
+            count_cell.value = 1
             count_cell.number_format = "0"
         
         # Round of Revisions: 
@@ -1537,11 +1529,11 @@ def apply_development_package(
             revisions_count = 2 if (num_regular > 0 and num_activewear > 0) else 1
             
             # Clear the cell completely (including any formulas)
-            safe_set_cell_value(ws, f"D{revisions_row}", None)
+            count_cell = ws.cell(row=revisions_row, column=col_d_idx)
+            count_cell.value = None
             
             # Set the calculated value directly (not a formula) - this will ALWAYS work
-            safe_set_cell_value(ws, f"D{revisions_row}", revisions_count)
-            count_cell = ws.cell(row=revisions_row, column=col_d_idx)
+            count_cell.value = revisions_count
             count_cell.number_format = "0"
             if Alignment is not None:
                 count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
@@ -1575,10 +1567,10 @@ def apply_development_package(
                         except Exception:
                             pass
                 # Clear the cell completely (including any formulas)
-                safe_set_cell_value(ws, f"D{second_sample_row}", None)
-                # Set direct numeric value (not a formula)
-                safe_set_cell_value(ws, f"D{second_sample_row}", num_activewear)
                 count_cell = ws.cell(row=second_sample_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
+                count_cell.value = num_activewear
                 count_cell.number_format = "0"
             
             # 2nd Round of Fittings: always 1 (already set in column D above)
@@ -1594,10 +1586,10 @@ def apply_development_package(
                         except Exception:
                             pass
                 # Clear the cell completely (including any formulas)
-                safe_set_cell_value(ws, f"D{second_fittings_row}", None)
-                # Set direct numeric value (not a formula)
-                safe_set_cell_value(ws, f"D{second_fittings_row}", 1)
                 count_cell = ws.cell(row=second_fittings_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
+                count_cell.value = 1
                 count_cell.number_format = "0"
             
             # 2nd Round of Revisions: always 1 for Active category (already set in column D above)
@@ -1613,10 +1605,10 @@ def apply_development_package(
                         except Exception:
                             pass
                 # Clear the cell completely (including any formulas)
-                safe_set_cell_value(ws, f"D{second_revisions_row}", None)
-                # Set direct numeric value (not a formula)
-                safe_set_cell_value(ws, f"D{second_revisions_row}", 1)
                 count_cell = ws.cell(row=second_revisions_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
+                count_cell.value = 1
                 count_cell.number_format = "0"
             
             # Final Samples: count is already set in the merge section above, but verify it's correct here
@@ -1643,10 +1635,10 @@ def apply_development_package(
                             pass
                         break
                 # Clear the cell completely (including any formulas)
-                safe_set_cell_value(ws, f"D{final_samples_row}", None)
-                # Set direct numeric value (not a formula)
-                safe_set_cell_value(ws, f"D{final_samples_row}", count_value)
                 count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
+                count_cell.value = count_value
                 count_cell.number_format = "0"
                 # Re-merge if it was merged before
                 if was_merged and merge_pattern and safe_merge_cells:
@@ -1682,10 +1674,10 @@ def apply_development_package(
                     except Exception:
                         pass
             # Clear the cell completely (including any formulas)
-            safe_set_cell_value(ws, f"D{patterns_row}", None)
-            # Set direct numeric value (same as FINAL SAMPLES: num_styles)
-            safe_set_cell_value(ws, f"D{patterns_row}", num_styles)
             count_cell = ws.cell(row=patterns_row, column=col_d_idx)
+            count_cell.value = None
+            # Set direct numeric value (same as FINAL SAMPLES: num_styles)
+            count_cell.value = num_styles
             count_cell.number_format = "0"
             # Merge and center (PATTERNS typically spans 2 rows)
             patterns_row_second = patterns_row + 1
@@ -1712,10 +1704,10 @@ def apply_development_package(
                     except Exception:
                         pass
             # Clear the cell completely (including any formulas)
-            safe_set_cell_value(ws, f"D{first_samples_row}", None)
-            # Set direct numeric value (same as FINAL SAMPLES: num_styles)
-            safe_set_cell_value(ws, f"D{first_samples_row}", num_styles)
             count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
+            count_cell.value = None
+            # Set direct numeric value (same as FINAL SAMPLES: num_styles)
+            count_cell.value = num_styles
             count_cell.number_format = "0"
             # Merge and center (FIRST SAMPLES typically spans 2 rows)
             first_samples_row_second = first_samples_row + 1
@@ -1740,10 +1732,10 @@ def apply_development_package(
                         except Exception:
                             pass
                 # Clear the cell completely (including any formulas)
-                safe_set_cell_value(ws, f"D{final_samples_row}", None)
-                # Set direct numeric value (not a formula)
-                safe_set_cell_value(ws, f"D{final_samples_row}", count_value)
                 count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
+                count_cell.value = count_value
                 count_cell.number_format = "0"
             
             # Now that FINAL SAMPLES is set, update PATTERNS and FIRST SAMPLES to have the same value
@@ -1761,10 +1753,10 @@ def apply_development_package(
                         except Exception:
                             pass
                 # Clear the cell completely (including any formulas)
-                safe_set_cell_value(ws, f"D{patterns_row}", None)
-                # Set direct numeric value (same as FINAL SAMPLES: num_styles)
-                safe_set_cell_value(ws, f"D{patterns_row}", num_styles)
                 count_cell = ws.cell(row=patterns_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (same as FINAL SAMPLES: num_styles)
+                count_cell.value = num_styles
                 count_cell.number_format = "0"
             
             # First Samples: all styles (regular only, no activewear, excluding custom line items)
@@ -1781,11 +1773,11 @@ def apply_development_package(
                         except Exception:
                             pass
                 # Clear the cell completely (including any formulas)
-                safe_set_cell_value(ws, f"D{first_samples_row}", None)
-            # Set direct numeric value (same as FINAL SAMPLES: num_styles)
-            safe_set_cell_value(ws, f"D{first_samples_row}", num_styles)
-            count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
-            count_cell.number_format = "0"
+                count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (same as FINAL SAMPLES: num_styles)
+                count_cell.value = num_styles
+                count_cell.number_format = "0"
     
     # Move all cells from N39:AA42 up 6 rows to N33:AA36, then apply formatting like ADJUSTMENT on row 31
     if column_index_from_string is not None and get_column_letter is not None:
@@ -1863,6 +1855,35 @@ def apply_development_package(
                     cell.alignment = Alignment(horizontal="center", vertical="center")
                 # Apply borders like ADJUSTMENT
                 apply_full_border_pair(ws, col, row, row_second)
+
+        # Additional required merges/centering for the moved block
+        merge_targets = [
+            "N33:P34", "N35:P36",
+            "R33:S34", "R35:S36",
+            "T27:X36",
+            "Y33:AA34", "Y35:AA36",
+        ]
+        for rng in merge_targets:
+            if safe_merge_cells:
+                safe_merge_cells(ws, rng)
+            if Alignment is not None:
+                try:
+                    start_col_letter = ''.join([c for c in rng.split(':')[0] if c.isalpha()])
+                    start_row_num = int(''.join([c for c in rng.split(':')[0] if c.isdigit()]))
+                    start_col_idx = column_index_from_string(start_col_letter)
+                    cell = ws.cell(row=start_row_num, column=start_col_idx)
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                except Exception:
+                    pass
+
+        # Ensure source area N39:AA42 is fully cleared (values and borders)
+        for row in range(source_start_row, source_end_row + 1):
+            for col in range(source_start_col, source_end_col + 1):
+                safe_set_cell_value(ws, f"{get_column_letter(col)}{row}", None)
+                try:
+                    ws.cell(row=row, column=col).border = Border()
+                except Exception:
+                    pass
 
     # Totals section - dynamically calculate totals row and range based on number of styles
     # For 5 or fewer styles: totals at row 20 (original position), but if custom items exist, they push it down
@@ -1961,7 +1982,7 @@ def apply_development_package(
                 cell_y16.alignment = Alignment(horizontal="center", vertical="center")
             
             # Set discount value in AA16:AA17 (merged across 2 rows, 1 column)
-            safe_set_cell_value(ws, "AA16", f"=SUM(P10:P13)*{discount_decimal}")
+            safe_set_cell_value(ws, "AA16", f"=SUM(AA10:AA15)*{discount_decimal}")
             safe_merge_cells(ws, "AA16:AA17")
             cell_aa16 = ws.cell(row=16, column=27)  # AA = column 27
             cell_aa16.number_format = '$#,##0'
@@ -2144,6 +2165,13 @@ def apply_development_package(
             if Alignment is not None:
                 cell_n20 = ws.cell(row=header_row, column=col_n)
                 cell_n20.alignment = Alignment(horizontal="left", vertical="center")
+            # Merge and center Y20:Z20
+            col_y = column_index_from_string("Y")
+            if safe_merge_cells:
+                safe_merge_cells(ws, f"Y{header_row}:Z{header_row}")
+            if Alignment is not None:
+                cell_y20 = ws.cell(row=header_row, column=col_y)
+                cell_y20.alignment = Alignment(horizontal="center", vertical="center")
 
         # Clean P10 and P12 (no summary formulas here because A La Carte occupies this section)
         safe_set_cell_value(ws, "P10", None)
@@ -2244,17 +2272,42 @@ def apply_development_package(
         # Update Q23 with total INTAKE hours from A La Carte items
         # Q23 is column Q (17), row 23 - should show total INTAKE hours, merged with Q24
         if len(a_la_carte_items) > 0:
+            # INTAKE SESSION total (already correct)
             total_intake_hours = sum(item.get("intake_session", 0) for item in a_la_carte_items)
             col_q_idx = column_index_from_string("Q")
             safe_set_cell_value(ws, "Q23", total_intake_hours)
             cell_q23 = ws.cell(row=23, column=col_q_idx)
             cell_q23.number_format = "0"  # Integer format
-            # Merge Q23:Q24 and center align
             if safe_merge_cells:
                 safe_merge_cells(ws, "Q23:Q24")
             if Alignment is not None:
                 cell_q23 = ws.cell(row=23, column=col_q_idx)
                 cell_q23.alignment = Alignment(horizontal="center", vertical="center")
+
+            # Mirror the same direct totals for the remaining A La Carte columns (Q–V)
+            ala_totals_map = [
+                ("Q", "intake_session"),
+                ("Q", "first_pattern"),
+                ("Q", "first_sample"),
+                ("Q", "fitting"),
+                ("Q", "adjustment"),
+                ("Q", "final_samples"),
+                ("Q", "duplicates"),
+            ]
+            start_row_totals = 23
+            for idx, (_, key) in enumerate(ala_totals_map):
+                target_row = start_row_totals + (idx * 2)
+                col_letter = "Q"
+                col_idx = column_index_from_string(col_letter)
+                total_hours = sum(item.get(key, 0) for item in a_la_carte_items)
+                safe_set_cell_value(ws, f"{col_letter}{target_row}", total_hours)
+                cell_total = ws.cell(row=target_row, column=col_idx)
+                cell_total.number_format = "0"
+                if safe_merge_cells:
+                    safe_merge_cells(ws, f"{col_letter}{target_row}:{col_letter}{target_row + 1}")
+                if Alignment is not None:
+                    cell_total = ws.cell(row=target_row, column=col_idx)
+                    cell_total.alignment = Alignment(horizontal="center", vertical="center")
         
         # Clear extra A La Carte rows beyond the actual items (template has 5 rows, we may only use 2)
         # After clearing, merge and center the cells to maintain formatting
