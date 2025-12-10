@@ -884,23 +884,12 @@ def apply_development_package(
     # Process Custom Items (user-defined price, complexity, no add-ons)
     if num_custom_styles > 0:
         # Calculate starting row for Custom Items (after all regular styles)
-        # After row insertion, if we have <= 5 styles, custom items start at row 20 (which was inserted)
-        # If we have > 5 styles, custom items start after the last regular style
-        if num_styles <= 5:
-            # For <= 5 styles, custom items start at row 20 (after row 18, the last regular style row)
-            # Row 20 was the totals row, but we inserted rows before it, so now custom items use row 20
-            custom_start_row = 20
-        else:
-            # For > 5 styles, custom items start after the last regular style
-            custom_start_row = dynamic_row_indices[-1] + 2 if dynamic_row_indices else 10
-        
+        custom_start_row = dynamic_row_indices[-1] + 2 if dynamic_row_indices else 10
         custom_row_indices = []
         for i in range(num_custom_styles):
             custom_row_indices.append(custom_start_row + (i * 2))
         
         # Custom row indices are already calculated correctly since we inserted all rows upfront
-        # No need to insert more rows here - they were already inserted above
-        
         for idx, row_idx in enumerate(custom_row_indices):
             entry = custom_styles[idx]
             style_name = entry.get("name", "").strip() or "STYLE"
@@ -911,16 +900,12 @@ def apply_development_package(
             row_second = row_idx + 1
             
             # For new rows, explicitly unmerge all cells in this row pair before writing
-            # This ensures we start with clean, unmerged cells (prevents horizontal merges)
             if is_new_row:
                 ranges_to_unmerge = []
                 for merged_range in list(ws.merged_cells.ranges):
-                    # Check if merged range intersects with this row pair
                     if (merged_range.min_row <= row_second and merged_range.max_row >= row_idx and
                         merged_range.min_col <= 12 and merged_range.max_col >= 2):  # Columns B-L
                         ranges_to_unmerge.append(merged_range)
-                
-                # Unmerge all overlapping ranges
                 for merged_range in reversed(ranges_to_unmerge):
                     try:
                         min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
@@ -929,79 +914,68 @@ def apply_development_package(
                     except Exception:
                         pass
             
-            # Write style number (#) - use the style_number from entry if available, otherwise default
-            # Use style_number from entry if set, otherwise default to 101 + num_styles + idx
-            style_number = entry.get("style_number", 101 + num_styles + idx)
-            safe_set_cell_value(ws, f"B{row_idx}", style_number)
+        # Style number
             cell_b = ws.cell(row=row_idx, column=2)
-            # Always merge B10:B11, B12:B13, etc. (not just for new rows)
-            apply_full_border_pair(ws, 2, row_idx, row_second)
-            safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
-            if is_new_row:
-                apply_arial_20_font(cell_b)
-            if Alignment is not None:
-                cell_b.alignment = Alignment(horizontal="left", vertical="center")
+            style_number = entry.get("style_number", 101 + num_styles + idx)
+            cell_b.value = style_number
+        apply_full_border_pair(ws, 2, row_idx, row_second)
+        safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
+        if is_new_row:
+            apply_arial_20_font(cell_b)
+        if Alignment is not None:
+            cell_b.alignment = Alignment(horizontal="left", vertical="center")
             
-            # Write style name
-            safe_set_cell_value(ws, f"C{row_idx}", style_name.upper())
+        # Style name
             cell_c = ws.cell(row=row_idx, column=3)
-            # Always merge C10:C11, C12:C13, etc. (not just for new rows)
-            apply_full_border_pair(ws, 3, row_idx, row_second)
-            safe_merge_cells(ws, f"C{row_idx}:C{row_second}")
-            if is_new_row:
-                apply_arial_20_font(cell_c)
-            if Alignment is not None:
-                cell_c.alignment = Alignment(horizontal="left", vertical="center")
+            cell_c.value = style_name.upper()
+        apply_full_border_pair(ws, 3, row_idx, row_second)
+        safe_merge_cells(ws, f"C{row_idx}:C{row_second}")
+        if is_new_row:
+            apply_arial_20_font(cell_c)
+        if Alignment is not None:
+            cell_c.alignment = Alignment(horizontal="left", vertical="center")
             
-            # Write custom price
-            safe_set_cell_value(ws, f"D{row_idx}", int(custom_price))
+        # Custom price
             cell_d = ws.cell(row=row_idx, column=4)
+            cell_d.value = int(custom_price)
             cell_d.number_format = '$#,##0'
-            # Always merge D10:D11, D12:D13, etc. (not just for new rows)
-            apply_full_border_pair(ws, 4, row_idx, row_second)
-            safe_merge_cells(ws, f"D{row_idx}:D{row_second}")
-            if is_new_row:
-                apply_arial_20_font(cell_d)
-            if Alignment is not None:
-                cell_d.alignment = Alignment(horizontal="center", vertical="center")
+        apply_full_border_pair(ws, 4, row_idx, row_second)
+        safe_merge_cells(ws, f"D{row_idx}:D{row_second}")
+        if is_new_row:
+            apply_arial_20_font(cell_d)
+        if Alignment is not None:
+            cell_d.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Write complexity
+        # Complexity
+            cell_e = ws.cell(row=row_idx, column=5)
             if complexity_pct == 0:
-                safe_set_cell_value(ws, f"E{row_idx}", None)
-                cell_e = ws.cell(row=row_idx, column=5)
+                cell_e.value = None
             else:
-                safe_set_cell_value(ws, f"E{row_idx}", complexity_pct / 100.0)
-                cell_e = ws.cell(row=row_idx, column=5)
+                cell_e.value = complexity_pct / 100.0
                 cell_e.number_format = '0%'
-            # Always merge E10:E11, E12:E13, etc. (not just for new rows)
-            apply_full_border_pair(ws, 5, row_idx, row_second)
-            safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
-            if is_new_row:
-                apply_arial_20_font(cell_e)
-            if Alignment is not None:
-                cell_e.alignment = Alignment(horizontal="center", vertical="center")
+        apply_full_border_pair(ws, 5, row_idx, row_second)
+        safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
+        if is_new_row:
+            apply_arial_20_font(cell_e)
+        if Alignment is not None:
+            cell_e.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Write total formula
-            if complexity_pct == 0:
-                safe_set_cell_value(ws, f"F{row_idx}", f"=D{row_idx}")
-            else:
-                safe_set_cell_value(ws, f"F{row_idx}", f"=D{row_idx}*(1+E{row_idx})")
+        # Total
             cell_f = ws.cell(row=row_idx, column=6)
+            cell_f.value = f"=D{row_idx}" if complexity_pct == 0 else f"=D{row_idx}*(1+E{row_idx})"
             cell_f.number_format = '$#,##0'
-            # Always merge F10:F11, F12:F13, etc. (not just for new rows)
-            apply_full_border_pair(ws, 6, row_idx, row_second)
-            safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
-            if is_new_row:
-                apply_arial_20_font(cell_f)
-            if Alignment is not None:
-                cell_f.alignment = Alignment(horizontal="center", vertical="center")
+        apply_full_border_pair(ws, 6, row_idx, row_second)
+        safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
+        if is_new_row:
+            apply_arial_20_font(cell_f)
+        if Alignment is not None:
+            cell_f.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Clear add-ons (Custom Items don't have add-ons)
+            # Clear add-ons (H-K) and merge/center like styles
             for col_letter in ["H", "I", "J", "K"]:
-                safe_set_cell_value(ws, f"{col_letter}{row_idx}", None)
                 col_num = ord(col_letter) - 64
                 cell_opt = ws.cell(row=row_idx, column=col_num)
-                # Always merge even if empty (not just for new rows)
+                cell_opt.value = None
                 apply_full_border_pair(ws, col_letter, row_idx, row_second)
                 safe_merge_cells(ws, f"{col_letter}{row_idx}:{col_letter}{row_second}")
                 if is_new_row:
@@ -1009,16 +983,25 @@ def apply_development_package(
                 if Alignment is not None:
                     cell_opt.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Clear total optional add-on
-            safe_set_cell_value(ws, f"L{row_idx}", None)
+            # Clear total optional add-on (L) and merge/center like styles
             cell_l = ws.cell(row=row_idx, column=12)
-            # Always merge L10:L11, L12:L13, etc. (not just for new rows)
+            cell_l.value = None
             apply_full_border_pair(ws, 12, row_idx, row_second)
             safe_merge_cells(ws, f"L{row_idx}:L{row_second}")
             if is_new_row:
                 apply_arial_20_font(cell_l)
             if Alignment is not None:
                 cell_l.alignment = Alignment(horizontal="center", vertical="center")
+            
+        # Clear total optional add-on (L)
+            cell_l = ws.cell(row=row_idx, column=12)
+            cell_l.value = None
+        apply_full_border_pair(ws, 12, row_idx, row_second)
+        safe_merge_cells(ws, f"L{row_idx}:L{row_second}")
+        if is_new_row:
+            apply_arial_20_font(cell_l)
+        if Alignment is not None:
+            cell_l.alignment = Alignment(horizontal="center", vertical="center")
             
             total_development += custom_price * (1 + complexity_pct / 100.0)
         
@@ -1439,6 +1422,94 @@ def apply_development_package(
                     else:
                         cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
 
+    # If no activewear, ensure FINAL SAMPLES and DUPLICATES rows (H-S) remain visible like template
+    if num_activewear == 0 and get_column_letter is not None and column_index_from_string is not None:
+        label_col = column_index_from_string("H")
+        # Locate "FINAL SAMPLES" row in column H; if found, restore the template values for labels/rates
+        final_samples_row = None
+        for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+            value = ws.cell(row=scan_row, column=label_col).value
+            if isinstance(value, str) and "final samples" in value.strip().lower():
+                final_samples_row = scan_row
+                break
+        # Template right-side values: number (J) and rate label (L) similar to workbook_creator layout
+        if final_samples_row:
+            # FINAL SAMPLES numeric count from A La Carte column U (hours list)
+            try:
+                count_val = sum(item.get("final_samples", 0) for item in a_la_carte_items)
+            except Exception:
+                count_val = 0
+            col_j = column_index_from_string("J")
+            col_l = column_index_from_string("L")
+            col_n = column_index_from_string("N")
+            col_s = column_index_from_string("S")
+            # Set number in J (merged over row pair)
+            safe_set_cell_value(ws, f"J{final_samples_row}", count_val)
+            safe_merge_cells(ws, f"J{final_samples_row}:J{final_samples_row+1}")
+            cell_j = ws.cell(row=final_samples_row, column=col_j)
+            cell_j.number_format = "0"
+            apply_full_border_pair(ws, col_j, final_samples_row, final_samples_row + 1)
+            if Alignment is not None:
+                cell_j.alignment = Alignment(horizontal="center", vertical="center")
+            # Ensure rate label remains visible (use column L within deliverables block)
+            safe_set_cell_value(ws, f"L{final_samples_row}", "SAMPLE $90/HR")
+            safe_merge_cells(ws, f"L{final_samples_row}:L{final_samples_row+1}")
+            cell_l = ws.cell(row=final_samples_row, column=col_l)
+            apply_full_border_pair(ws, col_l, final_samples_row, final_samples_row + 1)
+            if Alignment is not None:
+                cell_l.alignment = Alignment(horizontal="center", vertical="center")
+            # Also place label in N and mirror rate in S to match activewear layout
+            safe_set_cell_value(ws, f"N{final_samples_row}", "FINAL SAMPLES")
+            safe_merge_cells(ws, f"N{final_samples_row}:N{final_samples_row+1}")
+            apply_full_border_pair(ws, col_n, final_samples_row, final_samples_row + 1)
+            if Alignment is not None:
+                ws.cell(row=final_samples_row, column=col_n).alignment = Alignment(horizontal="center", vertical="center")
+            safe_set_cell_value(ws, f"S{final_samples_row}", "SAMPLE $90/HR")
+            safe_merge_cells(ws, f"S{final_samples_row}:S{final_samples_row+1}")
+            apply_full_border_pair(ws, col_s, final_samples_row, final_samples_row + 1)
+            if Alignment is not None:
+                ws.cell(row=final_samples_row, column=col_s).alignment = Alignment(horizontal="center", vertical="center")
+        # DUPLICATES row
+        duplicates_row = None
+        for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+            value = ws.cell(row=scan_row, column=label_col).value
+            if isinstance(value, str) and "duplicates" in value.strip().lower():
+                duplicates_row = scan_row
+                break
+        if duplicates_row:
+            try:
+                dup_val = sum(item.get("duplicates", 0) for item in a_la_carte_items)
+            except Exception:
+                dup_val = 0
+            col_j = column_index_from_string("J")
+            col_l = column_index_from_string("L")
+            col_n = column_index_from_string("N")
+            col_s = column_index_from_string("S")
+            safe_set_cell_value(ws, f"J{duplicates_row}", dup_val)
+            safe_merge_cells(ws, f"J{duplicates_row}:J{duplicates_row+1}")
+            cell_j = ws.cell(row=duplicates_row, column=col_j)
+            cell_j.number_format = "0"
+            apply_full_border_pair(ws, col_j, duplicates_row, duplicates_row + 1)
+            if Alignment is not None:
+                cell_j.alignment = Alignment(horizontal="center", vertical="center")
+            safe_set_cell_value(ws, f"L{duplicates_row}", "$90/HOUR")
+            safe_merge_cells(ws, f"L{duplicates_row}:L{duplicates_row+1}")
+            cell_l = ws.cell(row=duplicates_row, column=col_l)
+            apply_full_border_pair(ws, col_l, duplicates_row, duplicates_row + 1)
+            if Alignment is not None:
+                cell_l.alignment = Alignment(horizontal="center", vertical="center")
+            # Also place label in N and mirror rate in S
+            safe_set_cell_value(ws, f"N{duplicates_row}", "DUPLICATES")
+            safe_merge_cells(ws, f"N{duplicates_row}:N{duplicates_row+1}")
+            apply_full_border_pair(ws, col_n, duplicates_row, duplicates_row + 1)
+            if Alignment is not None:
+                ws.cell(row=duplicates_row, column=col_n).alignment = Alignment(horizontal="center", vertical="center")
+            safe_set_cell_value(ws, f"S{duplicates_row}", "$90/HOUR")
+            safe_merge_cells(ws, f"S{duplicates_row}:S{duplicates_row+1}")
+            apply_full_border_pair(ws, col_s, duplicates_row, duplicates_row + 1)
+            if Alignment is not None:
+                ws.cell(row=duplicates_row, column=col_s).alignment = Alignment(horizontal="center", vertical="center")
+
     # Update deliverables table counts (column J) for add-on selections
     if column_index_from_string is not None and total_styles_count > 0:
         label_column_idx = column_index_from_string("H")
@@ -1717,31 +1788,15 @@ def apply_development_package(
                 count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
             
         else:
-            # Final Samples: all styles (regular only, no activewear, excluding custom line items)
-            final_samples_row = find_label_row("FINAL SAMPLES")
-            if final_samples_row:
-                # Use direct count instead of formula
-                count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
-                col_d_idx = column_index_from_string("D")
-                # Unmerge if needed and clear any formulas
-                for merged_range in list(ws.merged_cells.ranges):
-                    if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
-                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                        try:
-                            ws.unmerge_cells(range_string=str(merged_range))
-                        except Exception:
-                            pass
-                # Clear the cell completely (including any formulas)
-                count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
-                count_cell.value = None
-                # Set direct numeric value (not a formula)
-                count_cell.value = count_value
-                count_cell.number_format = "0"
+            # First, set PATTERNS to num_styles (fixed value, no formula)
+            # Then set FINAL SAMPLES to reference PATTERNS with formula =D{patterns_row}
+            patterns_row = None
+            for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+                value = ws.cell(row=scan_row, column=column_index_from_string("B")).value
+                if isinstance(value, str) and "pattern" in value.lower():
+                    patterns_row = scan_row
+                    break
             
-            # Now that FINAL SAMPLES is set, update PATTERNS and FIRST SAMPLES to have the same value
-            # Patterns: all styles (regular only, no activewear, excluding custom line items)
-            # Set to the same value as FINAL SAMPLES (num_styles) - direct value, not a formula
-            patterns_row = find_label_row("PATTERNS")
             if patterns_row:
                 col_d_idx = column_index_from_string("D")
                 # Unmerge if needed and clear any formulas
@@ -1755,9 +1810,47 @@ def apply_development_package(
                 # Clear the cell completely (including any formulas)
                 count_cell = ws.cell(row=patterns_row, column=col_d_idx)
                 count_cell.value = None
-                # Set direct numeric value (same as FINAL SAMPLES: num_styles)
+                # Set direct numeric value (num_styles, excluding custom items)
                 count_cell.value = num_styles
                 count_cell.number_format = "0"
+                # Re-merge and center PATTERNS
+                patterns_row_second = patterns_row + 1
+                if safe_merge_cells:
+                    safe_merge_cells(ws, f"D{patterns_row}:D{patterns_row_second}")
+                if Alignment:
+                    count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            
+            # Now set FINAL SAMPLES to reference PATTERNS with formula =D{patterns_row}
+            final_samples_row = None
+            for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+                value = ws.cell(row=scan_row, column=column_index_from_string("B")).value
+                if isinstance(value, str) and "final samples" in value.lower():
+                    final_samples_row = scan_row
+                    break
+            
+            if final_samples_row and patterns_row:
+                col_d_idx = column_index_from_string("D")
+                row_second = final_samples_row + 1
+                # Unmerge if needed and clear any formulas on both cells of the pair
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                # Clear both rows for the pair using safe_set_cell_value
+                safe_set_cell_value(ws, f"D{final_samples_row}", None)
+                safe_set_cell_value(ws, f"D{row_second}", None)
+                # Set formula to reference PATTERNS
+                safe_set_cell_value(ws, f"D{final_samples_row}", f"=D{patterns_row}")
+                count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                count_cell.number_format = "0"
+                # Re-merge and center
+                if safe_merge_cells:
+                    safe_merge_cells(ws, f"D{final_samples_row}:D{row_second}")
+                if Alignment:
+                    count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
             
             # First Samples: all styles (regular only, no activewear, excluding custom line items)
             # Set to the same value as FINAL SAMPLES (num_styles) - direct value, not a formula
@@ -1876,6 +1969,63 @@ def apply_development_package(
                 except Exception:
                     pass
 
+        # When there is no activewear, ensure the right-hand labels/rates remain visible
+        if num_activewear == 0:
+            from openpyxl.utils.cell import range_boundaries
+
+            # Helper to unmerge overlapping ranges, merge target, set value (optional),
+            # and center/format every cell in the merged area.
+            def _reset_merge_and_format(target_range: str, *, value=None, bold: bool) -> None:
+                try:
+                    min_col, min_row, max_col, max_row = range_boundaries(target_range)
+                    for merged_range in list(ws.merged_cells.ranges):
+                        if not (merged_range.max_row < min_row or merged_range.min_row > max_row or
+                                merged_range.max_col < min_col or merged_range.min_col > max_col):
+                            ws.unmerge_cells(str(merged_range))
+                    if safe_merge_cells:
+                        safe_merge_cells(ws, target_range)
+                    # Set value in top-left if provided
+                    if value is not None:
+                        cell_tl = ws.cell(row=min_row, column=min_col)
+                        cell_tl.value = value
+                    # Apply alignment/font to every cell in the merged area
+                    for r in range(min_row, max_row + 1):
+                        for c in range(min_col, max_col + 1):
+                            cell = ws.cell(row=r, column=c)
+                            if Font is not None:
+                                existing = cell.font
+                                cell.font = Font(
+                                    name=existing.name if existing and existing.name else "Arial",
+                                    size=20,
+                                    bold=bold,
+                                    color=existing.color if existing else None,
+                                )
+                            if Alignment is not None:
+                                cell.alignment = Alignment(horizontal="center", vertical="center")
+                except Exception:
+                    pass
+
+            merge_targets_manual = ["N33:P34", "R33:S34", "N35:P36", "R35:S36"]
+            _reset_merge_and_format("N33:P34", value="FINAL SAMPLES", bold=True)
+            _reset_merge_and_format("R33:S34", value="SAMPLE $90/HR", bold=False)
+            _reset_merge_and_format("N35:P36", value="DUPLICATES", bold=True)
+            _reset_merge_and_format("R35:S36", value="$90/HOUR", bold=False)
+
+            # Ensure column Q values (counts) on these rows are also size 20 and centered
+            q_col = column_index_from_string("Q")
+            for row_num in [33, 34, 35, 36]:
+                cell_q = ws.cell(row=row_num, column=q_col)
+                if Font is not None:
+                    existing = cell_q.font
+                    cell_q.font = Font(
+                        name=existing.name if existing and existing.name else "Arial",
+                        size=20,
+                        bold=False,
+                        color=existing.color if existing else None,
+                    )
+                if Alignment is not None:
+                    cell_q.alignment = Alignment(horizontal="center", vertical="center")
+
         # Ensure source area N39:AA42 is fully cleared (values and borders)
         for row in range(source_start_row, source_end_row + 1):
             for col in range(source_start_col, source_end_col + 1):
@@ -1893,7 +2043,6 @@ def apply_development_package(
         if num_styles <= 5:
             # Original totals row position is 20, but if we inserted rows for custom items, it moved
             if num_custom_styles > 0:
-                # Custom items were inserted before row 20, so totals row moved down
                 totals_row = 20 + (num_custom_styles * 2)
             else:
                 totals_row = 20  # Original totals row position
@@ -1903,6 +2052,9 @@ def apply_development_package(
             if num_custom_styles > 0:
                 # Add space for custom items too
                 totals_row += num_custom_styles * 2
+
+        # Move totals row 2 rows up per request
+        totals_row = max(20, totals_row - 2)
         
         # Unmerge any merged cells in the totals row to avoid issues
         merged_ranges_to_unmerge = []
