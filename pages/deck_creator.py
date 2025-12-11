@@ -890,7 +890,7 @@ def set_proposal_for_name(slide, client_name: str):
 
 
 def add_or_replace_image(prs: Presentation, slide_index: int, image_png_bytes: bytes):
-    """Add or replace image on a slide."""
+    """Add or replace image on a slide, filling 100% of the slide space."""
     if slide_index < 0 or slide_index >= len(prs.slides):
         return
     slide = prs.slides[slide_index]
@@ -902,18 +902,15 @@ def add_or_replace_image(prs: Presentation, slide_index: int, image_png_bytes: b
     for shp in to_remove:
         sp = shp._element
         sp.getparent().remove(sp)
-    # place centered
-    max_width = Inches(9)
-    max_height = Inches(6)
-    pic = slide.shapes.add_picture(BytesIO(image_png_bytes), Inches(1), Inches(1))
-    if pic.width > max_width or pic.height > max_height:
-        ratio_w = max_width / pic.width
-        ratio_h = max_height / pic.height
-        ratio = min(ratio_w, ratio_h)
-        pic.width = int(pic.width * ratio)
-        pic.height = int(pic.height * ratio)
-        pic.left = int((prs.slide_width - pic.width) / 2)
-        pic.top = int((prs.slide_height - pic.height) / 2)
+    
+    # Add picture and resize to fill 100% of slide (width and height)
+    pic = slide.shapes.add_picture(BytesIO(image_png_bytes), 0, 0)
+    
+    # Set image to fill entire slide
+    pic.left = 0
+    pic.top = 0
+    pic.width = prs.slide_width
+    pic.height = prs.slide_height
 
 
 def populate_gallery_slide(prs: Presentation, images: List[Dict[str, Any]], slide_index: int = 8):
