@@ -262,8 +262,8 @@ def list_gallery_images() -> List[Dict[str, str]]:
     list_kwargs_base = {
         "supportsAllDrives": True,
         "includeItemsFromAllDrives": True,
-        "pageSize": 200,
-        "fields": "files(id,name,mimeType,parents)",
+        "pageSize": 100,  # Reduced to ensure pagination works correctly
+        "fields": "files(id,name,mimeType,parents),nextPageToken",
     }
     if shared_drive_id:
         list_kwargs_base.update({
@@ -271,29 +271,62 @@ def list_gallery_images() -> List[Dict[str, str]]:
             "driveId": shared_drive_id,
         })
     
-    # BFS through folders
+    # BFS through folders with pagination support
     queue = [(folder_id, root_name)]
     images: List[Dict[str, str]] = []
+    processed_folders = set()  # Track processed folders to avoid infinite loops
+    
+    def fetch_all_pages(query, list_kwargs):
+        """Fetch all pages of results for a query."""
+        all_files = []
+        page_token = None
+        while True:
+            kwargs = list_kwargs.copy()
+            if page_token:
+                kwargs["pageToken"] = page_token
+            try:
+                response = drive.files().list(q=query, **kwargs).execute()
+                page_files = response.get("files", [])
+                all_files.extend(page_files)
+                page_token = response.get("nextPageToken")
+                if not page_token:
+                    break
+            except Exception as e:
+                # Log error but continue
+                break
+        return all_files
     
     while queue:
         current_id, current_path = queue.pop(0)
         
-        # Subfolders
-        folder_query = f"'{current_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
-        folder_resp = drive.files().list(q=folder_query, **list_kwargs_base).execute()
-        for f in folder_resp.get("files", []):
-            next_path = f"{current_path}/{f.get('name', '').strip() or 'Folder'}"
-            queue.append((f.get("id"), next_path))
+        # Avoid processing the same folder twice
+        if current_id in processed_folders:
+            continue
+        processed_folders.add(current_id)
         
-        # Images in current folder
-        image_query = f"'{current_id}' in parents and mimeType contains 'image/' and trashed=false"
-        image_resp = drive.files().list(q=image_query, **list_kwargs_base).execute()
-        for img in image_resp.get("files", []):
-            images.append({
-                "id": img.get("id"),
-                "name": img.get("name") or "image",
-                "display_name": f"{current_path}/{img.get('name') or 'image'}",
-            })
+        try:
+            # Subfolders - fetch all pages
+            folder_query = f"'{current_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+            folder_files = fetch_all_pages(folder_query, list_kwargs_base)
+            for f in folder_files:
+                folder_id_val = f.get("id")
+                folder_name = f.get("name", "Unknown")
+                if folder_id_val and folder_id_val not in processed_folders:
+                    next_path = f"{current_path}/{folder_name}"
+                    queue.append((folder_id_val, next_path))
+            
+            # Images in current folder - fetch all pages
+            image_query = f"'{current_id}' in parents and mimeType contains 'image/' and trashed=false"
+            image_files = fetch_all_pages(image_query, list_kwargs_base)
+            for img in image_files:
+                images.append({
+                    "id": img.get("id"),
+                    "name": img.get("name") or "image",
+                    "display_name": f"{current_path}/{img.get('name') or 'image'}",
+                })
+        except Exception as e:
+            # Log error but continue processing other folders
+            continue
     
     # Sort by display name for consistent ordering
     images.sort(key=lambda x: x.get("display_name", "").lower())
@@ -1373,7 +1406,8 @@ def upload_deck_to_google_drive(
     priority_slide_index: Optional[int],
     service_column_slide_index: Optional[int],
     image_bytes: bytes | None = None,
-    gallery_images: Optional[List[Dict[str, bytes]]] = None
+    gallery_images: Optional[List[Dict[str, bytes]]] = None,
+    pptx_bytes: bytes | None = None
 ) -> str:
     """Upload deck PPTX to Google Drive and return file URL. Similar to upload_workbook_to_google_sheet."""
     if not build or not MediaIoBaseUpload:
@@ -1391,15 +1425,16 @@ def upload_deck_to_google_drive(
     # Clean up old files
     cleanup_old_decks(drive, parent_folder_id)
     
-    # Generate PPTX
-    pptx_bytes = create_deck_from_template(
-        deck_type,
-        client_name,
-        priority_slide_index,
-        service_column_slide_index,
-        image_bytes,
-        gallery_images
-    )
+    # Generate PPTX if not provided
+    if pptx_bytes is None:
+        pptx_bytes = create_deck_from_template(
+            deck_type,
+            client_name,
+            priority_slide_index,
+            service_column_slide_index,
+            image_bytes,
+            gallery_images
+        )
     
     # Check if parent_folder_id is in a Shared Drive
     if parent_folder_id and not shared_drive_id:
@@ -1455,6 +1490,48 @@ def upload_deck_to_google_drive(
         if "quota" in error_msg.lower():
             raise RuntimeError("Google Drive storage quota has been exceeded. Please delete older files or empty the Drive trash, then try again.")
         raise RuntimeError(f"Google Drive upload failed: {error_msg}")
+
+
+def get_board_id_from_item(item_id: str) -> str | None:
+    """Get board ID from a Monday.com item ID."""
+    try:
+        monday_config = st.secrets.get("monday", {})
+        api_token = monday_config.get("api_token")
+        
+        if not api_token:
+            return None
+        
+        query = f"""
+        query {{
+            items(ids: [{item_id}]) {{
+                board {{
+                    id
+                }}
+            }}
+        }}
+        """
+        
+        url = "https://api.monday.com/v2"
+        headers = {
+            "Authorization": api_token,
+            "Content-Type": "application/json",
+        }
+        
+        response = requests.post(url, json={"query": query}, headers=headers, timeout=30)
+        data = response.json()
+        
+        if "errors" in data:
+            return None
+        
+        items = data.get("data", {}).get("items", [])
+        if not items:
+            return None
+        
+        board = items[0].get("board", {})
+        return board.get("id")
+        
+    except Exception:
+        return None
 
 
 def update_monday_item_deck_url(item_id: str, deck_url: str) -> bool:
@@ -1750,7 +1827,6 @@ def _extract_clean_filename(display_name: str) -> str:
 def render_gallery_selector() -> List[Dict[str, Any]]:
     """Render the gallery selector (exactly 3 images) below the PDF upload."""
     st.subheader("Gallery Images")
-    st.caption("Images come from the shared drive gallery and are resized to 421px x 619px.")
     
     if not Image:
         st.error("Pillow is required to load gallery images. Please install pillow.")
@@ -1991,8 +2067,8 @@ def main():
                 return
             with st.spinner("Uploading deck to Google Drive and updating Monday.com..."):
                 try:
-                    # Upload to Google Drive
-                    deck_url = upload_deck_to_google_drive(
+                    # Generate PPTX bytes first (needed for both Google Drive and Monday.com upload)
+                    pptx_bytes = create_deck_from_template(
                         deck_type,
                         client_name,
                         priority_slide_index,
@@ -2000,11 +2076,26 @@ def main():
                         image_bytes,
                         gallery_images
                     )
+                    
+                    # Upload to Google Drive (pass PPTX bytes to avoid regenerating)
+                    deck_url = upload_deck_to_google_drive(
+                        deck_type,
+                        client_name,
+                        priority_slide_index,
+                        service_column_slide_index,
+                        image_bytes,
+                        gallery_images,
+                        pptx_bytes
+                    )
                     st.success(f"✅ Deck uploaded to Google Drive: [Open Deck]({deck_url})")
                     
                     # Update Monday.com with the deck URL if item_id is provided
                     if item_id:
-                        if update_monday_item_deck_url(item_id, deck_url):
+                        # Update Deck Link column
+                        deck_link_success = update_monday_item_deck_url(item_id, deck_url)
+                        
+                        # Show results
+                        if deck_link_success:
                             st.success(f"✅ Monday.com item updated with Deck Link!")
                         else:
                             st.warning("⚠️ Deck uploaded to Google Drive, but failed to update Monday.com item. Please update manually.")
