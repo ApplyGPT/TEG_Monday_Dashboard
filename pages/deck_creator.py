@@ -9,7 +9,7 @@ import sys
 from io import BytesIO
 import re
 from datetime import datetime
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Any
 import base64
 import requests
 
@@ -29,11 +29,18 @@ except Exception:
 try:
     from google.oauth2.service_account import Credentials as SACredentials
     from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseUpload
+    from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 except Exception:
     SACredentials = None
     build = None
     MediaIoBaseUpload = None
+    MediaIoBaseDownload = None
+
+try:
+    from PIL import Image, ImageOps
+except Exception:
+    Image = None
+    ImageOps = None
 
 
 st.set_page_config(
@@ -155,6 +162,12 @@ DECK_TYPES = {
 }
 
 SERVICE_COLUMNS_FILE = "SERVICE COLUMNS.pptx"
+IMAGE_GALLERY_FOLDER_ID = "1Uxn9oWjw22r0F5GPSLIQ_zUTUXfzO5yl"
+IMAGE_TARGET_SIZE = (421, 619)  # width x height in px
+EMU_PER_INCH = 914400
+EMU_PER_PX = EMU_PER_INCH / 96.0
+TARGET_WIDTH_EMU = int(IMAGE_TARGET_SIZE[0] * EMU_PER_PX)
+TARGET_HEIGHT_EMU = int(IMAGE_TARGET_SIZE[1] * EMU_PER_PX)
 
 
 # ============================================================================
@@ -205,6 +218,127 @@ def _get_credentials():
         info,
         scopes=scopes
     )
+
+
+# ============================================================================
+# Google Drive Image Helpers (Gallery)
+# ============================================================================
+
+def _get_drive_service():
+    """Create a Google Drive service client."""
+    if not build:
+        raise RuntimeError("Google API client not available")
+    creds = _get_credentials()
+    return build("drive", "v3", credentials=creds)
+
+
+@st.cache_data(show_spinner=False)
+def list_gallery_images() -> List[Dict[str, str]]:
+    """
+    List all image files inside the shared gallery folder (including subfolders).
+    
+    Returns:
+        List of dicts: [{"id": str, "name": str, "display_name": str}]
+    """
+    drive = _get_drive_service()
+    drive_cfg = st.secrets.get("google_drive", {}) or {}
+    shared_drive_id = drive_cfg.get("shared_drive_id")
+    folder_id = IMAGE_GALLERY_FOLDER_ID
+    
+    # Get root folder name (helps build display path)
+    try:
+        root_info = drive.files().get(
+            fileId=folder_id,
+            fields="id, name, driveId",
+            supportsAllDrives=True
+        ).execute()
+        root_name = root_info.get("name", "Gallery")
+        root_drive_id = root_info.get("driveId", shared_drive_id)
+        if root_drive_id:
+            shared_drive_id = root_drive_id
+    except Exception:
+        root_name = "Gallery"
+    
+    list_kwargs_base = {
+        "supportsAllDrives": True,
+        "includeItemsFromAllDrives": True,
+        "pageSize": 200,
+        "fields": "files(id,name,mimeType,parents)",
+    }
+    if shared_drive_id:
+        list_kwargs_base.update({
+            "corpora": "drive",
+            "driveId": shared_drive_id,
+        })
+    
+    # BFS through folders
+    queue = [(folder_id, root_name)]
+    images: List[Dict[str, str]] = []
+    
+    while queue:
+        current_id, current_path = queue.pop(0)
+        
+        # Subfolders
+        folder_query = f"'{current_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        folder_resp = drive.files().list(q=folder_query, **list_kwargs_base).execute()
+        for f in folder_resp.get("files", []):
+            next_path = f"{current_path}/{f.get('name', '').strip() or 'Folder'}"
+            queue.append((f.get("id"), next_path))
+        
+        # Images in current folder
+        image_query = f"'{current_id}' in parents and mimeType contains 'image/' and trashed=false"
+        image_resp = drive.files().list(q=image_query, **list_kwargs_base).execute()
+        for img in image_resp.get("files", []):
+            images.append({
+                "id": img.get("id"),
+                "name": img.get("name") or "image",
+                "display_name": f"{current_path}/{img.get('name') or 'image'}",
+            })
+    
+    # Sort by display name for consistent ordering
+    images.sort(key=lambda x: x.get("display_name", "").lower())
+    return images
+
+
+@st.cache_data(show_spinner=False)
+def download_gallery_image(file_id: str) -> bytes:
+    """Download raw image bytes from Google Drive."""
+    if not MediaIoBaseDownload:
+        raise RuntimeError("google-api-python-client is required to download images.")
+    
+    drive = _get_drive_service()
+    request = drive.files().get_media(fileId=file_id, supportsAllDrives=True)
+    fh = BytesIO()
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    fh.seek(0)
+    return fh.read()
+
+
+def resize_image_to_target(image_bytes: bytes) -> bytes:
+    """Resize and letterbox the image to IMAGE_TARGET_SIZE, returning PNG bytes."""
+    if not Image or not ImageOps:
+        raise RuntimeError("Pillow is required to process images.")
+    
+    with Image.open(BytesIO(image_bytes)) as img:
+        img = ImageOps.exif_transpose(img.convert("RGB"))
+        contained = ImageOps.contain(img, IMAGE_TARGET_SIZE, Image.LANCZOS)
+        canvas = Image.new("RGB", IMAGE_TARGET_SIZE, (255, 255, 255))
+        offset = ((IMAGE_TARGET_SIZE[0] - contained.width) // 2, (IMAGE_TARGET_SIZE[1] - contained.height) // 2)
+        canvas.paste(contained, offset)
+        out = BytesIO()
+        canvas.save(out, format="PNG")
+        out.seek(0)
+        return out.read()
+
+
+@st.cache_data(show_spinner=False)
+def get_resized_gallery_image(file_id: str) -> bytes:
+    """Download and resize a Drive image to the target dimensions."""
+    raw = download_gallery_image(file_id)
+    return resize_image_to_target(raw)
 
 
 # ============================================================================
@@ -782,6 +916,115 @@ def add_or_replace_image(prs: Presentation, slide_index: int, image_png_bytes: b
         pic.top = int((prs.slide_height - pic.height) / 2)
 
 
+def populate_gallery_slide(prs: Presentation, images: List[Dict[str, Any]], slide_index: int = 8):
+    """
+    Populate slide 9 (index 8) with three gallery images.
+    
+    Args:
+        prs: Presentation object
+        images: List of dicts [{"id": str, "name": str, "data": bytes}]
+        slide_index: Index of the slide to populate (default 8)
+    """
+    if not images or len(images) != 3:
+        return
+    if slide_index < 0 or slide_index >= len(prs.slides):
+        st.warning("Template doesn't have a 9th slide to place gallery images.")
+        return
+    
+    slide = prs.slides[slide_index]
+    
+    # Find "PROJECT HIGHLIGHT" text to position images below it
+    project_highlight_bottom = None
+    for shape in slide.shapes:
+        if getattr(shape, 'has_text_frame', False):
+            text = (shape.text_frame.text or "").strip().upper()
+            if "PROJECT HIGHLIGHT" in text:
+                # Get the bottom position of the PROJECT HIGHLIGHT text
+                project_highlight_bottom = shape.top + shape.height
+                break
+    
+    # Find placeholders to replace their text (but we'll use calculated positions)
+    placeholder_map = {}
+    for shape in slide.shapes:
+        if getattr(shape, 'has_text_frame', False):
+            text = (shape.text_frame.text or "").strip().upper()
+            if text in {"PLACEHOLDER 1", "PLACEHOLDER 2", "PLACEHOLDER 3"}:
+                placeholder_map[text] = shape
+    
+    # Calculate positions below PROJECT HIGHLIGHT, centered horizontally
+    if project_highlight_bottom is not None:
+        # Position images below PROJECT HIGHLIGHT with some spacing
+        spacing_below_title = int(0.3 * EMU_PER_INCH)  # 0.3 inches below title
+        image_top = project_highlight_bottom + spacing_below_title
+        
+        # Calculate horizontal positions (centered, with gaps between images)
+        total_images_width = 3 * TARGET_WIDTH_EMU
+        gap = int((prs.slide_width - total_images_width) / 4) if prs.slide_width > total_images_width else int(0.2 * EMU_PER_INCH)
+        gap = max(gap, int(0.2 * EMU_PER_INCH))  # Minimum gap of 0.2 inches
+        
+        left_start = gap
+        positions = []
+        for idx in range(3):
+            left = left_start + idx * (TARGET_WIDTH_EMU + gap)
+            # Get placeholder shape if it exists for text replacement
+            key = f"PLACEHOLDER {idx + 1}"
+            placeholder_shape = placeholder_map.get(key)
+            positions.append((left, image_top, TARGET_WIDTH_EMU, TARGET_HEIGHT_EMU, placeholder_shape))
+    else:
+        # Fallback: center images vertically if PROJECT HIGHLIGHT not found
+        gap = int((prs.slide_width - 3 * TARGET_WIDTH_EMU) / 4) if prs.slide_width > 0 else 0
+        gap = max(gap, 0)
+        top = int((prs.slide_height - TARGET_HEIGHT_EMU) / 2) if prs.slide_height else 0
+        positions = []
+        left = gap
+        for idx in range(3):
+            key = f"PLACEHOLDER {idx + 1}"
+            placeholder_shape = placeholder_map.get(key)
+            positions.append((left, top, TARGET_WIDTH_EMU, TARGET_HEIGHT_EMU, placeholder_shape))
+            left += TARGET_WIDTH_EMU + gap
+    
+    # Place each image and caption
+    for idx, img in enumerate(images):
+        left, top, width, height, placeholder_shape = positions[idx]
+        
+        if placeholder_shape:
+            try:
+                placeholder_shape.text_frame.text = (img.get("name") or "").upper()
+            except Exception:
+                pass
+            try:
+                sp = placeholder_shape._element
+                sp.getparent().remove(sp)
+            except Exception:
+                pass
+        
+        # Add picture and set dimensions explicitly to prevent compression/distortion
+        # Images are pre-resized to exactly 421x619px, so we set both dimensions explicitly
+        pic = slide.shapes.add_picture(BytesIO(img.get("data")), left, top)
+        
+        # Always use target dimensions to ensure images aren't compressed
+        # Setting both width and height is safe because images are exactly 421x619px
+        pic.width = TARGET_WIDTH_EMU
+        pic.height = TARGET_HEIGHT_EMU
+        
+        # Add caption with image name below the picture
+        caption_top = top + pic.height + int(0.08 * EMU_PER_INCH)
+        caption_height = int(0.4 * EMU_PER_INCH)
+        try:
+            cap_box = slide.shapes.add_textbox(left, caption_top, pic.width, caption_height)
+            cap_tf = cap_box.text_frame
+            cap_tf.clear()
+            cap_p = cap_tf.paragraphs[0]
+            cap_p.text = (img.get("name") or "").strip()
+            cap_p.alignment = PP_PARAGRAPH_ALIGNMENT.CENTER
+            if cap_p.runs:
+                cap_p.runs[0].font.name = "Schibsted Grotesk Medium"
+                cap_p.runs[0].font.size = Pt(18)
+        except Exception:
+            # If caption fails, just continue without breaking deck creation
+            pass
+
+
 # ============================================================================
 # Deck Creation Functions
 # ============================================================================
@@ -791,7 +1034,8 @@ def create_deck_from_template(
     client_name: str,
     priority_slide_index: Optional[int],
     service_column_slide_index: Optional[int],
-    image_bytes: bytes | None = None
+    image_bytes: bytes | None = None,
+    gallery_images: Optional[List[Dict[str, bytes]]] = None
 ) -> bytes:
     """
     Create a deck from the selected template with customizations.
@@ -801,6 +1045,8 @@ def create_deck_from_template(
         client_name: Client name for "Proposal For" slide
         priority_slide_index: Index of priority slide to insert (from SERVICE COLUMNS.pptx)
         service_column_slide_index: Index of service column slide to insert (from SERVICE COLUMNS.pptx)
+        image_bytes: Optional PDF first-page image bytes to place on slide 11
+        gallery_images: Optional list of three resized gallery images for slide 9
     
     Returns:
         PPTX file bytes
@@ -994,7 +1240,14 @@ def create_deck_from_template(
             except Exception as e:
                 st.warning(f"Could not replace priority slide: {e}")
     
-    # Step 3: Copy entire slide content from SERVICE COLUMNS.pptx to slide 10 (index 9)
+    # Step 3: Populate slide 9 (index 8) with gallery images
+    if gallery_images:
+        try:
+            populate_gallery_slide(prs, gallery_images, slide_index=8)
+        except Exception as e:
+            st.warning(f"Could not populate gallery images on slide 9: {e}")
+    
+    # Step 4: Copy entire slide content from SERVICE COLUMNS.pptx to slide 10 (index 9)
     # Since slide 10 is now empty, we just copy the entire selected slide
     # Skip this step for Standards deck type - keep original slide 10
     if service_column_slide_index is not None and deck_type != "Standards":
@@ -1021,7 +1274,7 @@ def create_deck_from_template(
             except Exception as e:
                 st.warning(f"Could not copy service column slide: {e}")
     
-    # Step 4: Set slide 12 (index 11) - replace "1ST NAME'S APPROVAL OF PROJECT" with first name only
+    # Step 5: Set slide 12 (index 11) - replace "1ST NAME'S APPROVAL OF PROJECT" with first name only
     if len(prs.slides) > 11 and client_name:
         first_name = client_name.strip().split(" ")[0] if client_name else ""
         slide12 = prs.slides[11]
@@ -1051,7 +1304,7 @@ def create_deck_from_template(
                     t = t.replace("'S'S", "'S").replace("'S'S", "'S")
                     p.text = t.upper()
     
-    # Step 5: Replace slide 11 (index 10) with PDF image if provided
+    # Step 6: Replace slide 11 (index 10) with PDF image if provided
     if image_bytes and len(prs.slides) > 10:
         add_or_replace_image(prs, 10, image_bytes)
     
@@ -1122,7 +1375,8 @@ def upload_deck_to_google_drive(
     client_name: str,
     priority_slide_index: Optional[int],
     service_column_slide_index: Optional[int],
-    image_bytes: bytes | None = None
+    image_bytes: bytes | None = None,
+    gallery_images: Optional[List[Dict[str, bytes]]] = None
 ) -> str:
     """Upload deck PPTX to Google Drive and return file URL. Similar to upload_workbook_to_google_sheet."""
     if not build or not MediaIoBaseUpload:
@@ -1146,7 +1400,8 @@ def upload_deck_to_google_drive(
         client_name,
         priority_slide_index,
         service_column_slide_index,
-        image_bytes
+        image_bytes,
+        gallery_images
     )
     
     # Check if parent_folder_id is in a Shared Drive
@@ -1480,6 +1735,132 @@ def render_pdf_upload() -> bytes | None:
     return img_bytes
 
 
+def _extract_clean_filename(display_name: str) -> str:
+    """Extract clean filename without path and extension.
+    
+    Examples:
+        "images/ALABAMA BLONDE 1.webp" -> "ALABAMA BLONDE 1"
+        "folder/subfolder/image.png" -> "image"
+    """
+    # Get just the filename (last part after /)
+    filename = display_name.split("/")[-1]
+    # Remove extension
+    if "." in filename:
+        filename = filename.rsplit(".", 1)[0]
+    return filename
+
+
+def render_gallery_selector() -> List[Dict[str, Any]]:
+    """Render the gallery selector (exactly 3 images) below the PDF upload."""
+    st.subheader("Gallery Images")
+    st.caption("Images come from the shared drive gallery and are resized to 421px x 619px.")
+    
+    if not Image:
+        st.error("Pillow is required to load gallery images. Please install pillow.")
+        return []
+    
+    try:
+        gallery_items = list_gallery_images()
+    except Exception as e:
+        st.warning(f"Could not load gallery images: {e}")
+        return []
+    
+    if not gallery_items:
+        st.info("No images found in the gallery folder.")
+        return []
+    
+    # Create a mapping of clean filenames to items for easy lookup
+    clean_name_to_item = {}
+    for item in gallery_items:
+        display_name = item.get("display_name") or item.get("name") or "Image"
+        clean_name = _extract_clean_filename(display_name)
+        clean_name_to_item[clean_name] = item
+    
+    # Get list of all clean image names for the multiselect
+    image_names = sorted(clean_name_to_item.keys())
+    
+    # Single multiselect input - let Streamlit manage the widget state completely
+    widget_key = "dc_gallery_multiselect"
+    selected_names = st.multiselect(
+        "Select 3 Images",
+        options=image_names,
+        key=widget_key,
+        help="Type to search and select exactly 3 images from the gallery"
+    )
+    
+    # Filter out any invalid selections (shouldn't happen, but safety check)
+    selected_names = [name for name in selected_names if name in image_names]
+    
+    # Limit to 3 selections (in case user somehow selects more)
+    if len(selected_names) > 3:
+        selected_names = selected_names[:3]
+        st.warning("⚠️ Only 3 images can be selected. Showing the first 3.")
+    
+    # Track selection for caching - use a simple comparison
+    prev_selection_for_cache = st.session_state.get("dc_prev_gallery_selection", None)
+    selection_changed = prev_selection_for_cache != selected_names
+    if selection_changed:
+        st.session_state["dc_prev_gallery_selection"] = selected_names.copy() if selected_names else []
+    
+    # Only show images when exactly 3 are selected
+    if len(selected_names) != 3:
+        if len(selected_names) > 0:
+            st.info(f"Please select exactly 3 images ({len(selected_names)}/3 selected).")
+        else:
+            st.info("Please select exactly 3 images to continue.")
+        # Clear cache if selection is incomplete
+        if "dc_cached_gallery_images" in st.session_state:
+            del st.session_state["dc_cached_gallery_images"]
+        if "dc_cached_gallery_selection" in st.session_state:
+            del st.session_state["dc_cached_gallery_selection"]
+        return []
+    
+    # Check if we have cached images for this exact selection
+    cache_key = tuple(selected_names)  # Use tuple as cache key (order matters)
+    cached_images_key = "dc_cached_gallery_images"
+    cached_selection_key = "dc_cached_gallery_selection"
+    
+    # Load images only if selection changed or cache is invalid
+    if (selection_changed or 
+        st.session_state.get(cached_selection_key) != cache_key or
+        cached_images_key not in st.session_state):
+        
+        # Load and cache the images
+        selected_images: List[Dict[str, Any]] = []
+        for clean_name in selected_names:
+            if clean_name not in clean_name_to_item:
+                st.error(f"❌ Image '{clean_name}' not found in gallery.")
+                return []
+            
+            item = clean_name_to_item[clean_name]
+            try:
+                img_bytes = get_resized_gallery_image(item["id"])
+                selected_images.append({
+                    "id": item["id"],
+                    "name": clean_name,
+                    "data": img_bytes
+                })
+            except Exception as e:
+                st.error(f"❌ Could not load image '{clean_name}': {e}")
+                return []
+        
+        # Cache the images
+        st.session_state[cached_images_key] = selected_images
+        st.session_state[cached_selection_key] = cache_key
+    else:
+        # Use cached images
+        selected_images = st.session_state[cached_images_key]
+    
+    # Display the images
+    cols = st.columns(3)
+    for idx, img_data in enumerate(selected_images):
+        with cols[idx]:
+            st.image(img_data["data"], use_container_width=True)
+            st.caption(img_data["name"])
+    
+    return selected_images
+
+
 # ============================================================================
 # Main Application
 # ============================================================================
@@ -1504,6 +1885,7 @@ def main():
     priority_slide_index = render_priorities_selector()
     service_column_slide_index = render_service_columns_selector(deck_type)
     image_bytes = render_pdf_upload()
+    gallery_images = render_gallery_selector()
     
     # Show Monday.com upload section
     st.markdown("---")
@@ -1525,6 +1907,9 @@ def main():
         if not Presentation:
             st.error("python-pptx is not installed.")
             return
+        if len(gallery_images) != 3:
+            st.error("Please select exactly 3 gallery images before generating.")
+            return
         
         try:
             pptx_bytes = create_deck_from_template(
@@ -1532,7 +1917,8 @@ def main():
                 client_name,
                 priority_slide_index,
                 service_column_slide_index,
-                image_bytes
+                image_bytes,
+                gallery_images
             )
             
             # Store in session state and trigger auto-download
@@ -1603,6 +1989,9 @@ def main():
         if not build:
             st.error("Google API client not available")
         else:
+            if len(gallery_images) != 3:
+                st.error("Please select exactly 3 gallery images before uploading.")
+                return
             with st.spinner("Uploading deck to Google Drive and updating Monday.com..."):
                 try:
                     # Upload to Google Drive
@@ -1611,7 +2000,8 @@ def main():
                         client_name,
                         priority_slide_index,
                         service_column_slide_index,
-                        image_bytes
+                        image_bytes,
+                        gallery_images
                     )
                     st.success(f"✅ Deck uploaded to Google Drive: [Open Deck]({deck_url})")
                     
