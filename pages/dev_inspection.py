@@ -1445,6 +1445,51 @@ def apply_development_package(
                     if Alignment:
                         cell_d = ws.cell(row=final_samples_row, column=col_d_idx)
                         cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+        else:
+            # When there's no activewear, set FINAL SAMPLES here
+            # Final Samples: all styles (regular only, no activewear, excluding custom line items)
+            # Note: FINAL SAMPLES is in column B, not column H, so we need to search column B
+            final_samples_row = None
+            label_col_b = column_index_from_string("B")
+            for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
+                value = ws.cell(row=scan_row, column=label_col_b).value
+                if isinstance(value, str) and "final" in value.lower() and "sample" in value.lower():
+                    final_samples_row = scan_row
+                    break
+            if final_samples_row:
+                # Use direct count instead of formula
+                count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
+                col_d_idx = column_index_from_string("D")
+                # Unmerge temporarily to set value and clear any formulas
+                was_merged = False
+                merge_pattern = None
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        was_merged = True
+                        merge_pattern = (merged_range.min_row, merged_range.max_row, merged_range.min_col, merged_range.max_col)
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                        break
+                # Clear the cell completely (including any formulas)
+                count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                count_cell.value = None
+                # Set direct numeric value (not a formula)
+                count_cell.value = count_value
+                count_cell.number_format = "0"
+                # Re-merge if it was merged before
+                if was_merged and merge_pattern and safe_merge_cells:
+                    min_row, max_row, min_col, max_col = merge_pattern
+                    if get_column_letter:
+                        start_col_letter = get_column_letter(min_col)
+                        end_col_letter = get_column_letter(max_col)
+                        range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
+                        safe_merge_cells(ws, range_str)
+                    if Alignment:
+                        cell_d = ws.cell(row=final_samples_row, column=col_d_idx)
+                        cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
         
         # Update PATTERNS and FIRST SAMPLES to have the same value as FINAL SAMPLES (num_styles)
         # This applies to both activewear and non-activewear cases, after find_label_row is defined
@@ -1509,69 +1554,6 @@ def apply_development_package(
                 safe_merge_cells(ws, f"D{first_samples_row}:D{first_samples_row_second}")
             if Alignment:
                 count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
-            
-        else:
-            # Final Samples: all styles (regular only, no activewear, excluding custom line items)
-            final_samples_row = find_label_row("FINAL SAMPLES")
-            if final_samples_row:
-                # Use direct count instead of formula
-                count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
-                col_d_idx = column_index_from_string("D")
-                # Unmerge if needed and clear any formulas
-                for merged_range in list(ws.merged_cells.ranges):
-                    if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
-                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                        try:
-                            ws.unmerge_cells(range_string=str(merged_range))
-                        except Exception:
-                            pass
-                # Clear the cell completely (including any formulas)
-                count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
-                count_cell.value = None
-                # Set direct numeric value (not a formula)
-                count_cell.value = count_value
-                count_cell.number_format = "0"
-            
-            # Now that FINAL SAMPLES is set, update PATTERNS and FIRST SAMPLES to have the same value
-            # Patterns: all styles (regular only, no activewear, excluding custom line items)
-            # Set to the same value as FINAL SAMPLES (num_styles) - direct value, not a formula
-            patterns_row = find_label_row("PATTERNS")
-            if patterns_row:
-                col_d_idx = column_index_from_string("D")
-                # Unmerge if needed and clear any formulas
-                for merged_range in list(ws.merged_cells.ranges):
-                    if (merged_range.min_row <= patterns_row <= merged_range.max_row and
-                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                        try:
-                            ws.unmerge_cells(range_string=str(merged_range))
-                        except Exception:
-                            pass
-                # Clear the cell completely (including any formulas)
-                count_cell = ws.cell(row=patterns_row, column=col_d_idx)
-                count_cell.value = None
-                # Set direct numeric value (same as FINAL SAMPLES: num_styles)
-                count_cell.value = num_styles
-                count_cell.number_format = "0"
-            
-            # First Samples: all styles (regular only, no activewear, excluding custom line items)
-            # Set to the same value as FINAL SAMPLES (num_styles) - direct value, not a formula
-            first_samples_row = find_label_row("FIRST SAMPLES")
-            if first_samples_row:
-                col_d_idx = column_index_from_string("D")
-                # Unmerge if needed and clear any formulas
-                for merged_range in list(ws.merged_cells.ranges):
-                    if (merged_range.min_row <= first_samples_row <= merged_range.max_row and
-                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                        try:
-                            ws.unmerge_cells(range_string=str(merged_range))
-                        except Exception:
-                            pass
-                # Clear the cell completely (including any formulas)
-                count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
-                count_cell.value = None
-                # Set direct numeric value (same as FINAL SAMPLES: num_styles)
-                count_cell.value = num_styles
-                count_cell.number_format = "0"
 
     # Totals section - dynamically calculate totals row and range based on number of styles
     # For 5 or fewer styles: totals at row 20 (original position)
@@ -2583,10 +2565,7 @@ def build_workbook_bytes(
         raise ValueError(
             f"Worksheet 'DEVELOPMENT ONLY' is missing from the template."
         )
-    if "A LA CARTE" not in wb.sheetnames:
-        raise ValueError(
-            f"Worksheet 'A LA CARTE' is missing from the template."
-        )
+    # A LA CARTE sheet is only required if there are items (checked later)
     
     # Process DEVELOPMENT ONLY tab
     ws_dev = wb["DEVELOPMENT ONLY"]
@@ -2632,18 +2611,28 @@ def build_workbook_bytes(
                         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                     note_index += 1
     
-    # Process A LA CARTE tab
-    ws_ala = wb["A LA CARTE"]
-    ws_ala.title = "A LA CARTE"
-    
+    # Process A LA CARTE tab only if there are items
     a_la_carte_items = a_la_carte_items or []
-    total_ala_carte, total_optional_ala_carte = apply_ala_carte_package(
-        ws_ala,
-        client_name=client_name,
-        client_email=client_email,
-        representative=representative,
-        a_la_carte_items=a_la_carte_items,
-    )
+    total_ala_carte = 0.0
+    total_optional_ala_carte = 0.0
+    
+    if len(a_la_carte_items) > 0:
+        # Check for A LA CARTE sheet only if we need it
+        if "A LA CARTE" not in wb.sheetnames:
+            raise ValueError(
+                f"Worksheet 'A LA CARTE' is missing from the template."
+            )
+        
+        ws_ala = wb["A LA CARTE"]
+        ws_ala.title = "A LA CARTE"
+        
+        total_ala_carte, total_optional_ala_carte = apply_ala_carte_package(
+            ws_ala,
+            client_name=client_name,
+            client_email=client_email,
+            representative=representative,
+            a_la_carte_items=a_la_carte_items,
+        )
     
     # Update DEVELOPMENT ONLY tab summary section to combine both tabs
     # Change N10 label from "TOTAL DEVELOPMENT" to "TOTAL PACKAGES"
@@ -2701,8 +2690,11 @@ def build_workbook_bytes(
     if Alignment is not None:
         cell_p12.alignment = Alignment(horizontal="center", vertical="center")
     
-    # Remove any other worksheets (keep only DEVELOPMENT ONLY and A LA CARTE)
-    sheets_to_remove = [name for name in wb.sheetnames if name not in ["DEVELOPMENT ONLY", "A LA CARTE"]]
+    # Remove any other worksheets (keep only DEVELOPMENT ONLY and A LA CARTE if it exists)
+    sheets_to_keep = ["DEVELOPMENT ONLY"]
+    if len(a_la_carte_items) > 0:
+        sheets_to_keep.append("A LA CARTE")
+    sheets_to_remove = [name for name in wb.sheetnames if name not in sheets_to_keep]
     for sheet_name in sheets_to_remove:
         wb.remove(wb[sheet_name])
 
@@ -3326,6 +3318,12 @@ def main() -> None:
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
         const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'dev_inspection'];
         
+        // Check if we're currently on an ads dashboard page
+        const currentUrl = window.location.href.toLowerCase();
+        const currentPath = window.location.pathname.toLowerCase();
+        const isOnAdsDashboard = currentUrl.includes('ads') && currentUrl.includes('dashboard') ||
+                                 currentPath.includes('ads') && currentPath.includes('dashboard');
+        
         navItems.forEach(item => {
             const link = item.querySelector('a');
             if (!link) {
@@ -3344,6 +3342,13 @@ def main() -> None:
             // Make sure it's not ads dashboard or other dashboards
             const isDashboard = (text.includes('ads') && text.includes('dashboard')) || 
                               (href.includes('ads') && href.includes('dashboard'));
+            
+            // Hide dev_inspection if we're on an ads dashboard page
+            const isDevInspection = href.includes('dev_inspection') || text.includes('dev_inspection');
+            if (isOnAdsDashboard && isDevInspection) {
+                item.style.setProperty('display', 'none', 'important');
+                return;
+            }
             
             if (isToolPage && !isDashboard) {
                 item.style.setProperty('display', 'block', 'important');

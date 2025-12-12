@@ -64,7 +64,8 @@ st.markdown(
 [data-testid="stSidebarNav"] li:has(a[href*="signnow"]),
 [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
 [data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
-[data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]) {
+[data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]),
+[data-testid="stSidebarNav"] li:has(a[href*="dev_inspection"]) {
     display: block !important;
 }
 
@@ -77,7 +78,13 @@ iframe {
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator'];
+        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'dev_inspection'];
+        
+        // Check if we're currently on an ads dashboard page
+        const currentUrl = window.location.href.toLowerCase();
+        const currentPath = window.location.pathname.toLowerCase();
+        const isOnAdsDashboard = currentUrl.includes('ads') && currentUrl.includes('dashboard') ||
+                                 currentPath.includes('ads') && currentPath.includes('dashboard');
         
         navItems.forEach(item => {
             const link = item.querySelector('a');
@@ -107,6 +114,13 @@ iframe {
                               (href.includes('database_refresh')) ||
                               (href.includes('new_leads')) ||
                               (href.includes('seo_metrics'));
+            
+            // Hide dev_inspection if we're on an ads dashboard page
+            const isDevInspection = href.includes('dev_inspection') || text.includes('dev_inspection');
+            if (isOnAdsDashboard && isDevInspection) {
+                item.style.setProperty('display', 'none', 'important');
+                return;
+            }
             
             if (isToolPage && !isDashboard) {
                 item.style.setProperty('display', 'block', 'important');
@@ -1019,7 +1033,9 @@ def populate_gallery_slide(prs: Presentation, images: List[Dict[str, Any]], slid
         
         if placeholder_shape:
             try:
-                placeholder_shape.text_frame.text = (img.get("name") or "").upper()
+                # Remove trailing numbers from name for placeholder text
+                display_name = _remove_trailing_numbers(img.get("name") or "")
+                placeholder_shape.text_frame.text = display_name.upper()
             except Exception:
                 pass
             try:
@@ -1045,7 +1061,9 @@ def populate_gallery_slide(prs: Presentation, images: List[Dict[str, Any]], slid
             cap_tf = cap_box.text_frame
             cap_tf.clear()
             cap_p = cap_tf.paragraphs[0]
-            cap_p.text = (img.get("name") or "").strip()
+            # Remove trailing numbers from name for caption
+            display_name = _remove_trailing_numbers(img.get("name") or "")
+            cap_p.text = display_name.strip()
             cap_p.alignment = PP_PARAGRAPH_ALIGNMENT.CENTER
             if cap_p.runs:
                 cap_p.runs[0].font.name = "Schibsted Grotesk Medium"
@@ -1824,10 +1842,26 @@ def _extract_clean_filename(display_name: str) -> str:
     return filename
 
 
+def _remove_trailing_numbers(name: str) -> str:
+    """Remove trailing numbers from a name.
+    
+    Examples:
+        "ALABAMA BLONDE 4" -> "ALABAMA BLONDE"
+        "CAROLINE HAYDEN 1" -> "CAROLINE HAYDEN"
+        "IMAGE 123" -> "IMAGE"
+    """
+    import re
+    # Remove trailing spaces and numbers
+    return re.sub(r'\s+\d+$', '', name.strip())
+
+
 def render_gallery_selector() -> List[Dict[str, Any]]:
     """Render the gallery selector (exactly 3 images) below the PDF upload."""
-    st.subheader("Gallery Images")
     
+    # Add visual preview option - hyperlink to Google Drive folder
+    GALLERY_DRIVE_URL = f"https://drive.google.com/drive/folders/{IMAGE_GALLERY_FOLDER_ID}?usp=drive_link"
+    st.subheader(f"[Gallery Images]({GALLERY_DRIVE_URL})")
+
     if not Image:
         st.error("Pillow is required to load gallery images. Please install pillow.")
         return []
@@ -1929,7 +1963,9 @@ def render_gallery_selector() -> List[Dict[str, Any]]:
     for idx, img_data in enumerate(selected_images):
         with cols[idx]:
             st.image(img_data["data"], use_container_width=True)
-            st.caption(img_data["name"])
+            # Remove trailing numbers from displayed name
+            display_name = _remove_trailing_numbers(img_data["name"])
+            st.caption(display_name)
     
     return selected_images
 

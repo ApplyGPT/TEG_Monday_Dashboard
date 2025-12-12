@@ -20,7 +20,8 @@ st.markdown("""
     [data-testid="stSidebarNav"] a[href*="quickbooks_form"],
     [data-testid="stSidebarNav"] a[href*="signnow_form"],
     [data-testid="stSidebarNav"] a[href*="workbook_creator"],
-    [data-testid="stSidebarNav"] a[href*="deck_creator"] {
+    [data-testid="stSidebarNav"] a[href*="deck_creator"],
+    [data-testid="stSidebarNav"] a[href*="dev_inspection"] {
         display: none !important;
     }
     

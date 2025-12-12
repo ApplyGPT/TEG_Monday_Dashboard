@@ -38,6 +38,12 @@ st.markdown("""
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
         const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'dev_inspection'];
         
+        // Check if we're currently on an ads dashboard page
+        const currentUrl = window.location.href.toLowerCase();
+        const currentPath = window.location.pathname.toLowerCase();
+        const isOnAdsDashboard = currentUrl.includes('ads') && currentUrl.includes('dashboard') ||
+                                 currentPath.includes('ads') && currentPath.includes('dashboard');
+        
         navItems.forEach(item => {
             const link = item.querySelector('a');
             if (!link) {
@@ -56,6 +62,13 @@ st.markdown("""
             // Make sure it's not ads dashboard or other dashboards
             const isDashboard = (text.includes('ads') && text.includes('dashboard')) || 
                               (href.includes('ads') && href.includes('dashboard'));
+            
+            // Hide dev_inspection if we're on an ads dashboard page
+            const isDevInspection = href.includes('dev_inspection') || text.includes('dev_inspection');
+            if (isOnAdsDashboard && isDevInspection) {
+                item.style.setProperty('display', 'none', 'important');
+                return;
+            }
             
             if (isToolPage && !isDashboard) {
                 item.style.setProperty('display', 'block', 'important');
