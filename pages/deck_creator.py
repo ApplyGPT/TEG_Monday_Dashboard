@@ -1860,7 +1860,20 @@ def render_gallery_selector() -> List[Dict[str, Any]]:
     
     # Add visual preview option - hyperlink to Google Drive folder
     GALLERY_DRIVE_URL = f"https://drive.google.com/drive/folders/{IMAGE_GALLERY_FOLDER_ID}?usp=drive_link"
-    st.subheader(f"[Gallery Images]({GALLERY_DRIVE_URL})")
+    
+    # Header with refresh button
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.subheader(f"[Gallery Images]({GALLERY_DRIVE_URL})")
+    with col2:
+        if st.button("🔄 Refresh Gallery", help="Clear cache and reload images from Google Drive"):
+            # Clear all cached data to force reload from Google Drive
+            st.cache_data.clear()
+            # Also clear session state cache if any
+            if "gallery_images_cache" in st.session_state:
+                del st.session_state["gallery_images_cache"]
+            st.success("Gallery refreshed! Reloading...")
+            st.rerun()
 
     if not Image:
         st.error("Pillow is required to load gallery images. Please install pillow.")
