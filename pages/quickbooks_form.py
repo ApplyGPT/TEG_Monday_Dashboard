@@ -273,7 +273,7 @@ def main():
         enable_payment_link = st.checkbox(
             "Enable Online Payment Link",
             value=True,
-            help="Allow client to pay online through QuickBooks. Note: Payment methods (Credit Card vs ACH) are configured in QuickBooks account settings, not per invoice."
+            help="Allow client to pay online through QuickBooks."
         )
     
     # Client address field

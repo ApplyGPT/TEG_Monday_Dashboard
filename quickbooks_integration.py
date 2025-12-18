@@ -9,14 +9,18 @@ FIXES APPLIED:
 3. Email Message: Changed DisplayName to use client name instead of company name
 4. Customer Creation: Improved timeout handling, retry logic, and error messages
 5. Email Mapping: Fixed to ensure client email (not cc_email) is saved in Customer and BillEmail fields
-6. Payment Methods: Payment method fields (AllowOnlinePayment, AllowOnlineCreditCard, AllowOnlineACH) are NOT 
-   supported at invoice level - they cause 400 errors. Payment methods must be configured in QuickBooks account settings.
+6. Payment Methods: Fixed to use correct field names (AllowOnlineCreditCardPayment, AllowOnlineACHPayment).
+   Payment methods are now set per invoice based on include_cc_fee checkbox:
+   - If CC fee is included → Credit Card enabled, ACH disabled
+   - If CC fee is NOT included → ACH enabled, Credit Card disabled
 
 NOTES:
 - The $25 ACH convenience fee is a QuickBooks account setting, not controlled by code.
   To disable: Account & Settings → Sales → Invoice Payments → Uncheck "Your customer pays the fee"
-- Payment methods (Credit Card vs ACH) are controlled at the QuickBooks account level, not per invoice.
-  Configure in: Account & Settings → Sales → Invoice Payments
+- Payment methods are now set per invoice using AllowOnlineCreditCardPayment and AllowOnlineACHPayment fields.
+  The selection is based on the "Include 3% Credit Card Processing Fee" checkbox:
+  - If checked → Credit Card enabled, ACH disabled
+  - If unchecked → ACH enabled, Credit Card disabled
 """
 
 import requests
@@ -346,6 +350,55 @@ class QuickBooksAPI:
             # Silently fail - invoice was already created successfully
             pass
     
+    def _update_invoice_payment_methods(self, invoice_id: str, enable_cc: bool, enable_ach: bool) -> bool:
+        """Update invoice payment method fields after creation"""
+        try:
+            # Get current invoice data
+            response = self._make_request('GET', f'invoice/{invoice_id}')
+            if not response or response.status_code != 200:
+                return False
+            
+            invoice_data = response.json().get("Invoice", {})
+            sync_token = invoice_data.get("SyncToken", "0")
+            
+            # Prepare update payload - need to include required fields for update
+            # QuickBooks requires certain fields to be present on update
+            update_payload = {
+                "Id": invoice_id,
+                "SyncToken": sync_token,
+                "sparse": True,  # Only update specified fields
+                "AllowOnlineCreditCardPayment": enable_cc,
+                "AllowOnlineACHPayment": enable_ach
+            }
+            
+            # Include required fields that QuickBooks needs for updates
+            required_fields = ["CustomerRef", "TxnDate", "Line", "DueDate"]
+            for field in required_fields:
+                if field in invoice_data:
+                    update_payload[field] = invoice_data[field]
+            
+            # Include BillEmail if it exists
+            if "BillEmail" in invoice_data:
+                update_payload["BillEmail"] = invoice_data["BillEmail"]
+            
+            # Update invoice
+            update_response = self._make_request('POST', 'invoice', data=update_payload, params={"minorversion": "40"})
+            if update_response and update_response.status_code == 200:
+                updated_invoice = update_response.json().get("Invoice", {})
+                updated_cc = updated_invoice.get('AllowOnlineCreditCardPayment')
+                updated_ach = updated_invoice.get('AllowOnlineACHPayment')
+                
+                # Verify the update worked
+                if updated_cc == enable_cc and updated_ach == enable_ach:
+                    return True
+                else:
+                    return False
+            else:
+                return False
+        except Exception as e:
+            # Silently fail - non-critical operation
+            return False
+    
     def _update_customer_for_company_billing(self, customer_id: str, company_name: str):
         """Update existing customer to show only company name in BILL TO (remove person name)"""
         try:
@@ -459,11 +512,6 @@ class QuickBooksAPI:
         
         response = self._make_request('POST', 'customer', data=payload)
         
-        # Debug: Log response status for troubleshooting
-        if response:
-            print(f"DEBUG: Customer creation response status: {response.status_code}")
-        else:
-            print("DEBUG: Customer creation returned None - no response from API")
         
         if response and response.status_code in [200, 201]:
             customer = response.json().get("Customer", {})
@@ -496,7 +544,6 @@ class QuickBooksAPI:
             st.error("   • Authentication failure - check your access token")
             st.error("   • Network/connection issue")
             st.error("   • QuickBooks API timeout")
-            # Debug: Try to get more info
             if not self.access_token:
                 st.error("   • Access token is missing - authentication may have failed")
             return None
@@ -574,12 +621,6 @@ class QuickBooksAPI:
         except (ValueError, KeyError) as e:
             # If response is not JSON or doesn't have expected structure
             st.error(f"❌ Error parsing response: {str(e)}")
-            # Show raw response for debugging
-            try:
-                error_text = response.text[:500] if hasattr(response, 'text') else str(response)
-                st.error(f"   Raw response: {error_text}")
-            except:
-                pass
         
         # Generic error handling
         error_text = response.text[:500] if hasattr(response, 'text') else str(response)
@@ -794,26 +835,35 @@ class QuickBooksAPI:
         invoice_data["BillEmail"] = {"Address": email}
         
         # FIX #4: Payment method settings
-        # NOTE: Payment methods (AllowOnlinePayment, AllowOnlineCreditCard, AllowOnlineACH) 
-        # are NOT supported at the invoice level in QuickBooks API v3.
-        # These fields cause a 400 error: "Request has invalid or unsupported property"
+        # As of March 2025, QuickBooks requires explicit setting of payment method fields
+        # Field names: AllowOnlineCreditCardPayment and AllowOnlineACHPayment (Boolean, optional)
+        # Documentation: https://developer.intuit.com/app/developer/qbo/docs/api/accounting/most-commonly-used/invoice
         # 
-        # Payment methods must be configured at the QuickBooks account level:
-        # Account & Settings → Sales → Invoice Payments
-        # 
-        # The include_cc_fee parameter is still used to add the 3% processing fee as a line item,
-        # but the payment method selection (CC vs ACH) is controlled by QuickBooks account settings.
+        # IMPORTANT: Both fields must be explicitly set (True/False), not omitted
+        # QuickBooks will use account-level defaults if fields are omitted
+        if enable_payment_link:
+            if include_cc_fee:
+                # Credit card processing fee is included - enable CC payments, disable ACH
+                invoice_data["AllowOnlineCreditCardPayment"] = True
+                invoice_data["AllowOnlineACHPayment"] = False
+            else:
+                # No CC fee, so enable ACH only, disable CC
+                invoice_data["AllowOnlineCreditCardPayment"] = False
+                invoice_data["AllowOnlineACHPayment"] = True
+        else:
+            # Payment link disabled - explicitly disable both payment methods
+            invoice_data["AllowOnlineCreditCardPayment"] = False
+            invoice_data["AllowOnlineACHPayment"] = False
         
         payload = invoice_data
         
         # NOTE: BillEmail is set to client email (not cc_email) to ensure correct email association
-        # Payment method fields are not supported at invoice level - must be set in QuickBooks account settings
         
         # Don't set ToBeEmailed - we'll send manually via send endpoint with CC
         # This gives us control over CC/BCC addresses
         
-        # Use standard minorversion (no special requirements since CC is in send endpoint)
-        params = {"minorversion": "8"}
+        # Use minorversion 40 (latest) for payment method field support
+        params = {"minorversion": "40"}
         response = self._make_request('POST', 'invoice', data=payload, params=params)
         
         if response is None:
@@ -823,8 +873,32 @@ class QuickBooksAPI:
         if response.status_code == 200:
             try:
                 invoice_resp = response.json()
-                invoice_id = invoice_resp.get("Invoice", {}).get("Id")
-                self._update_invoice_doc_number(invoice_id, invoice_resp.get("Invoice", {}))
+                invoice = invoice_resp.get("Invoice", {})
+                invoice_id = invoice.get("Id")
+                
+                self._update_invoice_doc_number(invoice_id, invoice)
+                
+                # Verify and fix payment method fields if needed
+                if enable_payment_link:
+                    returned_cc = invoice.get('AllowOnlineCreditCardPayment')
+                    returned_ach = invoice.get('AllowOnlineACHPayment')
+                    expected_cc = include_cc_fee
+                    expected_ach = not include_cc_fee
+                    
+                    # Always try to update payment methods to ensure they're set correctly
+                    # QuickBooks may not respect the fields on initial creation
+                    if returned_cc != expected_cc or returned_ach != expected_ach:
+                        st.warning(f"⚠️ Payment methods not set correctly on creation. Attempting to update...")
+                        update_success = self._update_invoice_payment_methods(invoice_id, expected_cc, expected_ach)
+                        if update_success:
+                            st.success(f"✅ Payment methods updated successfully")
+                        else:
+                            st.warning(f"⚠️ Could not update payment methods. Invoice created but may use account defaults.")
+                    else:
+                        # Even if fields match, try updating to ensure QuickBooks processes them
+                        # This helps ensure the payment link shows the correct method
+                        self._update_invoice_payment_methods(invoice_id, expected_cc, expected_ach)
+                
                 return invoice_id
             except Exception as e:
                 st.error(f"❌ Error parsing invoice response: {str(e)}")
@@ -947,6 +1021,13 @@ class QuickBooksAPI:
         
         if not invoice_id:
             return False, "Failed to create invoice."
+        
+        # STEP 1.5: Ensure payment methods are set correctly before sending
+        # Update payment methods one more time right before sending to ensure they're processed
+        if enable_payment_link:
+            expected_cc = include_cc_fee
+            expected_ach = not include_cc_fee
+            self._update_invoice_payment_methods(invoice_id, expected_cc, expected_ach)
         
         # STEP 2: Send invoice via SEND endpoint
         # If CC email is provided, send two separate emails (one to client, one to salesman)
