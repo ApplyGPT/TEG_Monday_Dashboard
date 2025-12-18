@@ -271,9 +271,9 @@ def main():
         )
         # Enable payment link checkbox
         enable_payment_link = st.checkbox(
-            "Enable Online Payment Link (ACH Only)",
+            "Enable Online Payment Link",
             value=True,
-            help="Allow client to pay online through QuickBooks via ACH"
+            help="Allow client to pay online through QuickBooks. Note: Payment methods (Credit Card vs ACH) are configured in QuickBooks account settings, not per invoice."
         )
     
     # Client address field
@@ -592,7 +592,7 @@ def main():
             success, message = quickbooks_api.create_and_send_invoice(
                 first_name=first_name,
                 last_name=last_name,
-                email=email,
+                email=email,  # Client email (not cc_email)
                 company_name=company_name if company_name else None,
                 client_address=client_address if client_address else None,
                 contract_amount="0",  # No base contract amount
@@ -601,7 +601,8 @@ def main():
                 payment_terms="Due on receipt",
                 enable_payment_link=enable_payment_link,
                 invoice_date=invoice_date,
-                cc_email=cc_email if cc_email else None
+                cc_email=cc_email if cc_email else None,  # Salesman email for CC
+                include_cc_fee=include_cc_fee  # Pass the CC fee checkbox state
             )
             
             if success:

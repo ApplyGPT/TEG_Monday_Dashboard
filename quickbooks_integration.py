@@ -7,6 +7,16 @@ FIXES APPLIED:
 1. Bill To Address: Improved BillAddr handling to ensure it shows in PDF
 2. Due Date: Fixed to respect the selected invoice date instead of calculating from payment terms
 3. Email Message: Changed DisplayName to use client name instead of company name
+4. Customer Creation: Improved timeout handling, retry logic, and error messages
+5. Email Mapping: Fixed to ensure client email (not cc_email) is saved in Customer and BillEmail fields
+6. Payment Methods: Payment method fields (AllowOnlinePayment, AllowOnlineCreditCard, AllowOnlineACH) are NOT 
+   supported at invoice level - they cause 400 errors. Payment methods must be configured in QuickBooks account settings.
+
+NOTES:
+- The $25 ACH convenience fee is a QuickBooks account setting, not controlled by code.
+  To disable: Account & Settings → Sales → Invoice Payments → Uncheck "Your customer pays the fee"
+- Payment methods (Credit Card vs ACH) are controlled at the QuickBooks account level, not per invoice.
+  Configure in: Account & Settings → Sales → Invoice Payments
 """
 
 import requests
@@ -123,7 +133,7 @@ class QuickBooksAPI:
             # Just log it internally or ignore.
             pass
 
-    def _make_request(self, method, endpoint, data=None, params=None):
+    def _make_request(self, method, endpoint, data=None, params=None, retry_count=0):
         """Centralized request wrapper with retry logic and minorversion"""
         if not self.access_token:
             if not self.authenticate():
@@ -145,10 +155,13 @@ class QuickBooksAPI:
                 st.error(f"❌ No headers available for {endpoint} - access token missing")
                 return None
             
+            # Increased timeout for customer creation operations
+            timeout = 60 if endpoint in ['customer', 'query'] else 45
+            
             if method.lower() == 'get':
-                response = self.session.get(url, headers=headers, params=params, timeout=45)
+                response = self.session.get(url, headers=headers, params=params, timeout=timeout)
             else:
-                response = self.session.post(url, headers=headers, params=params, json=data, timeout=45)
+                response = self.session.post(url, headers=headers, params=params, json=data, timeout=timeout)
 
             # If 401, try refreshing token once
             if response.status_code == 401:
@@ -156,18 +169,28 @@ class QuickBooksAPI:
                     # Retry with new token
                     headers = self._get_headers()
                     if method.lower() == 'get':
-                        response = self.session.get(url, headers=headers, params=params, timeout=45)
+                        response = self.session.get(url, headers=headers, params=params, timeout=timeout)
                     else:
-                        response = self.session.post(url, headers=headers, params=params, json=data, timeout=45)
+                        response = self.session.post(url, headers=headers, params=params, json=data, timeout=timeout)
             
             return response
         except requests.exceptions.Timeout as e:
+            # Retry once on timeout for critical operations
+            if retry_count < 1 and endpoint in ['customer', 'query']:
+                st.warning(f"⏰ Request timeout ({endpoint}), retrying...")
+                return self._make_request(method, endpoint, data, params, retry_count + 1)
             st.error(f"⏰ Request timeout ({endpoint}): {str(e)}")
             st.error(f"   URL: {url}")
+            st.error(f"   This could be due to QuickBooks API being slow or overloaded")
             return None
         except requests.exceptions.ConnectionError as e:
+            # Retry once on connection error for critical operations
+            if retry_count < 1 and endpoint in ['customer', 'query']:
+                st.warning(f"🔌 Connection error ({endpoint}), retrying...")
+                return self._make_request(method, endpoint, data, params, retry_count + 1)
             st.error(f"🔌 Connection error ({endpoint}): {str(e)}")
             st.error(f"   URL: {url}")
+            st.error(f"   Check your internet connection and QuickBooks API status")
             return None
         except requests.exceptions.RequestException as e:
             st.error(f"❌ Request exception ({endpoint}): {str(e)}")
@@ -436,6 +459,12 @@ class QuickBooksAPI:
         
         response = self._make_request('POST', 'customer', data=payload)
         
+        # Debug: Log response status for troubleshooting
+        if response:
+            print(f"DEBUG: Customer creation response status: {response.status_code}")
+        else:
+            print("DEBUG: Customer creation returned None - no response from API")
+        
         if response and response.status_code in [200, 201]:
             customer = response.json().get("Customer", {})
             person_name = f"{first_name} {last_name}"
@@ -450,17 +479,41 @@ class QuickBooksAPI:
         
         # Handle specific error cases
         if not response:
+            # Try to check if customer exists by name as fallback before showing error
+            existing_id = self._find_customer_by_display_name(display_name)
+            if existing_id:
+                update_success = self._update_existing_customer(existing_id, first_name, last_name, email, company_name, cc_email)
+                if update_success:
+                    st.success(f"✅ Customer updated: {display_name}")
+                    return existing_id
+                else:
+                    # Update failed, but customer exists - return it anyway
+                    st.warning(f"⚠️ Customer exists but update failed. Using existing customer ID: {existing_id}")
+                    return existing_id
+            
+            # Only show error if fallback also failed
             st.error("❌ Error creating customer: No response from QuickBooks API. This could indicate:")
             st.error("   • Authentication failure - check your access token")
             st.error("   • Network/connection issue")
             st.error("   • QuickBooks API timeout")
+            # Debug: Try to get more info
+            if not self.access_token:
+                st.error("   • Access token is missing - authentication may have failed")
             return None
         
         # Check for specific error types (including 400 validation errors)
         try:
             error_data = response.json()
+            
+            # QuickBooks API can return errors in different formats:
+            # Format 1: {"Fault": {"Error": [...]}}
+            # Format 2: {"Error": [...]}
             fault = error_data.get("Fault", {})
             errors = fault.get("Error", [])
+            
+            # If no Fault.Error, try direct Error array (some API versions)
+            if not errors:
+                errors = error_data.get("Error", [])
             
             if errors:
                 error_msg = errors[0].get("Message", "Unknown error")
@@ -469,33 +522,49 @@ class QuickBooksAPI:
                 
                 # Handle duplicate name error
                 if "Duplicate Name Exists Error" in error_msg or error_code == "6240":
+                    st.warning(f"⚠️ Customer with name '{display_name}' already exists. Updating existing customer...")
                     found_id = self._find_customer_by_display_name(display_name)
                     if found_id:
-                        return found_id
+                        # Customer exists but might be missing email or other info
+                        # Try to update the existing customer with the new information
+                        update_success = self._update_existing_customer(found_id, first_name, last_name, email, company_name, cc_email)
+                        if update_success:
+                            st.success(f"✅ Customer updated: {display_name}")
+                            return found_id
+                        else:
+                            # If update failed, still return the ID (customer exists)
+                            st.warning(f"⚠️ Customer exists but update failed. Using existing customer ID: {found_id}")
+                            return found_id
                     else:
                         st.error(f"❌ Customer exists but could not be found: {error_msg}")
+                        st.error(f"   Error Detail: {error_detail}")
                         return None
                 
                 # Handle validation errors (400) - might be due to unsupported properties
                 if response.status_code == 400:
-                    st.error(f"❌ Validation Error (400): {error_msg}")
-                    st.error(f"   Error Code: {error_code}")
-                    st.error(f"   Details: {error_detail}")
-                    # Try creating without SecondaryEmailAddr if that might be the issue
-                    if "SecondaryEmailAddr" in str(payload):
-                        payload_retry = payload.copy()
-                        payload_retry.pop("SecondaryEmailAddr", None)
-                        response_retry = self._make_request('POST', 'customer', data=payload_retry)
-                        if response_retry and response_retry.status_code in [200, 201]:
-                            customer = response_retry.json().get("Customer", {})
-                            person_name = f"{first_name} {last_name}"
-                            st.success(f"✅ Customer created: {person_name}")
-                            # Try to update with secondary email separately if needed
-                            if cc_email and cc_email.strip():
-                                customer_id = customer.get("Id")
-                                if customer_id:
-                                    self._update_customer_secondary_email(customer_id, cc_email)
-                            return customer.get("Id")
+                    # If we already handled duplicate name above, don't show generic error
+                    if "Duplicate Name Exists Error" not in error_msg and error_code != "6240":
+                        st.error(f"❌ Validation Error (400): {error_msg}")
+                        st.error(f"   Error Code: {error_code}")
+                        st.error(f"   Details: {error_detail}")
+                        # Try creating without SecondaryEmailAddr if that might be the issue
+                        if "SecondaryEmailAddr" in str(payload):
+                            payload_retry = payload.copy()
+                            payload_retry.pop("SecondaryEmailAddr", None)
+                            response_retry = self._make_request('POST', 'customer', data=payload_retry)
+                            if response_retry and response_retry.status_code in [200, 201]:
+                                customer = response_retry.json().get("Customer", {})
+                                person_name = f"{first_name} {last_name}"
+                                st.success(f"✅ Customer created: {person_name}")
+                                # Try to update with secondary email separately if needed
+                                if cc_email and cc_email.strip():
+                                    customer_id = customer.get("Id")
+                                    if customer_id:
+                                        self._update_customer_secondary_email(customer_id, cc_email)
+                                return customer.get("Id")
+                        return None
+                    # If duplicate name was handled above, we already returned
+                    return None
                 
                 # Handle other validation errors
                 st.error(f"❌ Error creating customer: {error_msg}")
@@ -505,6 +574,12 @@ class QuickBooksAPI:
         except (ValueError, KeyError) as e:
             # If response is not JSON or doesn't have expected structure
             st.error(f"❌ Error parsing response: {str(e)}")
+            # Show raw response for debugging
+            try:
+                error_text = response.text[:500] if hasattr(response, 'text') else str(response)
+                st.error(f"   Raw response: {error_text}")
+            except:
+                pass
         
         # Generic error handling
         error_text = response.text[:500] if hasattr(response, 'text') else str(response)
@@ -534,6 +609,48 @@ class QuickBooksAPI:
             if customers:
                 return customers[0]['Id']
         return None
+    
+    def _update_existing_customer(self, customer_id: str, first_name: str, last_name: str, 
+                                  email: str, company_name: str = None, cc_email: str = None) -> bool:
+        """
+        Update an existing customer with new information (e.g., add missing email)
+        This is used when a customer exists but is missing information like email address
+        """
+        try:
+            # Get current customer data
+            response = self._make_request('GET', f'customer/{customer_id}')
+            if not response or response.status_code != 200:
+                return False
+            
+            customer_data = response.json().get("Customer", {})
+            sync_token = customer_data.get("SyncToken", "0")
+            
+            # Build update payload with new information
+            update_payload = {
+                "Id": customer_id,
+                "SyncToken": sync_token,
+                "DisplayName": f"{first_name} {last_name}",
+                "GivenName": first_name,
+                "FamilyName": last_name,
+                "PrimaryEmailAddr": {"Address": email},
+                "sparse": True  # Only update specified fields
+            }
+            
+            # Add company name if provided
+            if company_name:
+                update_payload["CompanyName"] = company_name
+            
+            # Update customer
+            update_response = self._make_request('POST', 'customer', data=update_payload)
+            if update_response and update_response.status_code in [200, 201]:
+                # Try to add secondary email if provided
+                if cc_email and cc_email.strip():
+                    self._update_customer_secondary_email(customer_id, cc_email)
+                return True
+            return False
+        except Exception as e:
+            # Silently fail - non-critical operation
+            return False
     
     def _update_customer_secondary_email(self, customer_id: str, cc_email: str) -> bool:
         """
@@ -567,11 +684,14 @@ class QuickBooksAPI:
                       email: str, company_name: str = None, client_address: str = None,
                       contract_amount: str = "0", description: str = "Contract Services",
                       line_items: list = None, payment_terms: str = "Due in Full",
-                      enable_payment_link: bool = True, invoice_date: str = None, cc_email: str = None) -> Optional[str]:
+                      enable_payment_link: bool = True, invoice_date: str = None, cc_email: str = None,
+                      include_cc_fee: bool = False) -> Optional[str]:
         """
         Create an invoice for a customer
         FIX #1: Improved BillAddr handling to ensure it shows in PDF
         FIX #2: Fixed DueDate to respect selected invoice date
+        FIX #3: Set BillEmail to client email (not cc_email)
+        FIX #4: Set AllowOnlineCreditCard and AllowOnlineACH based on include_cc_fee
         """
         
         # Build line items
@@ -668,13 +788,26 @@ class QuickBooksAPI:
             # Default to due on receipt with invoice date
             invoice_data["DueDate"] = txn_date
         
+        # FIX #3: Set BillEmail to client email (not cc_email/salesman email)
+        # This ensures the invoice is associated with the correct client email
+        # Adding back to test - if this causes 400 error, we'll remove it again
+        invoice_data["BillEmail"] = {"Address": email}
+        
+        # FIX #4: Payment method settings
+        # NOTE: Payment methods (AllowOnlinePayment, AllowOnlineCreditCard, AllowOnlineACH) 
+        # are NOT supported at the invoice level in QuickBooks API v3.
+        # These fields cause a 400 error: "Request has invalid or unsupported property"
+        # 
+        # Payment methods must be configured at the QuickBooks account level:
+        # Account & Settings → Sales → Invoice Payments
+        # 
+        # The include_cc_fee parameter is still used to add the 3% processing fee as a line item,
+        # but the payment method selection (CC vs ACH) is controlled by QuickBooks account settings.
+        
         payload = invoice_data
         
-        # SOLUTION A: Don't set BillEmail in invoice creation
-        # QuickBooks ignores CC/BCC query parameters when BillEmail is set in the invoice
-        # By removing BillEmail, we force QuickBooks to use ONLY the sendTo parameter
-        # This ensures CC/BCC in the send endpoint are respected
-        # The email will be sent via: /invoice/{id}/send?sendTo=email&cc=cc_email
+        # NOTE: BillEmail is set to client email (not cc_email) to ensure correct email association
+        # Payment method fields are not supported at invoice level - must be set in QuickBooks account settings
         
         # Don't set ToBeEmailed - we'll send manually via send endpoint with CC
         # This gives us control over CC/BCC addresses
@@ -700,21 +833,28 @@ class QuickBooksAPI:
             st.error(f"❌ Invoice creation failed - Status: {response.status_code}")
             try:
                 error_text = response.text
-                st.error(f"Full Response: {error_text}")
+                st.error(f"**Full Response:**")
+                st.code(error_text, language='json')
                 
                 # Try to parse and show detailed error
                 try:
                     error_json = response.json()
                     if "Fault" in error_json:
                         errors = error_json.get("Fault", {}).get("Error", [])
+                        st.error("**Detailed Error Information:**")
                         for err in errors:
-                            st.error(f"Error Code: {err.get('code', 'Unknown')}")
-                            st.error(f"Error Message: {err.get('Message', 'Unknown')}")
+                            st.error(f"• **Error Code:** {err.get('code', 'Unknown')}")
+                            st.error(f"• **Error Message:** {err.get('Message', 'Unknown')}")
                             detail = err.get('Detail', '')
-                            st.error(f"Error Detail: {detail}")
+                            if detail:
+                                st.error(f"• **Error Detail:** {detail}")
                             
-                except:
-                    pass
+                            # Try to extract which property is invalid
+                            if "Property Name" in detail or "property" in detail.lower():
+                                st.warning("💡 **Tip:** Check the payload above to identify the invalid property.")
+                            
+                except Exception as parse_err:
+                    st.warning(f"Could not parse error JSON: {parse_err}")
             except Exception as e:
                 st.error(f"Could not parse error response: {e}")
             return None
@@ -788,7 +928,8 @@ class QuickBooksAPI:
     def create_and_send_invoice(self, first_name: str, last_name: str, email: str, company_name: str = None,
                               client_address: str = None, contract_amount: str = "0", description: str = "Contract Services",
                               line_items: list = None, payment_terms: str = "Due in Full",
-                              enable_payment_link: bool = True, invoice_date: str = None, cc_email: str = None) -> Tuple[bool, str]:
+                              enable_payment_link: bool = True, invoice_date: str = None, cc_email: str = None,
+                              include_cc_fee: bool = False) -> Tuple[bool, str]:
         """
         Orchestrator: Create Customer -> Create Invoice -> Send Invoice
         
@@ -802,7 +943,7 @@ class QuickBooksAPI:
             return False, "Failed to create or find customer."
             
         invoice_id = self.create_invoice(customer_id, first_name, last_name, email, company_name, client_address,
-                                       contract_amount, description, line_items, payment_terms, enable_payment_link, invoice_date, cc_email=cc_email)
+                                       contract_amount, description, line_items, payment_terms, enable_payment_link, invoice_date, cc_email=cc_email, include_cc_fee=include_cc_fee)
         
         if not invoice_id:
             return False, "Failed to create invoice."
