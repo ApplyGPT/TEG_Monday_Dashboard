@@ -47,7 +47,8 @@ except Exception:  # pragma: no cover - fallback if dependency missing at runtim
 
 
 # Pricing constants
-BASE_PRICE_STANDARD = 2790.00  # Standard pricing is now fixed at $2,790
+BASE_PRICE_STANDARD_LESS_THAN_5 = 2790.00  # Standard pricing for less than 5 styles
+BASE_PRICE_STANDARD_5_OR_MORE = 2325.00  # Standard pricing for 5 or more styles
 ACTIVEWEAR_PRICE_LESS_THAN_5 = 3560.00
 ACTIVEWEAR_PRICE_5_OR_MORE = 2965.00
 
@@ -89,7 +90,9 @@ def get_template_path() -> str:
 def calculate_base_price(num_styles: int, is_activewear: bool) -> float:
     """Calculate base price based on number of styles and activewear flag.
     
-    Standard pricing is fixed at $2,790.
+    Standard pricing is based on total styles:
+    - Less than 5 total styles: $2,790
+    - 5 or more total styles: $2,325
     Activewear pricing is based on total styles:
     - Less than 5 total styles: $3,560
     - 5 or more total styles: $2,965
@@ -100,8 +103,11 @@ def calculate_base_price(num_styles: int, is_activewear: bool) -> float:
         else:
             return ACTIVEWEAR_PRICE_5_OR_MORE
     else:
-        # Standard pricing is fixed at $2,790
-        return BASE_PRICE_STANDARD
+        # Standard pricing based on number of styles
+        if num_styles < 5:
+            return BASE_PRICE_STANDARD_LESS_THAN_5
+        else:
+            return BASE_PRICE_STANDARD_5_OR_MORE
 
 
 def copy_cell_formatting(source_cell, target_cell) -> None:
@@ -1784,6 +1790,37 @@ def apply_development_package(
             # Also make the label bold with size 20
             if Font is not None:
                 cell_n_totals.font = Font(name="Arial", size=20, bold=True, color=cell_n_totals.font.color if cell_n_totals.font else None)
+            
+            # Add top border to merged cells N20:P20 (or dynamic totals row equivalent)
+            # Check if N20:P20 is merged and add top border
+            if Border is not None and Side is not None:
+                top_side = Side(style="thin")
+                # Check for merged range covering N20:P20 (columns 14-16, row totals_row)
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row == totals_row and merged_range.max_row == totals_row and
+                        merged_range.min_col <= 14 and merged_range.max_col >= 16):
+                        # This is the merged cell for TOTAL DUE AT SIGNING
+                        # Apply top border to the top-left cell of the merged range
+                        merged_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        existing_border = merged_cell.border if merged_cell.border else Border()
+                        merged_cell.border = Border(
+                            left=existing_border.left if existing_border.left else Side(style="thin"),
+                            right=existing_border.right if existing_border.right else Side(style="thin"),
+                            top=top_side,  # Add top border
+                            bottom=existing_border.bottom if existing_border.bottom else Side(style="thin"),
+                        )
+                        break
+                else:
+                    # If not merged, apply top border to columns N, O, P individually
+                    for col_idx in [14, 15, 16]:  # Columns N, O, P
+                        cell = ws.cell(row=totals_row, column=col_idx)
+                        existing_border = cell.border if cell.border else Border()
+                        cell.border = Border(
+                            left=existing_border.left if existing_border.left else Side(style="thin"),
+                            right=existing_border.right if existing_border.right else Side(style="thin"),
+                            top=top_side,  # Add top border
+                            bottom=existing_border.bottom if existing_border.bottom else Side(style="thin"),
+                        )
         
         # Also update any other formulas in column P that reference F20 or L20 statically
         # Check a few rows around the totals row
@@ -2351,7 +2388,7 @@ def main() -> None:
     [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
     [data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
     [data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]),
-    [data-testid="stSidebarNav"] li:has(a[href*="dev_inspection"]) {
+    [data-testid="stSidebarNav"] li:has(a[href*="a_la_carte"]) {
         display: block !important;
     }
 
@@ -2361,7 +2398,7 @@ def main() -> None:
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'dev_inspection'];
+        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'a_la_carte'];
         
         // Check if we're currently on an ads dashboard page
         const currentUrl = window.location.href.toLowerCase();
@@ -2388,8 +2425,8 @@ def main() -> None:
             const isDashboard = (text.includes('ads') && text.includes('dashboard')) || 
                               (href.includes('ads') && href.includes('dashboard'));
             
-            // Hide dev_inspection if we're on an ads dashboard page
-            const isDevInspection = href.includes('dev_inspection') || text.includes('dev_inspection');
+            // Hide a_la_carte if we're on an ads dashboard page
+            const isDevInspection = href.includes('a_la_carte') || text.includes('a_la_carte');
             if (isOnAdsDashboard && isDevInspection) {
                 item.style.setProperty('display', 'none', 'important');
                 return;

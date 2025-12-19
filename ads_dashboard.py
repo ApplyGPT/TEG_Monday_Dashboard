@@ -99,7 +99,7 @@ st.markdown("""
     [data-testid="stSidebarNav"] a[href*="signnow_form"],
     [data-testid="stSidebarNav"] a[href*="workbook_creator"],
         [data-testid="stSidebarNav"] a[href*="deck_creator"],
-    [data-testid="stSidebarNav"] a[href*="dev_inspection"] {
+    [data-testid="stSidebarNav"] a[href*="a_la_carte"] {
         display: none !important;
     }
     @media (max-width: 768px) {

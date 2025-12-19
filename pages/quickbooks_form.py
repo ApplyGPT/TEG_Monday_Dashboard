@@ -47,7 +47,7 @@ st.markdown("""
 [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
 [data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
 [data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]),
-[data-testid="stSidebarNav"] li:has(a[href*="dev_inspection"]) {
+[data-testid="stSidebarNav"] li:has(a[href*="a_la_carte"]) {
     display: block !important;
 }
 </style>
@@ -56,7 +56,7 @@ st.markdown("""
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'dev_inspection'];
+        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'a_la_carte'];
         
         // Check if we're currently on an ads dashboard page
         const currentUrl = window.location.href.toLowerCase();
@@ -83,8 +83,8 @@ st.markdown("""
             const isDashboard = (text.includes('ads') && text.includes('dashboard')) || 
                               (href.includes('ads') && href.includes('dashboard'));
             
-            // Hide dev_inspection if we're on an ads dashboard page
-            const isDevInspection = href.includes('dev_inspection') || text.includes('dev_inspection');
+            // Hide a_la_carte if we're on an ads dashboard page
+            const isDevInspection = href.includes('a_la_carte') || text.includes('a_la_carte');
             if (isOnAdsDashboard && isDevInspection) {
                 item.style.setProperty('display', 'none', 'important');
                 return;

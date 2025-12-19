@@ -1,5 +1,5 @@
 """
-Dev & Inspection Creator
+A La Carte Creator
 Builds the Development Package section of the workbook using a template.
 """
 
@@ -48,7 +48,8 @@ except Exception:  # pragma: no cover - fallback if dependency missing at runtim
 
 
 # Pricing constants
-BASE_PRICE_STANDARD = 2790.00  # Standard pricing is now fixed at $2,790
+BASE_PRICE_STANDARD_LESS_THAN_5 = 2790.00  # Standard pricing for less than 5 styles
+BASE_PRICE_STANDARD_5_OR_MORE = 2325.00  # Standard pricing for 5 or more styles
 ACTIVEWEAR_PRICE_LESS_THAN_5 = 3560.00
 ACTIVEWEAR_PRICE_5_OR_MORE = 2965.00
 
@@ -90,7 +91,9 @@ def get_template_path() -> str:
 def calculate_base_price(num_styles: int, is_activewear: bool) -> float:
     """Calculate base price based on number of styles and activewear flag.
     
-    Standard pricing is fixed at $2,790.
+    Standard pricing is based on total styles:
+    - Less than 5 total styles: $2,790
+    - 5 or more total styles: $2,325
     Activewear pricing is based on total styles:
     - Less than 5 total styles: $3,560
     - 5 or more total styles: $2,965
@@ -101,8 +104,11 @@ def calculate_base_price(num_styles: int, is_activewear: bool) -> float:
         else:
             return ACTIVEWEAR_PRICE_5_OR_MORE
     else:
-        # Standard pricing is fixed at $2,790
-        return BASE_PRICE_STANDARD
+        # Standard pricing based on number of styles
+        if num_styles < 5:
+            return BASE_PRICE_STANDARD_LESS_THAN_5
+        else:
+            return BASE_PRICE_STANDARD_5_OR_MORE
 
 
 def copy_cell_formatting(source_cell, target_cell) -> None:
@@ -1776,6 +1782,37 @@ def apply_development_package(
             # Also make the label bold with size 20
             if Font is not None:
                 cell_n_totals.font = Font(name="Arial", size=20, bold=True, color=cell_n_totals.font.color if cell_n_totals.font else None)
+            
+            # Add top border to merged cells N20:P20 (or dynamic totals row equivalent)
+            # Check if N20:P20 is merged and add top border
+            if Border is not None and Side is not None:
+                top_side = Side(style="thin")
+                # Check for merged range covering N20:P20 (columns 14-16, row totals_row)
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row == totals_row and merged_range.max_row == totals_row and
+                        merged_range.min_col <= 14 and merged_range.max_col >= 16):
+                        # This is the merged cell for TOTAL DUE AT SIGNING
+                        # Apply top border to the top-left cell of the merged range
+                        merged_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        existing_border = merged_cell.border if merged_cell.border else Border()
+                        merged_cell.border = Border(
+                            left=existing_border.left if existing_border.left else Side(style="thin"),
+                            right=existing_border.right if existing_border.right else Side(style="thin"),
+                            top=top_side,  # Add top border
+                            bottom=existing_border.bottom if existing_border.bottom else Side(style="thin"),
+                        )
+                        break
+                else:
+                    # If not merged, apply top border to columns N, O, P individually
+                    for col_idx in [14, 15, 16]:  # Columns N, O, P
+                        cell = ws.cell(row=totals_row, column=col_idx)
+                        existing_border = cell.border if cell.border else Border()
+                        cell.border = Border(
+                            left=existing_border.left if existing_border.left else Side(style="thin"),
+                            right=existing_border.right if existing_border.right else Side(style="thin"),
+                            top=top_side,  # Add top border
+                            bottom=existing_border.bottom if existing_border.bottom else Side(style="thin"),
+                        )
         
         # Also update any other formulas in column P that reference F20 or L20 statically
         # Check a few rows around the totals row
@@ -1961,11 +1998,13 @@ def apply_ala_carte_package(
         apply_full_border_pair(ws, col_c, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_c)}{row}:{get_column_letter(col_c)}{row_second}")
         
-        # INTAKE - column D (hours * $190) - format as "$380 (2h)"
-        intake_hours = item.get("intake_session", 0)
-        intake_price = int(intake_hours * A_LA_CARTE_RATE_STANDARD)
+        # INTAKE - column D (hours * $190) - format as "$380 (2h)" or "$475 (2.5h)"
+        intake_hours = float(item.get("intake_session", 0))
+        intake_price = round(intake_hours * A_LA_CARTE_RATE_STANDARD)
         if intake_hours > 0:
-            intake_value = f"${intake_price:,} ({intake_hours}h)"
+            # Format hours: remove .0 if whole number, otherwise show decimal
+            hours_str = f"{intake_hours:.2f}".rstrip('0').rstrip('.')
+            intake_value = f"${intake_price:,} ({hours_str}h)"
         else:
             intake_value = None  # Leave blank if 0
         safe_set_cell_value(ws, f"{get_column_letter(col_d)}{row}", intake_value)
@@ -1976,10 +2015,12 @@ def apply_ala_carte_package(
         safe_merge_cells(ws, f"{get_column_letter(col_d)}{row}:{get_column_letter(col_d)}{row_second}")
         
         # 1ST PATTERN - column E
-        pattern_hours = item.get("first_pattern", 0)
-        pattern_price = int(pattern_hours * A_LA_CARTE_RATE_STANDARD)
+        pattern_hours = float(item.get("first_pattern", 0))
+        pattern_price = round(pattern_hours * A_LA_CARTE_RATE_STANDARD)
         if pattern_hours > 0:
-            pattern_value = f"${pattern_price:,} ({pattern_hours}h)"
+            # Format hours: remove .0 if whole number, otherwise show decimal
+            hours_str = f"{pattern_hours:.2f}".rstrip('0').rstrip('.')
+            pattern_value = f"${pattern_price:,} ({hours_str}h)"
         else:
             pattern_value = None  # Leave blank if 0
         safe_set_cell_value(ws, f"{get_column_letter(col_e)}{row}", pattern_value)
@@ -1990,10 +2031,12 @@ def apply_ala_carte_package(
         safe_merge_cells(ws, f"{get_column_letter(col_e)}{row}:{get_column_letter(col_e)}{row_second}")
         
         # 1ST SAMPLE - column F
-        sample_hours = item.get("first_sample", 0)
-        sample_price = int(sample_hours * A_LA_CARTE_RATE_STANDARD)
+        sample_hours = float(item.get("first_sample", 0))
+        sample_price = round(sample_hours * A_LA_CARTE_RATE_STANDARD)
         if sample_hours > 0:
-            sample_value = f"${sample_price:,} ({sample_hours}h)"
+            # Format hours: remove .0 if whole number, otherwise show decimal
+            hours_str = f"{sample_hours:.2f}".rstrip('0').rstrip('.')
+            sample_value = f"${sample_price:,} ({hours_str}h)"
         else:
             sample_value = None  # Leave blank if 0
         safe_set_cell_value(ws, f"{get_column_letter(col_f)}{row}", sample_value)
@@ -2004,10 +2047,12 @@ def apply_ala_carte_package(
         safe_merge_cells(ws, f"{get_column_letter(col_f)}{row}:{get_column_letter(col_f)}{row_second}")
         
         # FITTING - column G
-        fitting_hours = item.get("fitting", 0)
-        fitting_price = int(fitting_hours * A_LA_CARTE_RATE_STANDARD)
+        fitting_hours = float(item.get("fitting", 0))
+        fitting_price = round(fitting_hours * A_LA_CARTE_RATE_STANDARD)
         if fitting_hours > 0:
-            fitting_value = f"${fitting_price:,} ({fitting_hours}h)"
+            # Format hours: remove .0 if whole number, otherwise show decimal
+            hours_str = f"{fitting_hours:.2f}".rstrip('0').rstrip('.')
+            fitting_value = f"${fitting_price:,} ({hours_str}h)"
         else:
             fitting_value = None  # Leave blank if 0
         safe_set_cell_value(ws, f"{get_column_letter(col_g)}{row}", fitting_value)
@@ -2018,10 +2063,12 @@ def apply_ala_carte_package(
         safe_merge_cells(ws, f"{get_column_letter(col_g)}{row}:{get_column_letter(col_g)}{row_second}")
         
         # ADJUSTMENT - column H
-        adjustment_hours = item.get("adjustment", 0)
-        adjustment_price = int(adjustment_hours * A_LA_CARTE_RATE_STANDARD)
+        adjustment_hours = float(item.get("adjustment", 0))
+        adjustment_price = round(adjustment_hours * A_LA_CARTE_RATE_STANDARD)
         if adjustment_hours > 0:
-            adjustment_value = f"${adjustment_price:,} ({adjustment_hours}h)"
+            # Format hours: remove .0 if whole number, otherwise show decimal
+            hours_str = f"{adjustment_hours:.2f}".rstrip('0').rstrip('.')
+            adjustment_value = f"${adjustment_price:,} ({hours_str}h)"
         else:
             adjustment_value = None  # Leave blank if 0
         safe_set_cell_value(ws, f"{get_column_letter(col_h)}{row}", adjustment_value)
@@ -2032,10 +2079,12 @@ def apply_ala_carte_package(
         safe_merge_cells(ws, f"{get_column_letter(col_h)}{row}:{get_column_letter(col_h)}{row_second}")
         
         # FINAL SAMPLES - column I (hours * $90)
-        final_samples_hours = item.get("final_samples", 0)
-        final_samples_price = int(final_samples_hours * A_LA_CARTE_RATE_SAMPLES)
+        final_samples_hours = float(item.get("final_samples", 0))
+        final_samples_price = round(final_samples_hours * A_LA_CARTE_RATE_SAMPLES)
         if final_samples_hours > 0:
-            final_samples_value = f"${final_samples_price:,} ({final_samples_hours}h)"
+            # Format hours: remove .0 if whole number, otherwise show decimal
+            hours_str = f"{final_samples_hours:.2f}".rstrip('0').rstrip('.')
+            final_samples_value = f"${final_samples_price:,} ({hours_str}h)"
         else:
             final_samples_value = None  # Leave blank if 0
         safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", final_samples_value)
@@ -2046,10 +2095,12 @@ def apply_ala_carte_package(
         safe_merge_cells(ws, f"{get_column_letter(col_i)}{row}:{get_column_letter(col_i)}{row_second}")
         
         # DUPLICATES - column J (hours * $90)
-        duplicates_hours = item.get("duplicates", 0)
-        duplicates_price = int(duplicates_hours * A_LA_CARTE_RATE_SAMPLES)
+        duplicates_hours = float(item.get("duplicates", 0))
+        duplicates_price = round(duplicates_hours * A_LA_CARTE_RATE_SAMPLES)
         if duplicates_hours > 0:
-            duplicates_value = f"${duplicates_price:,} ({duplicates_hours}h)"
+            # Format hours: remove .0 if whole number, otherwise show decimal
+            hours_str = f"{duplicates_hours:.2f}".rstrip('0').rstrip('.')
+            duplicates_value = f"${duplicates_price:,} ({hours_str}h)"
         else:
             duplicates_value = None  # Leave blank if 0
         safe_set_cell_value(ws, f"{get_column_letter(col_j)}{row}", duplicates_value)
@@ -2367,7 +2418,7 @@ def apply_ala_carte_package(
                 continue
             
             # Sum total hours for this service across all items
-            total_hours = sum(item.get(hour_field, 0) for item in a_la_carte_items)
+            total_hours = sum(float(item.get(hour_field, 0)) for item in a_la_carte_items)
             
             # Unmerge column E if needed
             for merged_range in list(ws.merged_cells.ranges):
@@ -2383,7 +2434,11 @@ def apply_ala_carte_package(
             # Set the total hours value
             safe_set_cell_value(ws, f"E{row_idx}", total_hours)
             cell_e_count = ws.cell(row=row_idx, column=col_e)
-            cell_e_count.number_format = "0"
+            # Use decimal format if total_hours has decimal part, otherwise integer format
+            if total_hours == int(total_hours):
+                cell_e_count.number_format = "0"
+            else:
+                cell_e_count.number_format = "0.00"
             apply_font_20(cell_e_count)
             if Alignment is not None:
                 cell_e_count.alignment = Alignment(horizontal="center", vertical="center")
@@ -2721,8 +2776,8 @@ def get_sales_records():
         return []
 
 
-def update_monday_item_dev_inspection_link(item_id: str, workbook_url: str) -> bool:
-    """Update a monday.com item with the workbook URL in a 'Dev & Inspection Link' field."""
+def update_monday_item_a_la_carte_link(item_id: str, workbook_url: str) -> bool:
+    """Update a monday.com item with the workbook URL in a 'A La Carte Link' field."""
     try:
         monday_config = st.secrets.get("monday", {})
         api_token = monday_config.get("api_token")
@@ -2731,7 +2786,7 @@ def update_monday_item_dev_inspection_link(item_id: str, workbook_url: str) -> b
             st.error("Monday.com API token not found in secrets.")
             return False
         
-        # Query to get board columns to find the "Dev & Inspection Link" column
+        # Query to get board columns to find the "A La Carte Link" column
         query = f"""
         query {{
             items(ids: [{item_id}]) {{
@@ -2773,21 +2828,21 @@ def update_monday_item_dev_inspection_link(item_id: str, workbook_url: str) -> b
             st.error("Could not determine board ID from monday.com item")
             return False
         
-        # Find "Dev & Inspection Link" column (case-insensitive, flexible matching)
-        dev_inspection_column = None
+        # Find "A La Carte Link" column (case-insensitive, flexible matching)
+        a_la_carte_column = None
         for col in columns:
             title_lower = col.get("title", "").lower()
             if ("dev" in title_lower and "inspection" in title_lower and "link" in title_lower) or \
                ("dev" in title_lower and "inspection" in title_lower and "url" in title_lower):
-                dev_inspection_column = col
+                a_la_carte_column = col
                 break
         
-        if not dev_inspection_column:
-            st.warning("⚠️ 'Dev & Inspection Link' column not found in monday.com. Please create a URL column named 'Dev & Inspection Link' in the Sales board.")
+        if not a_la_carte_column:
+            st.warning("⚠️ 'A La Carte Link' column not found in monday.com. Please create a URL column named 'A La Carte Link' in the Sales board.")
             return False
         
-        column_id = dev_inspection_column.get("id")
-        column_type = dev_inspection_column.get("type")
+        column_id = a_la_carte_column.get("id")
+        column_type = a_la_carte_column.get("type")
         
         # Update the item with the workbook URL
         # For URL columns, the value format is: {"url": "https://...", "text": "Link Text"}
@@ -2798,7 +2853,7 @@ def update_monday_item_dev_inspection_link(item_id: str, workbook_url: str) -> b
                     board_id: {board_id},
                     item_id: {item_id},
                     column_id: "{column_id}",
-                    value: "{{\\"url\\": \\"{workbook_url}\\", \\"text\\": \\"View Dev & Inspection\\"}}"
+                    value: "{{\\"url\\": \\"{workbook_url}\\", \\"text\\": \\"View A La Carte\\"}}"
                 ) {{
                     id
                 }}
@@ -2833,11 +2888,11 @@ def update_monday_item_dev_inspection_link(item_id: str, workbook_url: str) -> b
         return False
 
 
-def upload_workbook_to_google_sheet_dev_inspection(
+def upload_workbook_to_google_sheet_a_la_carte(
     workbook_bytes: bytes, sheet_name: str
 ) -> tuple[str, bool]:
     """
-    Upload the XLSX workbook bytes to Google Drive using dev_inspection specific folder.
+    Upload the XLSX workbook bytes to Google Drive using a_la_carte specific folder.
     
     Returns (web_url, converted_to_google_sheet).
     """
@@ -2856,13 +2911,13 @@ def upload_workbook_to_google_sheet_dev_inspection(
             "Google API libraries not available. Please install google-auth and google-api-python-client."
         )
     
-    # Get dev_inspection specific folder ID from secrets
+    # Get a_la_carte specific folder ID from secrets
     cfg = st.secrets.get("google_drive", {}) or {}
-    parent_folder_id = cfg.get("parent_folder_id_dev_inspection")
+    parent_folder_id = cfg.get("parent_folder_id_a_la_carte")
     
     if not parent_folder_id:
         raise GoogleSheetsUploadError(
-            "parent_folder_id_dev_inspection not found in secrets. "
+            "parent_folder_id_a_la_carte not found in secrets. "
             "Add it to your Streamlit secrets under google_drive section."
         )
     
@@ -2898,7 +2953,7 @@ def upload_workbook_to_google_sheet_dev_inspection(
         pass
     
     file_metadata = {
-        "name": sheet_name or "Dev & Inspection Workbook",
+        "name": sheet_name or "A La Carte Workbook",
         "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "parents": [parent_folder_id],
     }
@@ -2938,7 +2993,7 @@ def upload_workbook_to_google_sheet_dev_inspection(
     converted = False
     try:
         copy_body = {
-            "name": sheet_name or "Dev & Inspection Workbook",
+            "name": sheet_name or "A La Carte Workbook",
             "mimeType": "application/vnd.google-apps.spreadsheet",
             "parents": [parent_folder_id],
         }
@@ -3250,12 +3305,12 @@ def upload_file_to_monday_item(item_id: str, board_id: str, file_bytes: bytes, f
 
 def main() -> None:
     st.set_page_config(
-        page_title="Dev & Inspection Creator",
+        page_title="A La Carte Creator",
         page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    st.title("📊 Dev & Inspection Creator")
+    st.title("📊 A La Carte Creator")
 
     st.markdown(
         """
@@ -3306,7 +3361,7 @@ def main() -> None:
     [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
     [data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
     [data-testid="stSidebarNav"] li:has(a[href*="deck_creator"]),
-    [data-testid="stSidebarNav"] li:has(a[href*="dev_inspection"]) {
+    [data-testid="stSidebarNav"] li:has(a[href*="a_la_carte"]) {
         display: block !important;
     }
 
@@ -3316,7 +3371,7 @@ def main() -> None:
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'dev_inspection'];
+        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'a_la_carte'];
         
         // Check if we're currently on an ads dashboard page
         const currentUrl = window.location.href.toLowerCase();
@@ -3343,8 +3398,8 @@ def main() -> None:
             const isDashboard = (text.includes('ads') && text.includes('dashboard')) || 
                               (href.includes('ads') && href.includes('dashboard'));
             
-            // Hide dev_inspection if we're on an ads dashboard page
-            const isDevInspection = href.includes('dev_inspection') || text.includes('dev_inspection');
+            // Hide a_la_carte if we're on an ads dashboard page
+            const isDevInspection = href.includes('a_la_carte') || text.includes('a_la_carte');
             if (isOnAdsDashboard && isDevInspection) {
                 item.style.setProperty('display', 'none', 'important');
                 return;
@@ -3787,80 +3842,80 @@ def main() -> None:
                 with a_la_carte_cols[2]:
                     intake_hours = st.number_input(
                         "INTAKE",
-                        min_value=0,
-                        value=int(entry.get("intake_session", 0)),
-                        step=1,
-                        format="%d",
+                        min_value=0.0,
+                        value=float(entry.get("intake_session", 0.0)),
+                        step=0.25,
+                        format="%.2f",
                         key=f"a_la_carte_intake_{i}",
                         label_visibility="collapsed",
                     )
-                    entry["intake_session"] = int(intake_hours)
+                    entry["intake_session"] = float(intake_hours)
                 with a_la_carte_cols[3]:
                     first_pattern_hours = st.number_input(
                         "1ST PATTERN",
-                        min_value=0,
-                        value=int(entry.get("first_pattern", 0)),
-                        step=1,
-                        format="%d",
+                        min_value=0.0,
+                        value=float(entry.get("first_pattern", 0.0)),
+                        step=0.25,
+                        format="%.2f",
                         key=f"a_la_carte_first_pattern_{i}",
                         label_visibility="collapsed",
                     )
-                    entry["first_pattern"] = int(first_pattern_hours)
+                    entry["first_pattern"] = float(first_pattern_hours)
                 with a_la_carte_cols[4]:
                     first_sample_hours = st.number_input(
                         "1ST SAMPLE",
-                        min_value=0,
-                        value=int(entry.get("first_sample", 0)),
-                        step=1,
-                        format="%d",
+                        min_value=0.0,
+                        value=float(entry.get("first_sample", 0.0)),
+                        step=0.25,
+                        format="%.2f",
                         key=f"a_la_carte_first_sample_{i}",
                         label_visibility="collapsed",
                     )
-                    entry["first_sample"] = int(first_sample_hours)
+                    entry["first_sample"] = float(first_sample_hours)
                 with a_la_carte_cols[5]:
                     fitting_hours = st.number_input(
                         "FITTING",
-                        min_value=0,
-                        value=int(entry.get("fitting", 0)),
-                        step=1,
-                        format="%d",
+                        min_value=0.0,
+                        value=float(entry.get("fitting", 0.0)),
+                        step=0.25,
+                        format="%.2f",
                         key=f"a_la_carte_fitting_{i}",
                         label_visibility="collapsed",
                     )
-                    entry["fitting"] = int(fitting_hours)
+                    entry["fitting"] = float(fitting_hours)
                 with a_la_carte_cols[6]:
                     adjustment_hours = st.number_input(
                         "ADJUSTMENT",
-                        min_value=0,
-                        value=int(entry.get("adjustment", 0)),
-                        step=1,
-                        format="%d",
+                        min_value=0.0,
+                        value=float(entry.get("adjustment", 0.0)),
+                        step=0.25,
+                        format="%.2f",
                         key=f"a_la_carte_adjustment_{i}",
                         label_visibility="collapsed",
                     )
-                    entry["adjustment"] = int(adjustment_hours)
+                    entry["adjustment"] = float(adjustment_hours)
                 with a_la_carte_cols[7]:
                     final_samples_hours = st.number_input(
                         "FINAL SAMPLES",
-                        min_value=0,
-                        value=int(entry.get("final_samples", 0)),
-                        step=1,
-                        format="%d",
+                        min_value=0.0,
+                        value=float(entry.get("final_samples", 0.0)),
+                        step=0.25,
+                        format="%.2f",
                         key=f"a_la_carte_final_samples_{i}",
                         label_visibility="collapsed",
                     )
-                    entry["final_samples"] = int(final_samples_hours)
+                    entry["final_samples"] = float(final_samples_hours)
                 with a_la_carte_cols[8]:
                     duplicates_hours = st.number_input(
                         "DUPLICATES",
-                        min_value=0,
-                        value=int(entry.get("duplicates", 0)),
-                        step=1,
-                        format="%d",
+                        min_value=0.0,
+                        value=float(entry.get("duplicates", 0.0)),
+                        step=0.25,
+                        format="%.2f",
                         key=f"a_la_carte_duplicates_{i}",
                         label_visibility="collapsed",
                     )
-                    entry["duplicates"] = int(duplicates_hours)
+                    entry["duplicates"] = float(duplicates_hours)
                 with a_la_carte_cols[9]:
                     if st.button("❌", key=f"remove_a_la_carte_{i}", help="Remove this A La Carte Item"):
                         st.session_state["a_la_carte_items"].pop(i)
@@ -3930,70 +3985,70 @@ def main() -> None:
     with add_a_la_carte_cols[2]:
         new_intake = st.number_input(
             "INTAKE",
-            min_value=0,
-            value=0,
-            step=1,
-            format="%d",
+            min_value=0.0,
+            value=0.0,
+            step=0.25,
+            format="%.2f",
             key="new_a_la_carte_intake",
             label_visibility="collapsed",
         )
     with add_a_la_carte_cols[3]:
         new_first_pattern = st.number_input(
             "1ST PATTERN",
-            min_value=0,
-            value=0,
-            step=1,
-            format="%d",
+            min_value=0.0,
+            value=0.0,
+            step=0.25,
+            format="%.2f",
             key="new_a_la_carte_first_pattern",
             label_visibility="collapsed",
         )
     with add_a_la_carte_cols[4]:
         new_first_sample = st.number_input(
             "1ST SAMPLE",
-            min_value=0,
-            value=0,
-            step=1,
-            format="%d",
+            min_value=0.0,
+            value=0.0,
+            step=0.25,
+            format="%.2f",
             key="new_a_la_carte_first_sample",
             label_visibility="collapsed",
         )
     with add_a_la_carte_cols[5]:
         new_fitting = st.number_input(
             "FITTING",
-            min_value=0,
-            value=0,
-            step=1,
-            format="%d",
+            min_value=0.0,
+            value=0.0,
+            step=0.25,
+            format="%.2f",
             key="new_a_la_carte_fitting",
             label_visibility="collapsed",
         )
     with add_a_la_carte_cols[6]:
         new_adjustment = st.number_input(
             "ADJUSTMENT",
-            min_value=0,
-            value=0,
-            step=1,
-            format="%d",
+            min_value=0.0,
+            value=0.0,
+            step=0.25,
+            format="%.2f",
             key="new_a_la_carte_adjustment",
             label_visibility="collapsed",
         )
     with add_a_la_carte_cols[7]:
         new_final_samples = st.number_input(
             "FINAL SAMPLES",
-            min_value=0,
-            value=0,
-            step=1,
-            format="%d",
+            min_value=0.0,
+            value=0.0,
+            step=0.25,
+            format="%.2f",
             key="new_a_la_carte_final_samples",
             label_visibility="collapsed",
         )
     with add_a_la_carte_cols[8]:
         new_duplicates = st.number_input(
             "DUPLICATES",
-            min_value=0,
-            value=0,
-            step=1,
-            format="%d",
+            min_value=0.0,
+            value=0.0,
+            step=0.25,
+            format="%.2f",
             key="new_a_la_carte_duplicates",
             label_visibility="collapsed",
         )
@@ -4036,14 +4091,14 @@ def main() -> None:
                 st.session_state["a_la_carte_items"].append({
                     "name": new_a_la_carte_style_name.strip(),
                     "style_number": int(new_a_la_carte_style_number),
-                    "intake_session": int(new_intake),
-                    "first_pattern": int(new_first_pattern),
-                    "first_sample": int(new_first_sample),
-                    "fitting": int(new_fitting),
-                    "adjustment": int(new_adjustment),
-                    "final_samples": int(new_final_samples),
-                    "duplicates": int(new_duplicates),
-                    "total_hours": int(new_intake + new_first_pattern + new_first_sample + new_fitting + new_adjustment + new_final_samples + new_duplicates),
+                    "intake_session": float(new_intake),
+                    "first_pattern": float(new_first_pattern),
+                    "first_sample": float(new_first_sample),
+                    "fitting": float(new_fitting),
+                    "adjustment": float(new_adjustment),
+                    "final_samples": float(new_final_samples),
+                    "duplicates": float(new_duplicates),
+                    "total_hours": float(new_intake + new_first_pattern + new_first_sample + new_fitting + new_adjustment + new_final_samples + new_duplicates),
                     "options": {
                         "wash_dye": new_wash_dye,
                         "design": new_design,
@@ -4131,7 +4186,7 @@ def main() -> None:
         return
 
     safe_client = re.sub(r"[^A-Za-z0-9_-]+", "_", (client_name or "").strip()) or "client"
-    download_name = f"dev_inspection_{safe_client.lower()}.xlsx"
+    download_name = f"a_la_carte_{safe_client.lower()}.xlsx"
 
     st.success("Workbook is ready.")
     st.download_button(
@@ -4147,15 +4202,15 @@ def main() -> None:
     st.subheader("Google Sheets --> Monday.com Upload")
 
     sheet_title = (client_name or "Workbook").strip() or "Workbook"
-    sheet_title = f"{sheet_title} - Dev & Inspection"
+    sheet_title = f"{sheet_title} - A La Carte"
 
     st.caption("Uploads will use the shared Google Drive folder configured for the service account.")
 
     if st.button("Upload to Monday.com", type="primary"):
         with st.spinner("Uploading workbook to Google Sheets and updating Monday.com..."):
             try:
-                # Upload to Google Sheets using dev_inspection specific folder
-                sheet_url, converted = upload_workbook_to_google_sheet_dev_inspection(excel_bytes, sheet_title)
+                # Upload to Google Sheets using a_la_carte specific folder
+                sheet_url, converted = upload_workbook_to_google_sheet_a_la_carte(excel_bytes, sheet_title)
                 st.session_state["google_sheet_url"] = sheet_url
                 
                 if converted:
@@ -4170,7 +4225,7 @@ def main() -> None:
                 # Update Monday.com with the Google Sheet URL if item_id is provided
                 if item_id:
                     # Update Monday.com item with the Google Sheet link
-                    if update_monday_item_dev_inspection_link(item_id, sheet_url):
+                    if update_monday_item_a_la_carte_link(item_id, sheet_url):
                         st.success(f"✅ Monday.com item updated with Google Sheet link!")
                     else:
                         st.warning("⚠️ Google Sheet uploaded, but failed to update Monday.com item. Please update manually.")
