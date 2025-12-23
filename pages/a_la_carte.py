@@ -1996,7 +1996,7 @@ def apply_ala_carte_package(
     col_p = column_index_from_string("P") if column_index_from_string else 16
     col_q = column_index_from_string("Q") if column_index_from_string else 17
     
-    first_sample_totals_sum = 0
+    first_sample_totals_sum = 0.0  # Use float to ensure proper division
     quantity_sum = 0
     derived_rows: list[dict] = []
     
@@ -2220,11 +2220,18 @@ def apply_ala_carte_package(
                 cell.alignment = Alignment(horizontal="center", vertical="center")
     
     # Apply derived Final Samples / Duplicates using aggregated formula
+    # Formula: per_unit = (Sum of First Sample Dollar Amounts) / (Sum of Total Quantity)
+    # Example: If Style A is $190 (Qty 7) and Style B is $190 (Qty 7), 
+    #          per_unit = (190 + 190) / (7 + 7) = 380 / 14 = 27.14
     derived_total_increment = 0
     if quantity_sum > 0:
         per_unit = first_sample_totals_sum / quantity_sum
     else:
         per_unit = 0
+    
+    # Debug: Verify calculation
+    # print(f"DEBUG: first_sample_totals_sum={first_sample_totals_sum}, quantity_sum={quantity_sum}, per_unit={per_unit:.6f}")
+    
     for info in derived_rows:
         row = info["row"]
         quantity_val = info["quantity"]
@@ -2234,8 +2241,20 @@ def apply_ala_carte_package(
         cell_j = info["cell_j"]
         cell_k = info["cell_k"]
         
-        final_price = round(per_unit * quantity_val) if quantity_val > 0 else 0
-        duplicates_price = round(per_unit * quantity_val * dup_hours) if (quantity_val > 0 and dup_hours > 0) else 0
+        # Final Sample value = per_unit * quantity
+        # Use exact calculation without intermediate rounding to avoid precision issues
+        final_price_exact = per_unit * quantity_val if quantity_val > 0 else 0
+        final_price = round(final_price_exact)
+        
+        # Duplicates value = per_unit * quantity * duplicates_hours
+        # Use exact calculation without intermediate rounding to avoid precision issues
+        duplicates_price_exact = per_unit * quantity_val * dup_hours if (quantity_val > 0 and dup_hours > 0) else 0
+        duplicates_price = round(duplicates_price_exact)
+        
+        # Debug: Verify each item calculation
+        # print(f"DEBUG: Row {row}, Qty={quantity_val}, Final hours={final_hours}, Dup hours={dup_hours}")
+        # print(f"DEBUG: Final price: {per_unit:.6f} * {quantity_val} = {final_price_exact:.6f} -> ${final_price}")
+        # print(f"DEBUG: Duplicates price: {per_unit:.6f} * {quantity_val} * {dup_hours} = {duplicates_price_exact:.6f} -> ${duplicates_price}")
         
         # Write Final Samples value
         if final_price > 0:
@@ -2451,6 +2470,12 @@ def apply_ala_carte_package(
             # Re-merge M20:P20
             safe_merge_cells(ws, f"M{row_20}:P{row_20}")
     
+    # Calculate per-unit value for FINAL SAMPLES and DUPLICATES
+    # Formula: per_unit = (Sum of First Sample Dollar Amounts) / (Sum of Total Quantity)
+    per_unit_deliverables = 0.0
+    if quantity_sum > 0:
+        per_unit_deliverables = first_sample_totals_sum / quantity_sum
+    
     # Update deliverables counts in column E (A LA CARTE BREAKDOWN)
     # Count how many items have non-zero hours for each service
     if len(a_la_carte_items) > 0 and column_index_from_string is not None:
@@ -2490,7 +2515,11 @@ def apply_ala_carte_package(
                 continue
             
             label_key = label_text.strip().lower()
-            if label_key in count_labels:
+            
+            # FINAL SAMPLES and DUPLICATES should show the per-unit value, not sum of hours
+            if label_key == "final samples" or label_key == "duplicates":
+                total_value = per_unit_deliverables
+            elif label_key in count_labels:
                 total_value = sum(1 for item in a_la_carte_items if float(item.get(hour_field, 0)) > 0)
             else:
                 total_value = sum(float(item.get(hour_field, 0)) for item in a_la_carte_items)
@@ -2510,7 +2539,10 @@ def apply_ala_carte_package(
             safe_set_cell_value(ws, f"E{row_idx}", total_value)
             cell_e_count = ws.cell(row=row_idx, column=col_e)
             # Use integer format for counts, otherwise keep decimal
-            if label_key in count_labels or total_value == int(total_value):
+            if label_key == "final samples" or label_key == "duplicates":
+                # Show per-unit value with 2 decimal places
+                cell_e_count.number_format = "0.00"
+            elif label_key in count_labels or total_value == int(total_value):
                 cell_e_count.number_format = "0"
             else:
                 cell_e_count.number_format = "0.00"
@@ -3866,7 +3898,7 @@ def main() -> None:
     a_la_carte_start_number = 101 + num_regular_styles + num_custom_styles
     
     # Column headers for A La Carte Items
-    a_la_carte_header_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1, 1, 1])
+    a_la_carte_header_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1]) # Removed FITTING and ADJUSTMENT columns
     with a_la_carte_header_cols[0]:
         st.markdown("**Style Number**")
     with a_la_carte_header_cols[1]:
@@ -3878,21 +3910,20 @@ def main() -> None:
     with a_la_carte_header_cols[4]:
         st.markdown("**1ST SAMPLE**")
     with a_la_carte_header_cols[5]:
-        st.markdown("**FITTING**")
-    with a_la_carte_header_cols[6]:
-        st.markdown("**ADJUSTMENT**")
-    with a_la_carte_header_cols[7]:
         st.markdown("**FINAL SAMPLES**")
-    with a_la_carte_header_cols[8]:
+    with a_la_carte_header_cols[6]:
         st.markdown("**DUPLICATES**")
-    with a_la_carte_header_cols[9]:
+    with a_la_carte_header_cols[7]:
         st.markdown("**Quantity**")
     
     # Display existing A La Carte Items
     if st.session_state["a_la_carte_items"]:
+        # Get shared Fitting and Adjustment value from session state
+        shared_fitting_adjustment = st.session_state.get("fitting_adjustment_hours", 0.0)
+        
         for i, entry in enumerate(st.session_state["a_la_carte_items"]):
             with st.container():
-                a_la_carte_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1, 1, 1])
+                a_la_carte_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1]) # Removed 2 columns for FITTING and ADJUSTMENT
                 with a_la_carte_cols[0]:
                     # Style Number field
                     default_style_number = entry.get("style_number", a_la_carte_start_number + i)
@@ -3949,29 +3980,10 @@ def main() -> None:
                     entry["first_sample"] = float(first_sample_hours)
                     # Final Samples always mirror First Sample hours
                     entry["final_samples"] = float(first_sample_hours)
+                # Use shared Fitting and Adjustment value for both fields
+                entry["fitting"] = float(shared_fitting_adjustment)
+                entry["adjustment"] = float(shared_fitting_adjustment)
                 with a_la_carte_cols[5]:
-                    fitting_hours = st.number_input(
-                        "FITTING",
-                        min_value=0.0,
-                        value=float(entry.get("fitting", 0.0)),
-                        step=0.25,
-                        format="%.2f",
-                        key=f"a_la_carte_fitting_{i}",
-                        label_visibility="collapsed",
-                    )
-                    entry["fitting"] = float(fitting_hours)
-                with a_la_carte_cols[6]:
-                    adjustment_hours = st.number_input(
-                        "ADJUSTMENT",
-                        min_value=0.0,
-                        value=float(entry.get("adjustment", 0.0)),
-                        step=0.25,
-                        format="%.2f",
-                        key=f"a_la_carte_adjustment_{i}",
-                        label_visibility="collapsed",
-                    )
-                    entry["adjustment"] = float(adjustment_hours)
-                with a_la_carte_cols[7]:
                     # Final Samples are auto-filled from 1ST SAMPLE; keep field read-only by showing synced value
                     final_samples_hours = st.number_input(
                         "FINAL SAMPLES",
@@ -3984,7 +3996,7 @@ def main() -> None:
                         disabled=True,
                     )
                     entry["final_samples"] = float(entry.get("first_sample", 0.0))
-                with a_la_carte_cols[8]:
+                with a_la_carte_cols[6]:
                     duplicates_hours = st.number_input(
                         "DUPLICATES",
                         min_value=0.0,
@@ -3995,7 +4007,7 @@ def main() -> None:
                         label_visibility="collapsed",
                     )
                     entry["duplicates"] = float(duplicates_hours)
-                with a_la_carte_cols[9]:
+                with a_la_carte_cols[7]:
                     quantity_val = st.number_input(
                         "Quantity",
                         min_value=0,
@@ -4052,9 +4064,12 @@ def main() -> None:
     # Add new A La Carte Item interface
     st.subheader("**Add New A La Carte Item**")
     # Match the column widths used in the A La Carte Package table
-    add_a_la_carte_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1, 1, 1])
+    add_a_la_carte_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1]) # Removed 2 columns for FITTING and ADJUSTMENT
     default_new_a_la_carte_style_name = st.session_state.get("new_a_la_carte_style_name", "")
     default_new_a_la_carte_style_number = st.session_state.get("new_a_la_carte_style_number", a_la_carte_start_number + len(st.session_state.get("a_la_carte_items", [])))
+    
+    # Get shared Fitting and Adjustment value from session state
+    shared_fitting_adjustment_new = st.session_state.get("fitting_adjustment_hours", 0.0)
     
     with add_a_la_carte_cols[0]:
         new_a_la_carte_style_number = st.number_input(
@@ -4103,27 +4118,10 @@ def main() -> None:
             key="new_a_la_carte_first_sample",
             label_visibility="collapsed",
         )
+    # Use shared Fitting and Adjustment value for both fields
+    new_fitting = shared_fitting_adjustment_new
+    new_adjustment = shared_fitting_adjustment_new
     with add_a_la_carte_cols[5]:
-        new_fitting = st.number_input(
-            "FITTING",
-            min_value=0.0,
-            value=0.0,
-            step=0.25,
-            format="%.2f",
-            key="new_a_la_carte_fitting",
-            label_visibility="collapsed",
-        )
-    with add_a_la_carte_cols[6]:
-        new_adjustment = st.number_input(
-            "ADJUSTMENT",
-            min_value=0.0,
-            value=0.0,
-            step=0.25,
-            format="%.2f",
-            key="new_a_la_carte_adjustment",
-            label_visibility="collapsed",
-        )
-    with add_a_la_carte_cols[7]:
         new_final_samples = st.number_input(
             "FINAL SAMPLES",
             min_value=0.0,
@@ -4133,7 +4131,7 @@ def main() -> None:
             key="new_a_la_carte_final_samples",
             label_visibility="collapsed",
         )
-    with add_a_la_carte_cols[8]:
+    with add_a_la_carte_cols[6]:
         new_duplicates = st.number_input(
             "DUPLICATES",
             min_value=0.0,
@@ -4143,7 +4141,7 @@ def main() -> None:
             key="new_a_la_carte_duplicates",
             label_visibility="collapsed",
         )
-    with add_a_la_carte_cols[9]:
+    with add_a_la_carte_cols[7]:
         new_quantity = st.number_input(
             "Quantity",
             min_value=0,
@@ -4189,19 +4187,21 @@ def main() -> None:
         st.markdown("")
         if st.button("➕ Add", key="add_a_la_carte_style", help="Add this A La Carte Item"):
             if new_a_la_carte_style_name.strip():
+                # Use shared Fitting and Adjustment value
+                shared_fitting_adjustment_value = st.session_state.get("fitting_adjustment_hours", 0.0)
                 st.session_state["a_la_carte_items"].append({
                     "name": new_a_la_carte_style_name.strip(),
                     "style_number": int(new_a_la_carte_style_number),
                     "intake_session": float(new_intake),
                     "first_pattern": float(new_first_pattern),
                     "first_sample": float(new_first_sample),
-                    "fitting": float(new_fitting),
-                    "adjustment": float(new_adjustment),
+                    "fitting": float(shared_fitting_adjustment_value),
+                    "adjustment": float(shared_fitting_adjustment_value),
                     # Final Samples always mirror First Sample
                     "final_samples": float(new_first_sample),
                     "duplicates": float(new_duplicates),
                     "quantity": int(new_quantity),
-                    "total_hours": float(new_intake + new_first_pattern + new_first_sample + new_fitting + new_adjustment + new_final_samples + new_duplicates),
+                    "total_hours": float(new_intake + new_first_pattern + new_first_sample + shared_fitting_adjustment_value + shared_fitting_adjustment_value + new_first_sample + new_duplicates),
                     "options": {
                         "wash_dye": new_wash_dye,
                         "design": new_design,
@@ -4226,6 +4226,19 @@ def main() -> None:
         st.info("Add at least one style, Custom Item, or A La Carte Item to enable the generator.")
         return
 
+    st.markdown("---")
+    st.subheader("Fitting and Adjustment")
+    fitting_adjustment_cols = st.columns([1.8, 1, 1, 1.2, 1, 0.8, 0.8, 1, 0.8])
+    with fitting_adjustment_cols[0]:
+        fitting_adjustment_hours = st.number_input(
+            "Fitting and Adjustment (hours)",
+            min_value=0.0,
+            value=st.session_state.get("fitting_adjustment_hours", 0.0),
+            step=0.25,
+            format="%.2f",
+        )
+    st.session_state["fitting_adjustment_hours"] = fitting_adjustment_hours
+    
     st.markdown("---")
     st.subheader("Discount")
     discount_cols = st.columns([1.8, 1, 1, 1.2, 1, 0.8, 0.8, 1, 0.8])
