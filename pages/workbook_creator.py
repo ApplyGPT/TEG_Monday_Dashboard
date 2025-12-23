@@ -62,7 +62,8 @@ SUMMARY_LABEL_COL = 14  # Column N
 SUMMARY_VALUE_COL = 16  # Column P
 SUMMARY_DEV_ROW = 10
 SUMMARY_OPT_ROW = 12
-SUMMARY_DISCOUNT_ROW = 14
+SUMMARY_SUBTOTAL_ROW = 14
+SUMMARY_DISCOUNT_ROW = 16
 SUMMARY_SUM_END_ROW = 13  # Row before discount row
 SUMMARY_TOTAL_DUE_BASE_ROW = 20
 DELIVERABLE_BLOCK_START = 22
@@ -441,6 +442,8 @@ def clear_style_rows(ws, num_styles: int = 0) -> None:
         safe_set_cell_value(ws, "F20", None)
         safe_set_cell_value(ws, "H20", None)
         safe_set_cell_value(ws, "L20", None)
+        safe_set_cell_value(ws, f"N{SUMMARY_SUBTOTAL_ROW}", None)
+        safe_set_cell_value(ws, f"P{SUMMARY_SUBTOTAL_ROW}", None)
         safe_set_cell_value(ws, f"N{SUMMARY_DISCOUNT_ROW}", None)
         safe_set_cell_value(ws, f"P{SUMMARY_DISCOUNT_ROW}", None)
         safe_set_cell_value(ws, "N21", None)
@@ -474,6 +477,8 @@ def clear_style_rows(ws, num_styles: int = 0) -> None:
         safe_set_cell_value(ws, f"F{totals_row}", None)
         safe_set_cell_value(ws, f"H{totals_row}", None)
         safe_set_cell_value(ws, f"L{totals_row}", None)
+        safe_set_cell_value(ws, f"N{SUMMARY_SUBTOTAL_ROW}", None)
+        safe_set_cell_value(ws, f"P{SUMMARY_SUBTOTAL_ROW}", None)
         safe_set_cell_value(ws, f"N{SUMMARY_DISCOUNT_ROW}", None)
         safe_set_cell_value(ws, f"P{SUMMARY_DISCOUNT_ROW}", None)
         safe_set_cell_value(ws, "N21", None)
@@ -1619,52 +1624,65 @@ def apply_development_package(
         if PatternFill is not None:
             cell_l_totals.fill = PatternFill(start_color="F0CFBB", end_color="F0CFBB", fill_type="solid")
 
-        # Discount row (fixed location in template at row 14 / columns N-P)
-        # Only show discount if discount_percentage > 0, otherwise clear the cells
+        # SUB-TOTAL row (new) and Discount row (moved down)
+        subtotal_row = SUMMARY_SUBTOTAL_ROW
         discount_row = SUMMARY_DISCOUNT_ROW
         discount_decimal = discount_percentage / 100.0 if discount_percentage else 0.0
+        cell_n_subtotal = ws.cell(row=subtotal_row, column=SUMMARY_LABEL_COL)
+        cell_p_subtotal = ws.cell(row=subtotal_row, column=SUMMARY_VALUE_COL)
         cell_n_discount = ws.cell(row=discount_row, column=SUMMARY_LABEL_COL)
         cell_p_discount = ws.cell(row=discount_row, column=SUMMARY_VALUE_COL)
         
         if discount_percentage > 0:
-            # Set discount label and value
+            # SUB-TOTAL = TOTAL DEVELOPMENT + TOTAL OPTIONAL ADD-ONS
+            cell_n_subtotal.value = "SUB-TOTAL"
+            if Font is not None:
+                cell_n_subtotal.font = Font(name="Arial", size=20, bold=True, color=cell_n_subtotal.font.color if cell_n_subtotal.font else None)
+            if Alignment is not None:
+                cell_n_subtotal.alignment = Alignment(horizontal="center", vertical="center")
+            cell_p_subtotal.value = "=SUM(P10:P13)"
+            cell_p_subtotal.number_format = '$#,##0'
+            if Font is not None:
+                cell_p_subtotal.font = Font(name="Arial", size=20, bold=True, color=cell_p_subtotal.font.color if cell_p_subtotal.font else None)
+            if Alignment is not None:
+                cell_p_subtotal.alignment = Alignment(horizontal="center", vertical="center")
+            
+            # DISCOUNT uses SUB-TOTAL as base
             cell_n_discount.value = f"DISCOUNT ({discount_percentage:.0f}%)"
             if Font is not None:
                 cell_n_discount.font = Font(name="Arial", size=20, bold=True, color=cell_n_discount.font.color if cell_n_discount.font else None)
             if Alignment is not None:
                 cell_n_discount.alignment = Alignment(horizontal="center", vertical="center")
             
-            cell_p_discount.value = f"=SUM(P10:P13)*{discount_decimal}"
+            cell_p_discount.value = f"=P{subtotal_row}*{discount_decimal}"
             cell_p_discount.number_format = '$#,##0'
             if Font is not None:
                 cell_p_discount.font = Font(name="Arial", size=20, bold=True, color=cell_p_discount.font.color if cell_p_discount.font else None)
             if Alignment is not None:
                 cell_p_discount.alignment = Alignment(horizontal="center", vertical="center")
         else:
-            # Clear discount row if discount is 0% - remove/clean N14:P15
-            safe_set_cell_value(ws, f"N{discount_row}", None)
-            safe_set_cell_value(ws, f"P{discount_row}", None)
-            # Also clear row 15 (the second row of the discount pair)
-            safe_set_cell_value(ws, f"N{discount_row + 1}", None)
-            safe_set_cell_value(ws, f"P{discount_row + 1}", None)
+            # Clear SUB-TOTAL and DISCOUNT rows when no discount
+            for clear_row in [subtotal_row, subtotal_row + 1, discount_row, discount_row + 1]:
+                safe_set_cell_value(ws, f"N{clear_row}", None)
+                safe_set_cell_value(ws, f"P{clear_row}", None)
             
-            # Merge and center N14:P15 after clearing
+            # Merge and center cleared ranges for SUB-TOTAL and DISCOUNT
             if safe_merge_cells:
+                safe_merge_cells(ws, f"N{subtotal_row}:P{subtotal_row + 1}")
                 safe_merge_cells(ws, f"N{discount_row}:P{discount_row + 1}")
-                # Center align the merged cell
                 if Alignment is not None:
-                    merged_cell = ws.cell(row=discount_row, column=SUMMARY_LABEL_COL)
-                    merged_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                    merged_cell_subtotal = ws.cell(row=subtotal_row, column=SUMMARY_LABEL_COL)
+                    merged_cell_subtotal.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                    merged_cell_discount = ws.cell(row=discount_row, column=SUMMARY_LABEL_COL)
+                    merged_cell_discount.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
             
             # Ensure N12 and P12 have inferior (bottom) borders
             if Border is not None and Side is not None:
                 bottom_side = Side(style="thin")
-                # Get existing borders for N12 and P12, then add bottom border
-                row_12 = discount_row - 2  # Row 12 (discount_row is 14)
+                row_12 = SUMMARY_OPT_ROW  # Row 12
                 cell_n12 = ws.cell(row=row_12, column=SUMMARY_LABEL_COL)
                 cell_p12 = ws.cell(row=row_12, column=SUMMARY_VALUE_COL)
                 
-                # Preserve existing borders and add bottom border
                 existing_n12_border = cell_n12.border if cell_n12.border else Border()
                 existing_p12_border = cell_p12.border if cell_p12.border else Border()
                 
@@ -1775,7 +1793,7 @@ def apply_development_package(
             cell_p_totals = ws.cell(row=totals_row, column=16)  # Column P
             # If discount is 0, don't subtract discount; otherwise subtract P{discount_row}
             if discount_percentage > 0:
-                cell_p_totals.value = f"=SUM(P10:P13)-P{discount_row}"
+                cell_p_totals.value = f"=P{SUMMARY_SUBTOTAL_ROW}-P{SUMMARY_DISCOUNT_ROW}"
             else:
                 cell_p_totals.value = f"=SUM(P10:P13)"
             cell_p_totals.number_format = '$#,##0'  # Currency format
