@@ -1996,6 +1996,10 @@ def apply_ala_carte_package(
     col_p = column_index_from_string("P") if column_index_from_string else 16
     col_q = column_index_from_string("Q") if column_index_from_string else 17
     
+    first_sample_totals_sum = 0
+    quantity_sum = 0
+    derived_rows: list[dict] = []
+    
     for i, item in enumerate(a_la_carte_items):
         # Each entry uses two rows, similar to style rows (10-11, 12-13, ...)
         row = start_row + (i * 2)
@@ -2096,47 +2100,52 @@ def apply_ala_carte_package(
         apply_full_border_pair(ws, col_h, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_h)}{row}:{get_column_letter(col_h)}{row_second}")
         
-        # FINAL SAMPLES - column I (hours * $90)
-        final_samples_hours = float(item.get("final_samples", 0))
-        final_samples_price = round(final_samples_hours * A_LA_CARTE_RATE_SAMPLES)
-        if final_samples_hours > 0:
-            # Format hours: remove .0 if whole number, otherwise show decimal
-            hours_str = f"{final_samples_hours:.2f}".rstrip('0').rstrip('.')
-            final_samples_value = f"${final_samples_price:,} ({hours_str}h)"
-        else:
-            final_samples_value = None  # Leave blank if 0
-        safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", final_samples_value)
+        # Track First Sample totals and quantities for Final Sample/Duplicates formula
+        first_sample_hours = sample_hours
+        first_sample_price = sample_price
+        quantity_val = int(item.get("quantity", 1))
+        first_sample_totals_sum += first_sample_price
+        quantity_sum += quantity_val
+        
+        # FINAL SAMPLES - column I (derived later)
+        final_samples_hours = first_sample_hours  # Always mirror First Sample hours
+        safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", None)
         cell_i = ws.cell(row=row, column=col_i)
         cell_i.number_format = '@'
         apply_font_20(cell_i)
         apply_full_border_pair(ws, col_i, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_i)}{row}:{get_column_letter(col_i)}{row_second}")
         
-        # DUPLICATES - column J (hours * $90)
+        # DUPLICATES - column J (derived later)
         duplicates_hours = float(item.get("duplicates", 0))
-        duplicates_price = round(duplicates_hours * A_LA_CARTE_RATE_SAMPLES)
-        if duplicates_hours > 0:
-            # Format hours: remove .0 if whole number, otherwise show decimal
-            hours_str = f"{duplicates_hours:.2f}".rstrip('0').rstrip('.')
-            duplicates_value = f"${duplicates_price:,} ({hours_str}h)"
-        else:
-            duplicates_value = None  # Leave blank if 0
-        safe_set_cell_value(ws, f"{get_column_letter(col_j)}{row}", duplicates_value)
+        safe_set_cell_value(ws, f"{get_column_letter(col_j)}{row}", None)
         cell_j = ws.cell(row=row, column=col_j)
         cell_j.number_format = '@'
         apply_font_20(cell_j)
         apply_full_border_pair(ws, col_j, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_j)}{row}:{get_column_letter(col_j)}{row_second}")
         
-        # TOTAL - column K (sum of all service costs D-J)
-        total_services = intake_price + pattern_price + sample_price + fitting_price + adjustment_price + final_samples_price + duplicates_price
-        safe_set_cell_value(ws, f"{get_column_letter(col_k)}{row}", total_services)
+        # TOTAL - column K (placeholder; updated after derived values are computed)
+        base_total = intake_price + pattern_price + sample_price + fitting_price + adjustment_price
+        safe_set_cell_value(ws, f"{get_column_letter(col_k)}{row}", base_total)
         cell_k = ws.cell(row=row, column=col_k)
         cell_k.number_format = '$#,##0'  # Currency format
         apply_font_20(cell_k)
         apply_full_border_pair(ws, col_k, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_k)}{row}:{get_column_letter(col_k)}{row_second}")
-        total_ala_carte += total_services
+        total_ala_carte += base_total
+        
+        derived_rows.append({
+            "row": row,
+            "row_second": row_second,
+            "quantity": quantity_val,
+            "final_samples_hours": final_samples_hours,
+            "duplicates_hours": duplicates_hours,
+            "base_total": base_total,
+            "cell_i": cell_i,
+            "cell_j": cell_j,
+            "cell_k": cell_k,
+        })
         
         # Optional Add-ons for A La Carte (columns M-Q)
         # M: WASH/DYE, N: DESIGN, O: SOURCING, P: TREATMENT, Q: TOTAL
@@ -2209,6 +2218,50 @@ def apply_ala_carte_package(
                              cell_m, cell_n, cell_o, cell_p, cell_q]
             for cell in cells_to_align:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
+    
+    # Apply derived Final Samples / Duplicates using aggregated formula
+    derived_total_increment = 0
+    if quantity_sum > 0:
+        per_unit = first_sample_totals_sum / quantity_sum
+    else:
+        per_unit = 0
+    for info in derived_rows:
+        row = info["row"]
+        quantity_val = info["quantity"]
+        final_hours = info["final_samples_hours"]
+        dup_hours = info["duplicates_hours"]
+        cell_i = info["cell_i"]
+        cell_j = info["cell_j"]
+        cell_k = info["cell_k"]
+        
+        final_price = round(per_unit * quantity_val) if quantity_val > 0 else 0
+        duplicates_price = round(per_unit * quantity_val * dup_hours) if (quantity_val > 0 and dup_hours > 0) else 0
+        
+        # Write Final Samples value
+        if final_price > 0:
+            hours_str = f"{final_hours:.2f}".rstrip('0').rstrip('.')
+            final_value = f"${final_price:,} ({hours_str}h)"
+            safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", final_value)
+        else:
+            safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", None)
+        cell_i.number_format = '@'
+        
+        # Write Duplicates value
+        if duplicates_price > 0:
+            hours_str_dup = f"{dup_hours:.2f}".rstrip('0').rstrip('.')
+            dup_value = f"${duplicates_price:,} ({hours_str_dup}h)"
+            safe_set_cell_value(ws, f"{get_column_letter(col_j)}{row}", dup_value)
+        else:
+            safe_set_cell_value(ws, f"{get_column_letter(col_j)}{row}", None)
+        cell_j.number_format = '@'
+        
+        # Update total services
+        total_services = info["base_total"] + final_price + duplicates_price
+        safe_set_cell_value(ws, f"{get_column_letter(col_k)}{row}", total_services)
+        cell_k.number_format = '$#,##0'
+        derived_total_increment += final_price + duplicates_price
+    
+    total_ala_carte += derived_total_increment
     
     # Clear unused rows (template has 5 rows: 10, 12, 14, 16, 18)
     # Only clear if we have 5 or fewer items (if more than 5, we've already inserted rows)
@@ -2429,14 +2482,18 @@ def apply_ala_carte_package(
                         return scan_row
             return None
         
-        # Calculate total hours for each deliverable
+        # Calculate total hours/counts for each deliverable
+        count_labels = {"intake session", "1st pattern", "1st sample"}
         for label_text, hour_field in deliverables_map:
             row_idx = find_deliverable_row(label_text)
             if row_idx is None:
                 continue
             
-            # Sum total hours for this service across all items
-            total_hours = sum(float(item.get(hour_field, 0)) for item in a_la_carte_items)
+            label_key = label_text.strip().lower()
+            if label_key in count_labels:
+                total_value = sum(1 for item in a_la_carte_items if float(item.get(hour_field, 0)) > 0)
+            else:
+                total_value = sum(float(item.get(hour_field, 0)) for item in a_la_carte_items)
             
             # Unmerge column E if needed
             for merged_range in list(ws.merged_cells.ranges):
@@ -2449,11 +2506,11 @@ def apply_ala_carte_package(
                     except Exception:
                         pass
             
-            # Set the total hours value
-            safe_set_cell_value(ws, f"E{row_idx}", total_hours)
+            # Set the total value
+            safe_set_cell_value(ws, f"E{row_idx}", total_value)
             cell_e_count = ws.cell(row=row_idx, column=col_e)
-            # Use decimal format if total_hours has decimal part, otherwise integer format
-            if total_hours == int(total_hours):
+            # Use integer format for counts, otherwise keep decimal
+            if label_key in count_labels or total_value == int(total_value):
                 cell_e_count.number_format = "0"
             else:
                 cell_e_count.number_format = "0.00"
@@ -3809,7 +3866,7 @@ def main() -> None:
     a_la_carte_start_number = 101 + num_regular_styles + num_custom_styles
     
     # Column headers for A La Carte Items
-    a_la_carte_header_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1, 1, 0.8])
+    a_la_carte_header_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1, 1, 1])
     with a_la_carte_header_cols[0]:
         st.markdown("**Style Number**")
     with a_la_carte_header_cols[1]:
@@ -3829,13 +3886,13 @@ def main() -> None:
     with a_la_carte_header_cols[8]:
         st.markdown("**DUPLICATES**")
     with a_la_carte_header_cols[9]:
-        st.markdown("**Remove**")
+        st.markdown("**Quantity**")
     
     # Display existing A La Carte Items
     if st.session_state["a_la_carte_items"]:
         for i, entry in enumerate(st.session_state["a_la_carte_items"]):
             with st.container():
-                a_la_carte_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1, 1, 0.8])
+                a_la_carte_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1, 1, 1])
                 with a_la_carte_cols[0]:
                     # Style Number field
                     default_style_number = entry.get("style_number", a_la_carte_start_number + i)
@@ -3890,6 +3947,8 @@ def main() -> None:
                         label_visibility="collapsed",
                     )
                     entry["first_sample"] = float(first_sample_hours)
+                    # Final Samples always mirror First Sample hours
+                    entry["final_samples"] = float(first_sample_hours)
                 with a_la_carte_cols[5]:
                     fitting_hours = st.number_input(
                         "FITTING",
@@ -3913,16 +3972,18 @@ def main() -> None:
                     )
                     entry["adjustment"] = float(adjustment_hours)
                 with a_la_carte_cols[7]:
+                    # Final Samples are auto-filled from 1ST SAMPLE; keep field read-only by showing synced value
                     final_samples_hours = st.number_input(
                         "FINAL SAMPLES",
                         min_value=0.0,
-                        value=float(entry.get("final_samples", 0.0)),
+                        value=float(entry.get("final_samples", entry.get("first_sample", 0.0))),
                         step=0.25,
                         format="%.2f",
                         key=f"a_la_carte_final_samples_{i}",
                         label_visibility="collapsed",
+                        disabled=True,
                     )
-                    entry["final_samples"] = float(final_samples_hours)
+                    entry["final_samples"] = float(entry.get("first_sample", 0.0))
                 with a_la_carte_cols[8]:
                     duplicates_hours = st.number_input(
                         "DUPLICATES",
@@ -3935,13 +3996,19 @@ def main() -> None:
                     )
                     entry["duplicates"] = float(duplicates_hours)
                 with a_la_carte_cols[9]:
-                    if st.button("❌", key=f"remove_a_la_carte_{i}", help="Remove this A La Carte Item"):
-                        st.session_state["a_la_carte_items"].pop(i)
-                        st.rerun()
+                    quantity_val = st.number_input(
+                        "Quantity",
+                        min_value=0,
+                        value=int(entry.get("quantity", 1)),
+                        step=1,
+                        key=f"a_la_carte_quantity_{i}",
+                        label_visibility="collapsed",
+                    )
+                    entry["quantity"] = int(quantity_val)
                 
-                # Optional Add-ons for A La Carte (below each item)
+                # Optional Add-ons for A La Carte (below each item) and Remove control
                 st.markdown("**Optional Add-ons:**")
-                optional_cols = st.columns([1, 1, 1, 1])
+                optional_cols = st.columns([1, 1, 1, 1, 0.8])
                 with optional_cols[0]:
                     st.markdown("**Wash/Dye ($1,330)**")
                     wash_dye = st.checkbox(
@@ -3976,10 +4043,16 @@ def main() -> None:
                         key=f"a_la_carte_treatment_{i}",
                     )
                     entry["options"]["treatment"] = treatment
+                with optional_cols[4]:
+                    st.markdown("**Remove**")
+                    if st.button("❌", key=f"remove_a_la_carte_{i}", help="Remove this A La Carte Item"):
+                        st.session_state["a_la_carte_items"].pop(i)
+                        st.rerun()
     
     # Add new A La Carte Item interface
     st.subheader("**Add New A La Carte Item**")
-    add_a_la_carte_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1, 1, 0.8])
+    # Match the column widths used in the A La Carte Package table
+    add_a_la_carte_cols = st.columns([1.2, 2, 1, 1, 1, 1, 1, 1, 1, 1])
     default_new_a_la_carte_style_name = st.session_state.get("new_a_la_carte_style_name", "")
     default_new_a_la_carte_style_number = st.session_state.get("new_a_la_carte_style_number", a_la_carte_start_number + len(st.session_state.get("a_la_carte_items", [])))
     
@@ -4070,10 +4143,19 @@ def main() -> None:
             key="new_a_la_carte_duplicates",
             label_visibility="collapsed",
         )
+    with add_a_la_carte_cols[9]:
+        new_quantity = st.number_input(
+            "Quantity",
+            min_value=0,
+            value=1,
+            step=1,
+            key="new_a_la_carte_quantity",
+            label_visibility="collapsed",
+        )
     
-    # Optional Add-ons for new A La Carte item (before Add button)
+    # Optional Add-ons for new A La Carte item (with Add action)
     st.markdown("**Optional Add-ons:**")
-    new_optional_cols = st.columns([1, 1, 1, 1, 0.8])
+    new_optional_cols = st.columns([1, 1, 1, 1, 0.8, 0.8])
     with new_optional_cols[0]:
         st.markdown("**Wash/Dye ($1,330)**")
         new_wash_dye = st.checkbox(
@@ -4102,8 +4184,9 @@ def main() -> None:
             value=False,
             key="new_a_la_carte_treatment",
         )
-    
-    with add_a_la_carte_cols[9]:
+    with new_optional_cols[4]:
+        st.markdown("")
+        st.markdown("")
         if st.button("➕ Add", key="add_a_la_carte_style", help="Add this A La Carte Item"):
             if new_a_la_carte_style_name.strip():
                 st.session_state["a_la_carte_items"].append({
@@ -4114,8 +4197,10 @@ def main() -> None:
                     "first_sample": float(new_first_sample),
                     "fitting": float(new_fitting),
                     "adjustment": float(new_adjustment),
-                    "final_samples": float(new_final_samples),
+                    # Final Samples always mirror First Sample
+                    "final_samples": float(new_first_sample),
                     "duplicates": float(new_duplicates),
+                    "quantity": int(new_quantity),
                     "total_hours": float(new_intake + new_first_pattern + new_first_sample + new_fitting + new_adjustment + new_final_samples + new_duplicates),
                     "options": {
                         "wash_dye": new_wash_dye,
@@ -4134,6 +4219,8 @@ def main() -> None:
                 st.rerun()
             else:
                 st.warning("Please enter a Style Name before adding.")
+    with new_optional_cols[5]:
+        st.empty()
 
     if not st.session_state["style_entries"] and not st.session_state["custom_styles"] and not st.session_state.get("a_la_carte_items", []):
         st.info("Add at least one style, Custom Item, or A La Carte Item to enable the generator.")
