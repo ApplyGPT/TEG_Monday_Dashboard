@@ -2507,6 +2507,11 @@ def apply_ala_carte_package(
                         return scan_row
             return None
         
+        # Get the shared fitting_adjustment value from the first item (all items share the same value)
+        shared_fitting_adjustment_hours = 0.0
+        if len(a_la_carte_items) > 0:
+            shared_fitting_adjustment_hours = float(a_la_carte_items[0].get("fitting", 0))
+        
         # Calculate total hours/counts for each deliverable
         count_labels = {"intake session", "1st pattern", "1st sample"}
         for label_text, hour_field in deliverables_map:
@@ -2519,6 +2524,9 @@ def apply_ala_carte_package(
             # FINAL SAMPLES and DUPLICATES should show the per-unit value, not sum of hours
             if label_key == "final samples" or label_key == "duplicates":
                 total_value = per_unit_deliverables
+            # FITTING and ADJUSTMENT should show the shared input value, not sum
+            elif label_key == "fitting" or label_key == "adjustment":
+                total_value = shared_fitting_adjustment_hours
             elif label_key in count_labels:
                 total_value = sum(1 for item in a_la_carte_items if float(item.get(hour_field, 0)) > 0)
             else:
@@ -2542,6 +2550,12 @@ def apply_ala_carte_package(
             if label_key == "final samples" or label_key == "duplicates":
                 # Show per-unit value with 2 decimal places
                 cell_e_count.number_format = "0.00"
+            elif label_key == "fitting" or label_key == "adjustment":
+                # Show fitting/adjustment hours with 2 decimal places if needed
+                if total_value == int(total_value):
+                    cell_e_count.number_format = "0"
+                else:
+                    cell_e_count.number_format = "0.00"
             elif label_key in count_labels or total_value == int(total_value):
                 cell_e_count.number_format = "0"
             else:
