@@ -1296,8 +1296,7 @@ def create_deck_from_template(
     
     # Step 4: Copy entire slide content from SERVICE COLUMNS.pptx to slide 10 (index 9)
     # Since slide 10 is now empty, we just copy the entire selected slide
-    # Skip this step for Standards deck type - keep original slide 10
-    if service_column_slide_index is not None and deck_type != "Standards":
+    if service_column_slide_index is not None:
         service_columns_path = get_template_path(SERVICE_COLUMNS_FILE)
         if os.path.exists(service_columns_path):
             try:
@@ -1741,14 +1740,9 @@ def render_service_columns_selector(deck_type: str) -> Optional[int]:
     """Render service columns selector and return selected slide index.
     
     Args:
-        deck_type: Selected deck type - if "Standards", the selector is disabled
+        deck_type: Selected deck type
     """
     st.subheader("Services")
-    
-    # Disable service columns selector for Standards deck type
-    if deck_type == "Standards":
-        st.info("Service columns are not available for Standards deck type.")
-        return None
     
     _, service_columns = extract_slides_from_service_columns()
     
