@@ -1,6 +1,6 @@
 """
 Employee Tools Hub
-Central hub for accessing employee tools: Sign Now, QuickBooks, and Workbook Creator
+Central hub for accessing employee tools: Sign Now and Workbook Creator
 """
 
 import streamlit as st
@@ -22,7 +22,6 @@ st.markdown("""
 }
 
 /* Show list items that contain allowed tool pages using :has() selector */
-[data-testid="stSidebarNav"] li:has(a[href*="quickbooks"]),
 [data-testid="stSidebarNav"] li:has(a[href*="signnow"]),
 [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
 [data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
@@ -36,7 +35,7 @@ st.markdown("""
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'a_la_carte'];
+        const allowedPages = ['signnow', 'tools', 'workbook', 'deck_creator', 'a_la_carte'];
         
         // Check if we're currently on an ads dashboard page
         const currentUrl = window.location.href.toLowerCase();
@@ -112,7 +111,7 @@ def main():
     st.markdown("Access employee tools for contracts, invoices, and workbooks")
     
     # Create columns for tool cards
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.markdown("#### 📝 Sign Now")
@@ -121,24 +120,18 @@ def main():
             st.switch_page("pages/signnow_form.py")
     
     with col2:
-        st.markdown("#### 💰 QuickBooks")
-        st.markdown("Send invoices to clients")
-        if st.button("🚀 Open QuickBooks", key="quickbooks_button", use_container_width=True):
-            st.switch_page("pages/quickbooks_form.py")
-    
-    with col3:
         st.markdown("#### 📊 Workbook Creator")
         st.markdown("Generate Excel workbooks")
         if st.button("🚀 Open Workbook Creator", key="workbook_button", use_container_width=True):
             st.switch_page("pages/workbook_creator.py")
 
-    with col4:
+    with col3:
         st.markdown("#### 📽️ Deck Creator")
         st.markdown("Generate Google Slides decks")
         if st.button("🚀 Open Deck Creator", key="deck_button", use_container_width=True):
             st.switch_page("pages/deck_creator.py")
     
-    with col5:
+    with col4:
         st.markdown("#### 🔍 A La Carte")
         st.markdown("A La Carte workbooks")
         if st.button("🚀 Open A La Carte", key="a_la_carte_button", use_container_width=True):

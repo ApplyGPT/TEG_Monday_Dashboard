@@ -43,7 +43,6 @@ st.markdown("""
 }
 
 /* Show list items that contain allowed tool pages using :has() selector */
-[data-testid="stSidebarNav"] li:has(a[href*="quickbooks"]),
 [data-testid="stSidebarNav"] li:has(a[href*="signnow"]),
 [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
 [data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
@@ -57,7 +56,7 @@ st.markdown("""
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'a_la_carte'];
+        const allowedPages = ['signnow', 'tools', 'workbook', 'deck_creator', 'a_la_carte'];
         
         // Check if we're currently on an ads dashboard page
         const currentUrl = window.location.href.toLowerCase();
@@ -621,13 +620,33 @@ def main():
                         client_part = (client_name or '').replace(' ', '_')
                         date_part = (contract_date_str or '').replace(',', '').replace(' ', '_')
                         doc_name = f"{prefix}_{client_part}_{date_part}".strip('_')
+                        
+                        # Ensure API is authenticated to get user email (salesman email)
+                        if not signnow_api.access_token:
+                            if not signnow_api.authenticate():
+                                st.error("❌ Failed to authenticate with SignNow. Cannot proceed with two-party signing.")
+                                return
+                        
+                        # Get salesman email from authenticated SignNow account (logged-in user)
+                        salesman_email = signnow_api.user_email or credentials.get('username')
+                        
+                        # Extract name from email for "Confirmed By" field (e.g., "jennifer@example.com" -> "Jennifer")
+                        confirmed_by_name = None
+                        if salesman_email:
+                            name_part = salesman_email.split('@')[0]
+                            # Capitalize first letter
+                            confirmed_by_name = name_part.capitalize()
+                        
                         # Use DOCX merge path to preserve original images/logos/content
+                        # Two-party signing: Prospect signs first, then Salesman signs to confirm
                         ok, msg = signnow_api.create_and_send_merged_pair_docx(
                             pair_type=template_type,
                             contract_docx_path=preview_paths['contract'],
                             terms_docx_path=preview_paths['terms'],
                             document_name=doc_name,
-                            email=email,
+                            email=email,  # Prospect email (signs first)
+                            salesman_email=salesman_email,  # Salesman email (signs second)
+                            confirmed_by_name=confirmed_by_name,  # Name for "Confirmed By" field
                         )
                         if ok:
                             st.success(f"✅ {msg}")

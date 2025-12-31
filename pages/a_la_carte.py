@@ -3477,7 +3477,6 @@ def main() -> None:
     }
 
     /* Show list items that contain allowed tool pages using :has() selector */
-    [data-testid="stSidebarNav"] li:has(a[href*="quickbooks"]),
     [data-testid="stSidebarNav"] li:has(a[href*="signnow"]),
     [data-testid="stSidebarNav"] li:has(a[href*="/tools"]),
     [data-testid="stSidebarNav"] li:has(a[href*="workbook"]),
@@ -3492,7 +3491,7 @@ def main() -> None:
 (function() {
     function showToolPagesOnly() {
         const navItems = document.querySelectorAll('[data-testid="stSidebarNav"] li');
-        const allowedPages = ['quickbooks', 'signnow', 'tools', 'workbook', 'deck_creator', 'a_la_carte'];
+        const allowedPages = ['signnow', 'tools', 'workbook', 'deck_creator', 'a_la_carte'];
         
         // Check if we're currently on an ads dashboard page
         const currentUrl = window.location.href.toLowerCase();
