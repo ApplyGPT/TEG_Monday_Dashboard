@@ -7,6 +7,9 @@ import plotly.graph_objects as go
 import sys
 import json
 
+# Get current year dynamically
+CURRENT_YEAR = datetime.now().year
+
 # Add parent directory to path to import database_utils
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from database_utils import get_ads_data, get_sales_data, check_database_exists, get_new_leads_data, get_discovery_call_data, get_design_review_data
@@ -691,8 +694,8 @@ def calculate_roas(ads_df, sales_df):
         axis=1
     )
     
-    # Filter for 2025 only
-    roas_df = roas_df[roas_df['Month Year'].str.contains('2025', na=False)]
+    # Filter for current year only
+    roas_df = roas_df[roas_df['Month Year'].str.contains(str(CURRENT_YEAR), na=False)]
     
     # Sort by date
     roas_df['Date'] = pd.to_datetime(roas_df['Month Year'], errors='coerce')
@@ -744,12 +747,12 @@ def main():
         st.info("💡 **Tip**: Make sure your Monday.com boards have items and your API token has the correct permissions.")
     else:
         # ROAS Section
-        st.subheader("📈 Return on Ad Spend (ROAS) - 2025")
+        st.subheader(f"📈 Return on Ad Spend (ROAS) - {CURRENT_YEAR}")
         
         # Calculate ROAS
         roas_df = calculate_roas(ads_df, sales_df)
         
-        # Don't filter - show all months for 2025
+        # Don't filter - show all months for current year
         if not roas_df.empty:
             # Create ROAS chart - show all months
             fig_roas = px.bar(
@@ -785,14 +788,14 @@ def main():
             
             st.plotly_chart(fig_roas, use_container_width=True)
             
-            # Profit on Ads 2025 Graph (moved here)
-            st.subheader("📈 Profit on Ads 2025")
+            # Profit on Ads Graph (moved here)
+            st.subheader(f"📈 Profit on Ads {CURRENT_YEAR}")
             
             # Create separate ROAS data for profit chart (include ALL months, not just those with sales)
             roas_df_profit = calculate_roas(ads_df, sales_df)
             
             if not roas_df_profit.empty:
-                # Calculate profit (Revenue - Ad Spend) for 2025
+                # Calculate profit (Revenue - Ad Spend) for current year
                 roas_df_profit['Profit'] = roas_df_profit['Value'] - roas_df_profit['Google Adspend']
                 
                 # Create profit bar chart with solid colors
@@ -829,7 +832,7 @@ def main():
                 
                 st.plotly_chart(fig_profit, use_container_width=True)
             else:
-                st.info("No profit data available for 2025")
+                st.info(f"No profit data available for {CURRENT_YEAR}")
             
             # Detailed Sales Table Section
             st.subheader("🔍 Detailed Sales Analysis")
@@ -913,6 +916,9 @@ def main():
                         st.info(f"No Closed + Paid Search sales found for {selected_month}")
                 else:
                     st.info("No sales data available for detailed analysis")
+        else:
+            # Show message when there's no ROAS data for current year
+            st.info(f"No ROAS data available for {CURRENT_YEAR}. The ROAS, Profit, and Detailed Sales Analysis sections require data from both Ads and Sales boards for the current year.")
         
         
         # Original Ad Spend Section
@@ -930,8 +936,8 @@ def main():
                 
                 # Add "All Years" option
                 year_options = ["All Years"] + [str(year) for year in available_years]
-                # Set default to 2025 if available, otherwise "All Years"
-                default_index = year_options.index("2025") if "2025" in year_options else 0
+                # Set default to current year if available, otherwise "All Years"
+                default_index = year_options.index(str(CURRENT_YEAR)) if str(CURRENT_YEAR) in year_options else 0
                 selected_year = st.selectbox("Select Year:", year_options, index=default_index)
                 
                 # Filter data based on selected year
@@ -994,7 +1000,7 @@ def main():
 
     # UTM Data Section at the bottom
     st.markdown("---")
-    st.subheader("📊 UTM Data (Leads by Channel - 2025)")
+    st.subheader(f"📊 UTM Data (Leads by Channel - {CURRENT_YEAR})")
     
     # Get all leads data for UTM analysis
     with st.spinner("Loading UTM data..."):
@@ -1008,8 +1014,8 @@ def main():
         leads_df['date_created'] = pd.to_datetime(leads_df['date_created'], errors='coerce')
         leads_with_dates = leads_df.dropna(subset=['date_created'])
         
-        # Filter for 2025 data only
-        leads_with_dates = leads_with_dates[leads_with_dates['date_created'].dt.year == 2025]
+        # Filter for current year data only
+        leads_with_dates = leads_with_dates[leads_with_dates['date_created'].dt.year == CURRENT_YEAR]
         
         if not leads_with_dates.empty:
             # Add month-year column for grouping with proper formatting
@@ -1062,13 +1068,13 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
             
         else:
-            st.warning("No leads with valid creation dates found for 2025 UTM analysis.")
+            st.warning(f"No leads with valid creation dates found for {CURRENT_YEAR} UTM analysis.")
     else:
         st.warning("No leads data found for UTM analysis.")
 
     # UTM Data - Sales Board Section
     st.markdown("---")
-    st.subheader("📊 UTM Data - Sales Board (Leads by Channel - 2025)")
+    st.subheader(f"📊 UTM Data - Sales Board (Leads by Channel - {CURRENT_YEAR})")
     
     # Get sales board leads data for UTM analysis
     with st.spinner("Loading Sales Board UTM data..."):
@@ -1082,8 +1088,8 @@ def main():
         sales_leads_df['date_created'] = pd.to_datetime(sales_leads_df['date_created'], errors='coerce')
         sales_leads_with_dates = sales_leads_df.dropna(subset=['date_created'])
         
-        # Filter for 2025 data only
-        sales_leads_with_dates = sales_leads_with_dates[sales_leads_with_dates['date_created'].dt.year == 2025]
+        # Filter for current year data only
+        sales_leads_with_dates = sales_leads_with_dates[sales_leads_with_dates['date_created'].dt.year == CURRENT_YEAR]
         
         if not sales_leads_with_dates.empty:
             # Add month-year column for grouping with proper formatting
@@ -1136,7 +1142,7 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
             
         else:
-            st.warning("No Sales Board leads with valid creation dates found for 2025 UTM analysis.")
+            st.warning(f"No Sales Board leads with valid creation dates found for {CURRENT_YEAR} UTM analysis.")
     else:
         st.warning("No Sales Board leads data found for UTM analysis.")
 

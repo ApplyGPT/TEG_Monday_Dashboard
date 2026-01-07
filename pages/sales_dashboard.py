@@ -6,6 +6,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import sys
 
+# Get current year dynamically
+CURRENT_YEAR = datetime.now().year
+
 # Add parent directory to path to import database_utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database_utils import get_sales_data, check_database_exists, get_new_leads_data, get_discovery_call_data, get_design_review_data
@@ -266,10 +269,10 @@ def process_sales_data(data):
     final_mask = closed_status_mask & (contract_amount_mask | numbers3_mask | both_null_mask)
     df_filtered = df[final_mask].copy()
     
-    # Create a separate filter for 2025 data (for KPIs and comparison)
+    # Create a separate filter for current year data (for KPIs and comparison)
     df['Close Date'] = df['Close Date'].astype(str)
-    year_2025_mask = df['Close Date'].str.contains('2025', na=False)
-    df_2025 = df_filtered[year_2025_mask].copy()
+    year_current_mask = df['Close Date'].str.contains(str(CURRENT_YEAR), na=False)
+    df_current_year_filtered = df_filtered[year_current_mask].copy()
     
     # Extract year and month for filtered data
     df_filtered['Close Date'] = pd.to_datetime(df_filtered['Close Date'], errors='coerce')
@@ -277,17 +280,17 @@ def process_sales_data(data):
     df_filtered['Month'] = df_filtered['Close Date'].dt.month
     df_filtered['Month_Name'] = df_filtered['Close Date'].dt.strftime('%B')
     
-    # Show breakdown for 2025
-    with_2025 = df_2025[df_2025['Close Date'].astype(str).str.contains('2025', na=False)]
-    without_date = df_2025[df_2025['Close Date'].astype(str) == '']
+    # Show breakdown for current year
+    with_current_year = df_current_year_filtered[df_current_year_filtered['Close Date'].astype(str).str.contains(str(CURRENT_YEAR), na=False)]
+    without_date = df_current_year_filtered[df_current_year_filtered['Close Date'].astype(str) == '']
     
-    # Show expected values for comparison (2025 specific)
+    # Show expected values for comparison (current year specific)
     expected_sum = 2013315
     expected_count = 178
-    actual_sum = df_2025['Total Value'].sum()
-    actual_count = len(df_2025)
+    actual_sum = df_current_year_filtered['Total Value'].sum()
+    actual_count = len(df_current_year_filtered)
     
-    return df_filtered, df_2025
+    return df_filtered, df_current_year_filtered
 
 def main():
     """Main application function"""
@@ -316,7 +319,7 @@ def main():
     with st.spinner("Loading sales data from database..."):
         data = get_sales_data_from_db()
         
-        df_filtered, df_2025 = process_sales_data(data)
+        df_filtered, df_current_year_filtered = process_sales_data(data)
     
     if df_filtered.empty:
         st.warning("No closed sales records found. Please check your data and filters.")
@@ -330,19 +333,19 @@ def main():
     df_current_year = df_filtered[df_filtered['Year'] == current_year]
     df_current_month = df_filtered[(df_filtered['Year'] == current_year) & (df_filtered['Month'] == current_month)]
     
-    # Calculate KPIs based on 2025 data (the specific requirement)
-    if not df_2025.empty:
-        # YTD calculation for 2025 - use 2025 filtered data
-        sales_ytd = round(df_2025['Total Value'].sum(), 2)
+    # Calculate KPIs based on current year data (the specific requirement)
+    if not df_current_year_filtered.empty:
+        # YTD calculation for current year - use current year filtered data
+        sales_ytd = round(df_current_year_filtered['Total Value'].sum(), 2)
         
-        # MTD calculation for 2025 - current month
+        # MTD calculation for current year - current month
         current_month = datetime.now().month
-        df_2025['Close Date'] = pd.to_datetime(df_2025['Close Date'], errors='coerce')
-        mtd_mask = df_2025['Close Date'].dt.month == current_month
-        sales_mtd = df_2025[mtd_mask]['Total Value'].sum()
+        df_current_year_filtered['Close Date'] = pd.to_datetime(df_current_year_filtered['Close Date'], errors='coerce')
+        mtd_mask = df_current_year_filtered['Close Date'].dt.month == current_month
+        sales_mtd = df_current_year_filtered[mtd_mask]['Total Value'].sum()
         
-        # Average contract amount for 2025 - calculate from all 2025 records (including NaN/zero values)
-        avg_contract = df_2025['Total Value'].sum() / len(df_2025) if len(df_2025) > 0 else 0
+        # Average contract amount for current year - calculate from all current year records (including NaN/zero values)
+        avg_contract = df_current_year_filtered['Total Value'].sum() / len(df_current_year_filtered) if len(df_current_year_filtered) > 0 else 0
     
     else:
         sales_ytd = 0
@@ -440,22 +443,22 @@ def main():
     else:
         st.info(f"No sales data available for {current_month_name} {current_year}.")
     
-    # 1. Sales by Month (2025) - Contract Amount vs Amount Paid
-    st.subheader(f"Sales by Month (2025)")
-    if not df_2025.empty:
-        # Extract year and month for 2025 data
-        df_2025['Close Date'] = pd.to_datetime(df_2025['Close Date'], errors='coerce')
-        df_2025['Year'] = df_2025['Close Date'].dt.year
-        df_2025['Month'] = df_2025['Close Date'].dt.month
-        df_2025['Month_Name'] = df_2025['Close Date'].dt.strftime('%B')
+    # 1. Sales by Month (Current Year) - Contract Amount vs Amount Paid
+    st.subheader(f"Sales by Month ({CURRENT_YEAR})")
+    if not df_current_year_filtered.empty:
+        # Extract year and month for current year data
+        df_current_year_filtered['Close Date'] = pd.to_datetime(df_current_year_filtered['Close Date'], errors='coerce')
+        df_current_year_filtered['Year'] = df_current_year_filtered['Close Date'].dt.year
+        df_current_year_filtered['Month'] = df_current_year_filtered['Close Date'].dt.month
+        df_current_year_filtered['Month_Name'] = df_current_year_filtered['Close Date'].dt.strftime('%B')
         
         # Separate contract amounts and amounts paid
-        df_2025['Contract Amount'] = pd.to_numeric(df_2025['Contract Amount'], errors='coerce').fillna(0)
-        df_2025['Numbers3'] = pd.to_numeric(df_2025['Numbers3'], errors='coerce').fillna(0)
+        df_current_year_filtered['Contract Amount'] = pd.to_numeric(df_current_year_filtered['Contract Amount'], errors='coerce').fillna(0)
+        df_current_year_filtered['Numbers3'] = pd.to_numeric(df_current_year_filtered['Numbers3'], errors='coerce').fillna(0)
         
         # Group by month and sum both contract amounts and amounts paid
-        monthly_contract = df_2025.groupby(['Month', 'Month_Name'])['Contract Amount'].sum().reset_index()
-        monthly_paid = df_2025.groupby(['Month', 'Month_Name'])['Numbers3'].sum().reset_index()
+        monthly_contract = df_current_year_filtered.groupby(['Month', 'Month_Name'])['Contract Amount'].sum().reset_index()
+        monthly_paid = df_current_year_filtered.groupby(['Month', 'Month_Name'])['Numbers3'].sum().reset_index()
         
         # Merge the data
         monthly_sales = monthly_contract.merge(monthly_paid, on=['Month', 'Month_Name'], how='outer')
@@ -516,7 +519,7 @@ def main():
         )
         
         # Calculate average contract amount per month for display
-        monthly_avg = df_2025.groupby(['Month', 'Month_Name'])['Contract Amount'].mean().reset_index()
+        monthly_avg = df_current_year_filtered.groupby(['Month', 'Month_Name'])['Contract Amount'].mean().reset_index()
         monthly_avg = monthly_avg.sort_values('Month')
         
         # Add average contract amount text below each bar
@@ -533,7 +536,7 @@ def main():
         
         st.plotly_chart(fig_monthly, use_container_width=True)
     else:
-        st.info("No sales data available for 2025.")
+        st.info(f"No sales data available for {CURRENT_YEAR}.")
     
     # 2. Sales by Year (All Years)
     st.subheader("Sales by Year")
@@ -629,9 +632,9 @@ def main():
     # 4. Comparison of Revenue by Salesman by Month
     st.subheader("Comparison of Revenue by Salesman by Month")
     
-    # Year selector for salesman chart - default to 2025
+    # Year selector for salesman chart - default to current year
     available_years = sorted([int(year) for year in df_filtered['Year'].unique() if pd.notna(year)])
-    default_year_index = available_years.index(2025) if 2025 in available_years else 0
+    default_year_index = available_years.index(CURRENT_YEAR) if CURRENT_YEAR in available_years else 0
     selected_year_salesman = st.selectbox("Select Year for Salesman Analysis:", available_years, index=default_year_index, key="salesman_year")
     
     df_salesman_year = df_filtered[df_filtered['Year'] == selected_year_salesman]
@@ -715,9 +718,9 @@ def main():
     # 5. Comparison of Revenue by Type of Revenue by Month
     st.subheader("Comparison of Revenue by Type of Revenue by Month")
        
-    # Year selector for type of revenue chart - default to 2025
+    # Year selector for type of revenue chart - default to current year
     available_years_category = sorted([int(year) for year in df_filtered['Year'].unique() if pd.notna(year)])
-    default_year_index_category = available_years_category.index(2025) if 2025 in available_years_category else 0
+    default_year_index_category = available_years_category.index(CURRENT_YEAR) if CURRENT_YEAR in available_years_category else 0
     selected_year_category = st.selectbox("Select Year for Type of Revenue Analysis:", available_years_category, index=default_year_index_category, key="category_year")
     
     df_category_year = df_filtered[df_filtered['Year'] == selected_year_category]
@@ -885,9 +888,9 @@ def main():
         
         return sales_revenue_data
     
-    # Year selector for sales by source chart - default to 2025
+    # Year selector for sales by source chart - default to current year
     available_years_source = sorted([int(year) for year in df_filtered['Year'].unique() if pd.notna(year)])
-    default_year_index_source = available_years_source.index(2025) if 2025 in available_years_source else 0
+    default_year_index_source = available_years_source.index(CURRENT_YEAR) if CURRENT_YEAR in available_years_source else 0
     selected_year_source = st.selectbox("Select Year for Sales by Source Analysis:", available_years_source, index=default_year_index_source, key="source_year")
     
     # Get sales revenue data by source
@@ -991,9 +994,9 @@ def main():
         st.info("No sales revenue data found for source analysis.")
     
     # 7. Number of Deals Closed by Source (Frequency) - Based on UTM Data from Sales Board
-    st.subheader("Number of Deals Closed by Source")
+    st.subheader(f"Number of Deals Closed by Source ({selected_year_source})")
     
-    # Reuse the same year selector or create a new one (using same selected_year_source)
+    # Reuse the same year selector (using same selected_year_source)
     # Get sales revenue data by source (same data, but we'll count instead of sum)
     with st.spinner("Loading Number of Deals Closed by Source data..."):
         sales_revenue_data = get_sales_revenue_by_source()
@@ -1094,7 +1097,7 @@ def main():
         st.info("No deals data found for source analysis.")
     
     st.markdown("---")
-    st.subheader("Close Rate by Month - 2025")
+    st.subheader(f"Close Rate by Month - {CURRENT_YEAR}")
     
     with st.spinner("Loading leads data..."):
         all_leads = get_all_leads_for_sales_chart()
@@ -1114,7 +1117,7 @@ def main():
     if not sales_leads_df.empty:
         sales_leads_df['stage_date'] = pd.to_datetime(sales_leads_df['stage_date'], errors='coerce')
         sales_leads_df = sales_leads_df.dropna(subset=['stage_date'])
-        sales_leads_df = sales_leads_df[sales_leads_df['stage_date'].dt.year == 2025]
+        sales_leads_df = sales_leads_df[sales_leads_df['stage_date'].dt.year == CURRENT_YEAR]
         
         if not sales_leads_df.empty:
             if 'status' in sales_leads_df.columns:
@@ -1203,18 +1206,18 @@ def main():
             )
             st.plotly_chart(fig_close_rate, use_container_width=True)
         else:
-            st.info("No Sales board leads found for 2025 to calculate close rate.")
+            st.info(f"No Sales board leads found for {CURRENT_YEAR} to calculate close rate.")
     else:
         st.info("Close rate data is unavailable. Ensure there are Sales board leads for the selected period.")
     
     # Leads by Category Over Time Chart
     st.markdown("---")
-    st.subheader("Leads by Category Over Time - 2025")
+    st.subheader(f"Leads by Category Over Time - {CURRENT_YEAR}")
     
     # Leads by Category Over Time Chart reuses leads_with_dates (already loaded)
     if not leads_with_dates.empty:
-        # Filter for 2025 data only
-        leads_with_dates = leads_with_dates[leads_with_dates['stage_date'].dt.year == 2025]
+        # Filter for current year data only
+        leads_with_dates = leads_with_dates[leads_with_dates['stage_date'].dt.year == CURRENT_YEAR]
         
         if not leads_with_dates.empty:
             # Add month columns for grouping and ordering

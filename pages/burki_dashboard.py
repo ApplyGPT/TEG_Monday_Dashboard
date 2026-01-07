@@ -9,6 +9,9 @@ import os
 import sqlite3
 import calendar
 
+# Get current year dynamically
+CURRENT_YEAR = datetime.now().year
+
 # Page configuration
 st.set_page_config(
     page_title="Burki Dashboard",
@@ -183,9 +186,9 @@ def get_calendly_data():
     event_uri = selected_event.get('uri')
     event_name = selected_event.get('name')
     
-    # Get scheduled events with pagination to get ALL events
-    min_start_time = "2025-01-01T00:00:00.000000Z"
-    max_start_time = "2025-10-23T23:59:59.999999Z"
+    # Get scheduled events with pagination to get ALL events for current year
+    min_start_time = f"{CURRENT_YEAR}-01-01T00:00:00.000000Z"
+    max_start_time = f"{CURRENT_YEAR}-12-31T23:59:59.999999Z"
     
     all_events = []
     next_page_token = None
@@ -574,11 +577,11 @@ def main():
             
             # Skip event information section
             
-            # Filter for 2025 data
-            df_2025 = df[df['year'] == 2025].copy()
+            # Filter for current year data
+            df_current_year = df[df['year'] == CURRENT_YEAR].copy()
             
-            if df_2025.empty:
-                st.warning("No events found for 2025.")
+            if df_current_year.empty:
+                st.warning(f"No events found for {CURRENT_YEAR}.")
                 return
             
             # Charts section
@@ -589,21 +592,21 @@ def main():
             
             with tab1:
                 # Display two-week daily view graph
-                two_week_fig = create_two_week_daily_chart(df_2025)
+                two_week_fig = create_two_week_daily_chart(df_current_year)
                 if two_week_fig:
                     st.plotly_chart(two_week_fig, use_container_width=True)
                 else:
                     st.info("No calls scheduled in the past two weeks")
             
             with tab2:
-                weekly_fig = create_weekly_chart(df_2025)
+                weekly_fig = create_weekly_chart(df_current_year)
                 if weekly_fig:
                     st.plotly_chart(weekly_fig, use_container_width=True)
                 else:
                     st.info("No weekly data available")
             
             with tab3:
-                monthly_fig = create_monthly_chart(df_2025)
+                monthly_fig = create_monthly_chart(df_current_year)
                 if monthly_fig:
                     st.plotly_chart(monthly_fig, use_container_width=True)
                 else:
