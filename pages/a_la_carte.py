@@ -2011,11 +2011,12 @@ def apply_ala_carte_package(
     col_u = column_index_from_string("U") if column_index_from_string else 21  # TREATMENT
     col_v = column_index_from_string("V") if column_index_from_string else 22  # TOTAL
     
-    # Rate cells in deliverables section
-    # Note: "STANDARD RATE ($/HR):" label is in B35:E36, value is in F35:F36
-    # "DUPLICATES RATE ($/HR):" label is in B37:E38, value is in F37:F38
-    rate_standard_row = 35
-    rate_duplicates_row = 37
+    # Rate cells in deliverables section (dynamic based on rows_to_insert)
+    # Note: "STANDARD RATE ($/HR):" label is in B35:E36, value is in F35:F36 (base position)
+    # "DUPLICATES RATE ($/HR):" label is in B37:E38, value is in F37:F38 (base position)
+    # When rows are inserted, these move down by rows_to_insert
+    rate_standard_row = 35 + rows_to_insert  # Dynamic: moves down when rows are inserted
+    rate_duplicates_row = 37 + rows_to_insert  # Dynamic: moves down when rows are inserted
     rate_col = column_index_from_string("F") if column_index_from_string else 6  # Rates are now in column F
     
     quantity_sum = 0  # Sum of all quantities for deliverables section
