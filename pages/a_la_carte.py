@@ -1914,12 +1914,12 @@ def apply_ala_carte_package(
     if num_items > 5:
         rows_to_insert = (num_items - 5) * 2  # Each item uses 2 rows
     
-    # Capture the B20:Q36 block before inserting rows (totals + deliverables)
+    # Capture the B20:V40 block before inserting rows (totals + deliverables + rates)
     # This preserves all merges and formatting
     ala_carte_block_start = 20
-    ala_carte_block_end = 36
+    ala_carte_block_end = 40  # Extended to include rates section
     ala_carte_block_col_start = 2  # Column B
-    ala_carte_block_col_end = 17   # Column Q
+    ala_carte_block_col_end = 22   # Column V (was U)
     
     ala_carte_block_template = None
     if rows_to_insert > 0:
@@ -1979,26 +1979,46 @@ def apply_ala_carte_package(
     # A La Carte items start at row 10, each item uses 2 rows (merged)
     start_row = 10
     
-    # Column indices
+    # Column indices - NEW STRUCTURE:
+    # D: INTAKE HOURS, E: INTAKE TOTAL
+    # F: 1ST PATTERN HOURS, G: 1ST PATTERN TOTAL
+    # H: 1ST SAMPLE HOURS, I: 1ST SAMPLE TOTAL
+    # J: FITTING HOURS, K: FITTING TOTAL
+    # L: ADJUSTMENT HOURS
+    # M: QUANTITY
+    # N: DUPLICATES HOURS, O: DUPLICATES TOTAL
+    # P: TOTAL
+    # Q: WASH/DYE, R: DESIGN, S: SOURCING, T: TREATMENT, U: TOTAL
     col_b = column_index_from_string("B") if column_index_from_string else 2
     col_c = column_index_from_string("C") if column_index_from_string else 3
-    col_d = column_index_from_string("D") if column_index_from_string else 4
-    col_e = column_index_from_string("E") if column_index_from_string else 5
-    col_f = column_index_from_string("F") if column_index_from_string else 6
-    col_g = column_index_from_string("G") if column_index_from_string else 7
-    col_h = column_index_from_string("H") if column_index_from_string else 8
-    col_i = column_index_from_string("I") if column_index_from_string else 9
-    col_j = column_index_from_string("J") if column_index_from_string else 10
-    col_k = column_index_from_string("K") if column_index_from_string else 11
-    col_m = column_index_from_string("M") if column_index_from_string else 13
-    col_n = column_index_from_string("N") if column_index_from_string else 14
-    col_o = column_index_from_string("O") if column_index_from_string else 15
-    col_p = column_index_from_string("P") if column_index_from_string else 16
-    col_q = column_index_from_string("Q") if column_index_from_string else 17
+    col_d = column_index_from_string("D") if column_index_from_string else 4  # INTAKE HOURS
+    col_e = column_index_from_string("E") if column_index_from_string else 5  # INTAKE TOTAL
+    col_f = column_index_from_string("F") if column_index_from_string else 6  # 1ST PATTERN HOURS
+    col_g = column_index_from_string("G") if column_index_from_string else 7  # 1ST PATTERN TOTAL
+    col_h = column_index_from_string("H") if column_index_from_string else 8  # 1ST SAMPLE HOURS
+    col_i = column_index_from_string("I") if column_index_from_string else 9  # 1ST SAMPLE TOTAL
+    col_j = column_index_from_string("J") if column_index_from_string else 10  # FITTING HOURS
+    col_k = column_index_from_string("K") if column_index_from_string else 11  # FITTING TOTAL
+    col_l = column_index_from_string("L") if column_index_from_string else 12  # ADJUSTMENT HOURS
+    col_m = column_index_from_string("M") if column_index_from_string else 13  # QUANTITY
+    col_n = column_index_from_string("N") if column_index_from_string else 14  # DUPLICATES HOURS
+    col_o = column_index_from_string("O") if column_index_from_string else 15  # DUPLICATES TOTAL
+    col_p = column_index_from_string("P") if column_index_from_string else 16  # TOTAL
+    # Column Q (17) is empty/spacer - not used
+    col_r = column_index_from_string("R") if column_index_from_string else 18  # WASH/DYE
+    col_s = column_index_from_string("S") if column_index_from_string else 19  # DESIGN
+    col_t = column_index_from_string("T") if column_index_from_string else 20  # SOURCING
+    col_u = column_index_from_string("U") if column_index_from_string else 21  # TREATMENT
+    col_v = column_index_from_string("V") if column_index_from_string else 22  # TOTAL
     
-    first_sample_totals_sum = 0.0  # Use float to ensure proper division
-    quantity_sum = 0
-    derived_rows: list[dict] = []
+    # Rate cells in deliverables section
+    # Note: "STANDARD RATE ($/HR):" label is in B35:E36, value is in F35:F36
+    # "DUPLICATES RATE ($/HR):" label is in B37:E38, value is in F37:F38
+    rate_standard_row = 35
+    rate_duplicates_row = 37
+    rate_col = column_index_from_string("F") if column_index_from_string else 6  # Rates are now in column F
+    
+    quantity_sum = 0  # Sum of all quantities for deliverables section
     
     for i, item in enumerate(a_la_carte_items):
         # Each entry uses two rows, similar to style rows (10-11, 12-13, ...)
@@ -2020,267 +2040,214 @@ def apply_ala_carte_package(
         apply_full_border_pair(ws, col_c, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_c)}{row}:{get_column_letter(col_c)}{row_second}")
         
-        # INTAKE - column D (hours * $190) - format as "$380 (2h)" or "$475 (2.5h)"
+        # INTAKE HOURS - column D
         intake_hours = float(item.get("intake_session", 0))
-        intake_price = round(intake_hours * A_LA_CARTE_RATE_STANDARD)
-        if intake_hours > 0:
-            # Format hours: remove .0 if whole number, otherwise show decimal
-            hours_str = f"{intake_hours:.2f}".rstrip('0').rstrip('.')
-            intake_value = f"${intake_price:,} ({hours_str}h)"
-        else:
-            intake_value = None  # Leave blank if 0
-        safe_set_cell_value(ws, f"{get_column_letter(col_d)}{row}", intake_value)
+        safe_set_cell_value(ws, f"{get_column_letter(col_d)}{row}", intake_hours if intake_hours > 0 else None)
         cell_d = ws.cell(row=row, column=col_d)
-        cell_d.number_format = '@'  # Text format
+        cell_d.number_format = "0.00" if intake_hours > 0 and intake_hours != int(intake_hours) else "0"
         apply_font_20(cell_d)
         apply_full_border_pair(ws, col_d, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_d)}{row}:{get_column_letter(col_d)}{row_second}")
         
-        # 1ST PATTERN - column E
-        pattern_hours = float(item.get("first_pattern", 0))
-        pattern_price = round(pattern_hours * A_LA_CARTE_RATE_STANDARD)
-        if pattern_hours > 0:
-            # Format hours: remove .0 if whole number, otherwise show decimal
-            hours_str = f"{pattern_hours:.2f}".rstrip('0').rstrip('.')
-            pattern_value = f"${pattern_price:,} ({hours_str}h)"
+        # INTAKE TOTAL - column E (formula: hours * rate)
+        if intake_hours > 0:
+            safe_set_cell_value(ws, f"{get_column_letter(col_e)}{row}", f"=D{row}*${get_column_letter(rate_col)}${rate_standard_row}")
         else:
-            pattern_value = None  # Leave blank if 0
-        safe_set_cell_value(ws, f"{get_column_letter(col_e)}{row}", pattern_value)
+            safe_set_cell_value(ws, f"{get_column_letter(col_e)}{row}", None)
         cell_e = ws.cell(row=row, column=col_e)
-        cell_e.number_format = '@'
+        cell_e.number_format = '$#,##0'
         apply_font_20(cell_e)
         apply_full_border_pair(ws, col_e, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_e)}{row}:{get_column_letter(col_e)}{row_second}")
         
-        # 1ST SAMPLE - column F
-        sample_hours = float(item.get("first_sample", 0))
-        sample_price = round(sample_hours * A_LA_CARTE_RATE_STANDARD)
-        if sample_hours > 0:
-            # Format hours: remove .0 if whole number, otherwise show decimal
-            hours_str = f"{sample_hours:.2f}".rstrip('0').rstrip('.')
-            sample_value = f"${sample_price:,} ({hours_str}h)"
-        else:
-            sample_value = None  # Leave blank if 0
-        safe_set_cell_value(ws, f"{get_column_letter(col_f)}{row}", sample_value)
+        # 1ST PATTERN HOURS - column F
+        pattern_hours = float(item.get("first_pattern", 0))
+        safe_set_cell_value(ws, f"{get_column_letter(col_f)}{row}", pattern_hours if pattern_hours > 0 else None)
         cell_f = ws.cell(row=row, column=col_f)
-        cell_f.number_format = '@'
+        cell_f.number_format = "0.00" if pattern_hours > 0 and pattern_hours != int(pattern_hours) else "0"
         apply_font_20(cell_f)
         apply_full_border_pair(ws, col_f, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_f)}{row}:{get_column_letter(col_f)}{row_second}")
         
-        # FITTING - column G
-        fitting_hours = float(item.get("fitting", 0))
-        fitting_price = round(fitting_hours * A_LA_CARTE_RATE_STANDARD)
-        if fitting_hours > 0:
-            # Format hours: remove .0 if whole number, otherwise show decimal
-            hours_str = f"{fitting_hours:.2f}".rstrip('0').rstrip('.')
-            fitting_value = f"${fitting_price:,} ({hours_str}h)"
+        # 1ST PATTERN TOTAL - column G (formula: hours * rate)
+        if pattern_hours > 0:
+            safe_set_cell_value(ws, f"{get_column_letter(col_g)}{row}", f"=F{row}*${get_column_letter(rate_col)}${rate_standard_row}")
         else:
-            fitting_value = None  # Leave blank if 0
-        safe_set_cell_value(ws, f"{get_column_letter(col_g)}{row}", fitting_value)
+            safe_set_cell_value(ws, f"{get_column_letter(col_g)}{row}", None)
         cell_g = ws.cell(row=row, column=col_g)
-        cell_g.number_format = '@'
+        cell_g.number_format = '$#,##0'
         apply_font_20(cell_g)
         apply_full_border_pair(ws, col_g, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_g)}{row}:{get_column_letter(col_g)}{row_second}")
         
-        # ADJUSTMENT - column H
-        adjustment_hours = float(item.get("adjustment", 0))
-        adjustment_price = round(adjustment_hours * A_LA_CARTE_RATE_STANDARD)
-        if adjustment_hours > 0:
-            # Format hours: remove .0 if whole number, otherwise show decimal
-            hours_str = f"{adjustment_hours:.2f}".rstrip('0').rstrip('.')
-            adjustment_value = f"${adjustment_price:,} ({hours_str}h)"
-        else:
-            adjustment_value = None  # Leave blank if 0
-        safe_set_cell_value(ws, f"{get_column_letter(col_h)}{row}", adjustment_value)
+        # 1ST SAMPLE HOURS - column H
+        sample_hours = float(item.get("first_sample", 0))
+        safe_set_cell_value(ws, f"{get_column_letter(col_h)}{row}", sample_hours if sample_hours > 0 else None)
         cell_h = ws.cell(row=row, column=col_h)
-        cell_h.number_format = '@'
+        cell_h.number_format = "0.00" if sample_hours > 0 and sample_hours != int(sample_hours) else "0"
         apply_font_20(cell_h)
         apply_full_border_pair(ws, col_h, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_h)}{row}:{get_column_letter(col_h)}{row_second}")
         
-        # Track First Sample totals and quantities for Final Sample/Duplicates formula
-        first_sample_hours = sample_hours
-        first_sample_price = sample_price
-        quantity_val = int(item.get("quantity", 1))
-        first_sample_totals_sum += first_sample_price
-        quantity_sum += quantity_val
-        
-        # FINAL SAMPLES - column I (derived later)
-        final_samples_hours = first_sample_hours  # Always mirror First Sample hours
-        safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", None)
+        # 1ST SAMPLE TOTAL - column I (formula: hours * rate)
+        if sample_hours > 0:
+            safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", f"=H{row}*${get_column_letter(rate_col)}${rate_standard_row}")
+        else:
+            safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", None)
         cell_i = ws.cell(row=row, column=col_i)
-        cell_i.number_format = '@'
+        cell_i.number_format = '$#,##0'
         apply_font_20(cell_i)
         apply_full_border_pair(ws, col_i, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_i)}{row}:{get_column_letter(col_i)}{row_second}")
         
-        # DUPLICATES - column J (derived later)
-        duplicates_hours = float(item.get("duplicates", 0))
-        safe_set_cell_value(ws, f"{get_column_letter(col_j)}{row}", None)
+        # FITTING HOURS - column J
+        fitting_hours = float(item.get("fitting", 0))
+        safe_set_cell_value(ws, f"{get_column_letter(col_j)}{row}", fitting_hours if fitting_hours > 0 else None)
         cell_j = ws.cell(row=row, column=col_j)
-        cell_j.number_format = '@'
+        cell_j.number_format = "0.00" if fitting_hours > 0 and fitting_hours != int(fitting_hours) else "0"
         apply_font_20(cell_j)
         apply_full_border_pair(ws, col_j, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_j)}{row}:{get_column_letter(col_j)}{row_second}")
         
-        # TOTAL - column K (placeholder; updated after derived values are computed)
-        base_total = intake_price + pattern_price + sample_price + fitting_price + adjustment_price
-        safe_set_cell_value(ws, f"{get_column_letter(col_k)}{row}", base_total)
+        # FITTING TOTAL - column K (formula: hours * rate)
+        if fitting_hours > 0:
+            safe_set_cell_value(ws, f"{get_column_letter(col_k)}{row}", f"=J{row}*${get_column_letter(rate_col)}${rate_standard_row}")
+        else:
+            safe_set_cell_value(ws, f"{get_column_letter(col_k)}{row}", None)
         cell_k = ws.cell(row=row, column=col_k)
-        cell_k.number_format = '$#,##0'  # Currency format
+        cell_k.number_format = '$#,##0'
         apply_font_20(cell_k)
         apply_full_border_pair(ws, col_k, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_k)}{row}:{get_column_letter(col_k)}{row_second}")
-        total_ala_carte += base_total
         
-        derived_rows.append({
-            "row": row,
-            "row_second": row_second,
-            "quantity": quantity_val,
-            "final_samples_hours": final_samples_hours,
-            "duplicates_hours": duplicates_hours,
-            "base_total": base_total,
-            "cell_i": cell_i,
-            "cell_j": cell_j,
-            "cell_k": cell_k,
-        })
+        # ADJUSTMENT HOURS - column L
+        adjustment_hours = float(item.get("adjustment", 0))
+        safe_set_cell_value(ws, f"{get_column_letter(col_l)}{row}", adjustment_hours if adjustment_hours > 0 else None)
+        cell_l = ws.cell(row=row, column=col_l)
+        cell_l.number_format = "0.00" if adjustment_hours > 0 and adjustment_hours != int(adjustment_hours) else "0"
+        apply_font_20(cell_l)
+        apply_full_border_pair(ws, col_l, row, row_second)
+        safe_merge_cells(ws, f"{get_column_letter(col_l)}{row}:{get_column_letter(col_l)}{row_second}")
         
-        # Optional Add-ons for A La Carte (columns M-Q)
-        # M: WASH/DYE, N: DESIGN, O: SOURCING, P: TREATMENT, Q: TOTAL
-        row_options = item.get("options", {})
-        
-        # WASH/DYE - column M (leave blank if $0)
-        wash_dye_price = OPTIONAL_PRICES["wash_dye"] if row_options.get("wash_dye", False) else 0
-        if wash_dye_price > 0:
-            safe_set_cell_value(ws, f"{get_column_letter(col_m)}{row}", wash_dye_price)
-        else:
-            safe_set_cell_value(ws, f"{get_column_letter(col_m)}{row}", None)  # Leave blank if $0
-        cell_m = ws.cell(row=row, column=col_m)
-        cell_m.number_format = '$#,##0'
-        apply_font_20(cell_m)
+        # QUANTITY - column M
+        quantity_val = int(item.get("quantity", 1))
+        safe_set_cell_value(ws, f"{get_column_letter(col_m)}{row}", quantity_val if quantity_val > 0 else None)
+        cell_m_qty = ws.cell(row=row, column=col_m)
+        cell_m_qty.number_format = "0"
+        apply_font_20(cell_m_qty)
         apply_full_border_pair(ws, col_m, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_m)}{row}:{get_column_letter(col_m)}{row_second}")
+        quantity_sum += quantity_val
         
-        # DESIGN - column N (leave blank if $0)
-        design_price = OPTIONAL_PRICES["design"] if row_options.get("design", False) else 0
-        if design_price > 0:
-            safe_set_cell_value(ws, f"{get_column_letter(col_n)}{row}", design_price)
-        else:
-            safe_set_cell_value(ws, f"{get_column_letter(col_n)}{row}", None)  # Leave blank if $0
+        # DUPLICATES HOURS - column N
+        duplicates_hours = float(item.get("duplicates", 0))
+        safe_set_cell_value(ws, f"{get_column_letter(col_n)}{row}", duplicates_hours if duplicates_hours > 0 else None)
         cell_n = ws.cell(row=row, column=col_n)
-        cell_n.number_format = '$#,##0'
+        cell_n.number_format = "0.00" if duplicates_hours > 0 and duplicates_hours != int(duplicates_hours) else "0"
         apply_font_20(cell_n)
         apply_full_border_pair(ws, col_n, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_n)}{row}:{get_column_letter(col_n)}{row_second}")
         
-        # SOURCING - column O (leave blank if $0)
-        source_price = OPTIONAL_PRICES["source"] if row_options.get("source", False) else 0
-        if source_price > 0:
-            safe_set_cell_value(ws, f"{get_column_letter(col_o)}{row}", source_price)
+        # DUPLICATES TOTAL - column O (formula: hours * quantity * duplicates_rate)
+        if duplicates_hours > 0 and quantity_val > 0:
+            safe_set_cell_value(ws, f"{get_column_letter(col_o)}{row}", f"=N{row}*M{row}*${get_column_letter(rate_col)}${rate_duplicates_row}")
         else:
-            safe_set_cell_value(ws, f"{get_column_letter(col_o)}{row}", None)  # Leave blank if $0
+            safe_set_cell_value(ws, f"{get_column_letter(col_o)}{row}", None)
         cell_o = ws.cell(row=row, column=col_o)
         cell_o.number_format = '$#,##0'
         apply_font_20(cell_o)
         apply_full_border_pair(ws, col_o, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_o)}{row}:{get_column_letter(col_o)}{row_second}")
         
-        # TREATMENT - column P (leave blank if $0)
-        treatment_price = OPTIONAL_PRICES["treatment"] if row_options.get("treatment", False) else 0
-        if treatment_price > 0:
-            safe_set_cell_value(ws, f"{get_column_letter(col_p)}{row}", treatment_price)
-        else:
-            safe_set_cell_value(ws, f"{get_column_letter(col_p)}{row}", None)  # Leave blank if $0
+        # TOTAL - column P (formula: sum of all totals)
+        # Formula: =E{row}+G{row}+I{row}+K{row}+O{row} (INTAKE + PATTERN + SAMPLE + FITTING + DUPLICATES)
+        # Note: ADJUSTMENT doesn't have a total column, it's just hours
+        safe_set_cell_value(ws, f"{get_column_letter(col_p)}{row}", f"=E{row}+G{row}+I{row}+K{row}+O{row}")
         cell_p = ws.cell(row=row, column=col_p)
         cell_p.number_format = '$#,##0'
         apply_font_20(cell_p)
         apply_full_border_pair(ws, col_p, row, row_second)
         safe_merge_cells(ws, f"{get_column_letter(col_p)}{row}:{get_column_letter(col_p)}{row_second}")
         
-        # TOTAL - column Q (sum of optional add-ons, leave blank if $0)
-        optional_total = wash_dye_price + design_price + source_price + treatment_price
-        if optional_total > 0:
-            safe_set_cell_value(ws, f"{get_column_letter(col_q)}{row}", optional_total)
+        # Calculate total for tracking (for grand total calculation)
+        # We'll read the calculated values from Excel formulas, but for now track manually
+        intake_price = intake_hours * 190 if intake_hours > 0 else 0  # Default rate for calculation
+        pattern_price = pattern_hours * 190 if pattern_hours > 0 else 0
+        sample_price = sample_hours * 190 if sample_hours > 0 else 0
+        fitting_price = fitting_hours * 190 if fitting_hours > 0 else 0
+        duplicates_price = duplicates_hours * quantity_val * 90 if (duplicates_hours > 0 and quantity_val > 0) else 0
+        item_total = intake_price + pattern_price + sample_price + fitting_price + duplicates_price
+        total_ala_carte += item_total
+        
+        # Optional Add-ons for A La Carte (columns R-V)
+        # R: WASH/DYE, S: DESIGN, T: SOURCING, U: TREATMENT, V: TOTAL
+        row_options = item.get("options", {})
+        
+        # WASH/DYE - column R (leave blank if $0)
+        wash_dye_price = OPTIONAL_PRICES["wash_dye"] if row_options.get("wash_dye", False) else 0
+        if wash_dye_price > 0:
+            safe_set_cell_value(ws, f"{get_column_letter(col_r)}{row}", wash_dye_price)
         else:
-            safe_set_cell_value(ws, f"{get_column_letter(col_q)}{row}", None)  # Leave blank if $0
-        cell_q = ws.cell(row=row, column=col_q)
-        cell_q.number_format = '$#,##0'
-        apply_font_20(cell_q)
-        apply_full_border_pair(ws, col_q, row, row_second)
-        safe_merge_cells(ws, f"{get_column_letter(col_q)}{row}:{get_column_letter(col_q)}{row_second}")
-        total_optional_ala_carte += optional_total
+            safe_set_cell_value(ws, f"{get_column_letter(col_r)}{row}", None)  # Leave blank if $0
+        cell_r_opt = ws.cell(row=row, column=col_r)
+        cell_r_opt.number_format = '$#,##0'
+        apply_font_20(cell_r_opt)
+        apply_full_border_pair(ws, col_r, row, row_second)
+        safe_merge_cells(ws, f"{get_column_letter(col_r)}{row}:{get_column_letter(col_r)}{row_second}")
+        
+        # DESIGN - column S (leave blank if $0)
+        design_price = OPTIONAL_PRICES["design"] if row_options.get("design", False) else 0
+        if design_price > 0:
+            safe_set_cell_value(ws, f"{get_column_letter(col_s)}{row}", design_price)
+        else:
+            safe_set_cell_value(ws, f"{get_column_letter(col_s)}{row}", None)  # Leave blank if $0
+        cell_s = ws.cell(row=row, column=col_s)
+        cell_s.number_format = '$#,##0'
+        apply_font_20(cell_s)
+        apply_full_border_pair(ws, col_s, row, row_second)
+        safe_merge_cells(ws, f"{get_column_letter(col_s)}{row}:{get_column_letter(col_s)}{row_second}")
+        
+        # SOURCING - column T (leave blank if $0)
+        source_price = OPTIONAL_PRICES["source"] if row_options.get("source", False) else 0
+        if source_price > 0:
+            safe_set_cell_value(ws, f"{get_column_letter(col_t)}{row}", source_price)
+        else:
+            safe_set_cell_value(ws, f"{get_column_letter(col_t)}{row}", None)  # Leave blank if $0
+        cell_t_opt = ws.cell(row=row, column=col_t)
+        cell_t_opt.number_format = '$#,##0'
+        apply_font_20(cell_t_opt)
+        apply_full_border_pair(ws, col_t, row, row_second)
+        safe_merge_cells(ws, f"{get_column_letter(col_t)}{row}:{get_column_letter(col_t)}{row_second}")
+        
+        # TREATMENT - column U (leave blank if $0)
+        treatment_price = OPTIONAL_PRICES["treatment"] if row_options.get("treatment", False) else 0
+        if treatment_price > 0:
+            safe_set_cell_value(ws, f"{get_column_letter(col_u)}{row}", treatment_price)
+        else:
+            safe_set_cell_value(ws, f"{get_column_letter(col_u)}{row}", None)  # Leave blank if $0
+        cell_u_opt = ws.cell(row=row, column=col_u)
+        cell_u_opt.number_format = '$#,##0'
+        apply_font_20(cell_u_opt)
+        apply_full_border_pair(ws, col_u, row, row_second)
+        safe_merge_cells(ws, f"{get_column_letter(col_u)}{row}:{get_column_letter(col_u)}{row_second}")
+        
+        # TOTAL - column V (formula: sum of optional add-ons)
+        safe_set_cell_value(ws, f"{get_column_letter(col_v)}{row}", f"=R{row}+S{row}+T{row}+U{row}")
+        cell_v = ws.cell(row=row, column=col_v)
+        cell_v.number_format = '$#,##0'
+        apply_font_20(cell_v)
+        apply_full_border_pair(ws, col_v, row, row_second)
+        safe_merge_cells(ws, f"{get_column_letter(col_v)}{row}:{get_column_letter(col_v)}{row_second}")
+        total_optional_ala_carte += wash_dye_price + design_price + source_price + treatment_price
         
         # Apply center alignment to all cells
         if Alignment is not None:
-            cells_to_align = [cell_b, cell_c, cell_d, cell_e, cell_f, cell_g, cell_h, cell_i, cell_j, cell_k,
-                             cell_m, cell_n, cell_o, cell_p, cell_q]
+            cells_to_align = [cell_b, cell_c, cell_d, cell_e, cell_f, cell_g, cell_h, cell_i, cell_j, cell_k, cell_l,
+                             cell_m_qty, cell_n, cell_o, cell_p, cell_r_opt, cell_s, cell_t_opt, cell_u_opt, cell_v]
             for cell in cells_to_align:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
     
-    # Apply derived Final Samples / Duplicates using aggregated formula
-    # Formula: per_unit = (Sum of First Sample Dollar Amounts) / (Sum of Total Quantity)
-    # Example: If Style A is $190 (Qty 7) and Style B is $190 (Qty 7), 
-    #          per_unit = (190 + 190) / (7 + 7) = 380 / 14 = 27.14
-    derived_total_increment = 0
-    if quantity_sum > 0:
-        per_unit = first_sample_totals_sum / quantity_sum
-    else:
-        per_unit = 0
-    
-    # Debug: Verify calculation
-    # print(f"DEBUG: first_sample_totals_sum={first_sample_totals_sum}, quantity_sum={quantity_sum}, per_unit={per_unit:.6f}")
-    
-    for info in derived_rows:
-        row = info["row"]
-        quantity_val = info["quantity"]
-        final_hours = info["final_samples_hours"]
-        dup_hours = info["duplicates_hours"]
-        cell_i = info["cell_i"]
-        cell_j = info["cell_j"]
-        cell_k = info["cell_k"]
-        
-        # Final Sample value = per_unit * quantity
-        # Use exact calculation without intermediate rounding to avoid precision issues
-        final_price_exact = per_unit * quantity_val if quantity_val > 0 else 0
-        final_price = round(final_price_exact)
-        
-        # Duplicates value = per_unit * quantity * duplicates_hours
-        # Use exact calculation without intermediate rounding to avoid precision issues
-        duplicates_price_exact = per_unit * quantity_val * dup_hours if (quantity_val > 0 and dup_hours > 0) else 0
-        duplicates_price = round(duplicates_price_exact)
-        
-        # Debug: Verify each item calculation
-        # print(f"DEBUG: Row {row}, Qty={quantity_val}, Final hours={final_hours}, Dup hours={dup_hours}")
-        # print(f"DEBUG: Final price: {per_unit:.6f} * {quantity_val} = {final_price_exact:.6f} -> ${final_price}")
-        # print(f"DEBUG: Duplicates price: {per_unit:.6f} * {quantity_val} * {dup_hours} = {duplicates_price_exact:.6f} -> ${duplicates_price}")
-        
-        # Write Final Samples value
-        if final_price > 0:
-            hours_str = f"{final_hours:.2f}".rstrip('0').rstrip('.')
-            final_value = f"${final_price:,} ({hours_str}h)"
-            safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", final_value)
-        else:
-            safe_set_cell_value(ws, f"{get_column_letter(col_i)}{row}", None)
-        cell_i.number_format = '@'
-        
-        # Write Duplicates value
-        if duplicates_price > 0:
-            hours_str_dup = f"{dup_hours:.2f}".rstrip('0').rstrip('.')
-            dup_value = f"${duplicates_price:,} ({hours_str_dup}h)"
-            safe_set_cell_value(ws, f"{get_column_letter(col_j)}{row}", dup_value)
-        else:
-            safe_set_cell_value(ws, f"{get_column_letter(col_j)}{row}", None)
-        cell_j.number_format = '@'
-        
-        # Update total services
-        total_services = info["base_total"] + final_price + duplicates_price
-        safe_set_cell_value(ws, f"{get_column_letter(col_k)}{row}", total_services)
-        cell_k.number_format = '$#,##0'
-        derived_total_increment += final_price + duplicates_price
-    
-    total_ala_carte += derived_total_increment
+    # No derived calculations needed - all totals are now formulas in Excel
     
     # Clear unused rows (template has 5 rows: 10, 12, 14, 16, 18)
     # Only clear if we have 5 or fewer items (if more than 5, we've already inserted rows)
@@ -2296,8 +2263,8 @@ def apply_ala_carte_package(
     
     for clear_row in rows_to_clear:
         clear_row_second = clear_row + 1
-        # Clear all columns B through Q
-        for col_letter in ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "M", "N", "O", "P", "Q"]:
+        # Clear all columns B through V
+        for col_letter in ["B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V"]:
             col_idx = column_index_from_string(col_letter) if column_index_from_string else None
             if col_idx:
                 # Unmerge if needed
@@ -2360,22 +2327,24 @@ def apply_ala_carte_package(
                     coord = f"{get_column_letter(target_col)}{target_row}"
                 value = cell_data.get("value") if cell_data else None
                 
-                # Skip formulas in totals row (columns K and Q) - we'll update them after
-                # col_k = 11, col_q = 17
-                # Also skip formulas in column O (15) for deliverables section - we'll update them after
-                col_o = 15
-                is_deliverables_section = (target_row >= 22 + rows_to_insert and target_row <= 36 + rows_to_insert)
+                # Skip formulas in totals row (columns P and V) - we'll update them after
+                # col_p = 16, col_v = 22
+                # Also skip formulas in column T (20) for deliverables section - we'll update them after
+                col_p_check = 16
+                col_v_check = 22
+                col_t_deliverables = 20
+                is_deliverables_section = (target_row >= 22 + rows_to_insert and target_row <= 40 + rows_to_insert)
                 
-                if is_totals_row and target_col == col_k:
-                    # Don't restore the formula value for column K, just formatting
+                if is_totals_row and target_col == col_p_check:
+                    # Don't restore the formula value for column P, just formatting
                     # The formula will be set after restore
                     pass
-                elif is_totals_row and target_col == col_q:
-                    # Don't restore the formula value for column Q, just formatting
+                elif is_totals_row and target_col == col_v_check:
+                    # Don't restore the formula value for column V, just formatting
                     # The formula will be set after restore
                     pass
-                elif is_deliverables_section and target_col == col_o and isinstance(value, str) and (value.startswith("=") or value.startswith("=@")):
-                    # Don't restore formulas in column O for deliverables section, we'll update them after
+                elif is_deliverables_section and target_col == col_t_deliverables and isinstance(value, str) and (value.startswith("=") or value.startswith("=@")):
+                    # Don't restore formulas in column T for deliverables section, we'll update them after
                     # Skip both regular formulas (=) and formulas with @ symbol (=@)
                     pass
                 else:
@@ -2418,11 +2387,11 @@ def apply_ala_carte_package(
         first_ala_row = 10  # Always start at row 10
         last_ala_row = row_20 - 2  # Last item row is 2 rows before totals row (items use 2 rows each)
         
-        # Unmerge and update TOTAL A LA CARTE formula in column K
+        # Unmerge and update TOTAL A LA CARTE formula in column P
         # First, unmerge if needed
         for merged_range in list(ws.merged_cells.ranges):
             if (merged_range.min_row <= row_20 <= merged_range.max_row and
-                merged_range.min_col <= col_k <= merged_range.max_col):
+                merged_range.min_col <= col_p <= merged_range.max_col):
                 try:
                     min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
                     max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
@@ -2430,21 +2399,21 @@ def apply_ala_carte_package(
                 except Exception:
                     pass
         
-        # Set the correct formula: always K10 to last row before totals
-        safe_set_cell_value(ws, f"K{row_20}", f"=SUM(K{first_ala_row}:K{last_ala_row})")
-        cell_k_total = ws.cell(row=row_20, column=col_k)
-        cell_k_total.number_format = '$#,##0'
-        apply_font_20(cell_k_total)
+        # Set the correct formula: always P10 to last row before totals
+        safe_set_cell_value(ws, f"P{row_20}", f"=SUM(P{first_ala_row}:P{last_ala_row})")
+        cell_p_total = ws.cell(row=row_20, column=col_p)
+        cell_p_total.number_format = '$#,##0'
+        apply_font_20(cell_p_total)
         if Font is not None:
-            cell_k_total.font = Font(name="Arial", size=20, bold=True, color=cell_k_total.font.color if cell_k_total.font else None)
+            cell_p_total.font = Font(name="Arial", size=20, bold=True, color=cell_p_total.font.color if cell_p_total.font else None)
         if Alignment is not None:
-            cell_k_total.alignment = Alignment(horizontal="center", vertical="center")
+            cell_p_total.alignment = Alignment(horizontal="center", vertical="center")
         
-        # Unmerge and update TOTAL OPTIONAL ADD-ONS (A LA CARTE) formula in column Q
+        # Unmerge and update TOTAL OPTIONAL ADD-ONS (A LA CARTE) formula in column V
         # First, unmerge if needed
         for merged_range in list(ws.merged_cells.ranges):
             if (merged_range.min_row <= row_20 <= merged_range.max_row and
-                merged_range.min_col <= col_q <= merged_range.max_col):
+                merged_range.min_col <= col_v <= merged_range.max_col):
                 try:
                     min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
                     max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
@@ -2452,45 +2421,40 @@ def apply_ala_carte_package(
                 except Exception:
                     pass
         
-        # Set the correct formula: always Q10 to last row before totals
-        safe_set_cell_value(ws, f"Q{row_20}", f"=SUM(Q{first_ala_row}:Q{last_ala_row})")
-        cell_q_total = ws.cell(row=row_20, column=col_q)
-        cell_q_total.number_format = '$#,##0'
-        apply_font_20(cell_q_total)
+        # Set the correct formula: always V10 to last row before totals
+        safe_set_cell_value(ws, f"V{row_20}", f"=SUM(V{first_ala_row}:V{last_ala_row})")
+        cell_v_total = ws.cell(row=row_20, column=col_v)
+        cell_v_total.number_format = '$#,##0'
+        apply_font_20(cell_v_total)
         if Font is not None:
-            cell_q_total.font = Font(name="Arial", size=20, bold=True, color=cell_q_total.font.color if cell_q_total.font else None)
+            cell_v_total.font = Font(name="Arial", size=20, bold=True, color=cell_v_total.font.color if cell_v_total.font else None)
         if Alignment is not None:
-            cell_q_total.alignment = Alignment(horizontal="center", vertical="center")
+            cell_v_total.alignment = Alignment(horizontal="center", vertical="center")
         
         # Re-merge the totals row cells if they were merged in the template
-        # B20:J20 for "TOTAL A LA CARTE" and M20:P20 for "TOTAL OPTIONAL ADD-ONS (A LA CARTE)"
+        # B20:O20 for "TOTAL A LA CARTE" and R20:U20 for "TOTAL OPTIONAL ADD-ONS (A LA CARTE)" label
+        # The value for optional add-ons total is in column V (V20)
         if safe_merge_cells and get_column_letter:
-            # Re-merge B20:J20
-            safe_merge_cells(ws, f"B{row_20}:J{row_20}")
-            # Re-merge M20:P20
-            safe_merge_cells(ws, f"M{row_20}:P{row_20}")
+            # Re-merge B20:O20
+            safe_merge_cells(ws, f"B{row_20}:O{row_20}")
+            # Re-merge R20:U20 for the label (value is in V20, separate)
+            safe_merge_cells(ws, f"R{row_20}:U{row_20}")
     
-    # Calculate per-unit value for FINAL SAMPLES and DUPLICATES
-    # Formula: per_unit = (Sum of First Sample Dollar Amounts) / (Sum of Total Quantity)
-    per_unit_deliverables = 0.0
-    if quantity_sum > 0:
-        per_unit_deliverables = first_sample_totals_sum / quantity_sum
-    
-    # Update deliverables counts in column E (A LA CARTE BREAKDOWN)
+    # Update deliverables counts in column F (A LA CARTE BREAKDOWN)
     # Count how many items have non-zero hours for each service
     if len(a_la_carte_items) > 0 and column_index_from_string is not None:
         col_b = column_index_from_string("B")
-        col_e = column_index_from_string("E")
+        col_f_deliverables = column_index_from_string("F")  # Deliverables go in column F (was E)
         
         # Map of deliverable labels to their corresponding hour field names
+        # Note: FINAL SAMPLES removed - no longer in deliverables
         deliverables_map = [
             ("INTAKE SESSION", "intake_session"),
             ("1ST PATTERN", "first_pattern"),
             ("1ST SAMPLE", "first_sample"),
             ("FITTING", "fitting"),
             ("ADJUSTMENT", "adjustment"),
-            ("FINAL SAMPLES", "final_samples"),
-            ("DUPLICATES", "duplicates"),
+            ("DUPLICATES", "duplicates"),  # Will show quantity sum, not hours
         ]
         
         def find_deliverable_row(label_text: str) -> int | None:
@@ -2498,7 +2462,7 @@ def apply_ala_carte_package(
             lowered = label_text.strip().lower()
             # Deliverables section starts at row 22, shifted down by rows_to_insert
             start_scan = 22 + rows_to_insert
-            end_scan = 36 + rows_to_insert
+            end_scan = 40 + rows_to_insert  # Extended to include rates section
             for scan_row in range(start_scan, end_scan + 1):
                 value = ws.cell(row=scan_row, column=col_b).value
                 if isinstance(value, str):
@@ -2521,9 +2485,9 @@ def apply_ala_carte_package(
             
             label_key = label_text.strip().lower()
             
-            # FINAL SAMPLES and DUPLICATES should show the per-unit value, not sum of hours
-            if label_key == "final samples" or label_key == "duplicates":
-                total_value = per_unit_deliverables
+            # DUPLICATES should show the quantity sum, not hours or per-unit
+            if label_key == "duplicates":
+                total_value = quantity_sum
             # FITTING and ADJUSTMENT should show the shared input value, not sum
             elif label_key == "fitting" or label_key == "adjustment":
                 total_value = shared_fitting_adjustment_hours
@@ -2532,10 +2496,10 @@ def apply_ala_carte_package(
             else:
                 total_value = sum(float(item.get(hour_field, 0)) for item in a_la_carte_items)
             
-            # Unmerge column E if needed
+            # Unmerge column F if needed
             for merged_range in list(ws.merged_cells.ranges):
                 if (merged_range.min_row <= row_idx <= merged_range.max_row and
-                    merged_range.min_col <= col_e <= merged_range.max_col):
+                    merged_range.min_col <= col_f_deliverables <= merged_range.max_col):
                     try:
                         min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
                         max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
@@ -2543,43 +2507,34 @@ def apply_ala_carte_package(
                     except Exception:
                         pass
             
-            # Set the total value
-            safe_set_cell_value(ws, f"E{row_idx}", total_value)
-            cell_e_count = ws.cell(row=row_idx, column=col_e)
-            # Use integer format for counts, otherwise keep decimal
-            if label_key == "final samples" or label_key == "duplicates":
-                # Show per-unit value with 2 decimal places
-                cell_e_count.number_format = "0.00"
-            elif label_key == "fitting" or label_key == "adjustment":
-                # Show fitting/adjustment hours with 2 decimal places if needed
-                if total_value == int(total_value):
-                    cell_e_count.number_format = "0"
-                else:
-                    cell_e_count.number_format = "0.00"
-            elif label_key in count_labels or total_value == int(total_value):
-                cell_e_count.number_format = "0"
+            # Set the total value in column F
+            safe_set_cell_value(ws, f"F{row_idx}", total_value)
+            cell_f_count = ws.cell(row=row_idx, column=col_f_deliverables)
+            # Use integer format for counts and quantities, otherwise keep decimal
+            if label_key == "duplicates" or label_key in count_labels or total_value == int(total_value):
+                cell_f_count.number_format = "0"
             else:
-                cell_e_count.number_format = "0.00"
-            apply_font_20(cell_e_count)
+                cell_f_count.number_format = "0.00"
+            apply_font_20(cell_f_count)
             if Alignment is not None:
-                cell_e_count.alignment = Alignment(horizontal="center", vertical="center")
+                cell_f_count.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Re-merge if it was merged (typically E23:E24, E25:E26, etc.)
+            # Re-merge if it was merged (typically F23:F24, F25:F26, etc.)
             row_second = row_idx + 1
             if safe_merge_cells:
-                safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
+                safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
     
-    # Update deliverables counts in column O (OPTIONAL ADD-ONS counts)
+    # Update deliverables counts in column T (OPTIONAL ADD-ONS counts)
     # These formulas count the optional add-ons selected for A La Carte items
     # Use the same approach as DEVELOPMENT ONLY tab
     if len(a_la_carte_items) > 0 and column_index_from_string is not None:
-        label_column_idx = column_index_from_string("M")  # Labels are in column M for A LA CARTE tab
-        target_col_o = column_index_from_string("O")      # Counts go in column O
+        label_column_idx = column_index_from_string("R")  # Labels are in column R for A LA CARTE tab (WASH/DYE)
+        target_col_t = column_index_from_string("T")      # Counts go in column T (was O)
         deliverable_addon_map = [
-            ("WASH/TREATMENT", "M", "M"),  # WASH/TREATMENT counts only column M (WASH/DYE)
-            ("DESIGN", "N", "N"),          # DESIGN counts only column N
-            ("SOURCING", "O", "O"),        # SOURCING counts only column O
-            ("TREATMENT", "P", "P"),       # TREATMENT counts only column P
+            ("WASH/TREATMENT", "R", "R"),  # WASH/TREATMENT counts only column R (WASH/DYE)
+            ("DESIGN", "S", "S"),          # DESIGN counts only column S
+            ("SOURCING", "T", "T"),        # SOURCING counts only column T
+            ("TREATMENT", "U", "U"),       # TREATMENT counts only column U
         ]
         
         # Deliverables section starts at row 22, shifted down by rows_to_insert
@@ -2652,11 +2607,11 @@ def apply_ala_carte_package(
                 # Still not found - skip this one (but continue with others)
                 continue
             
-            # Unmerge column O if needed (do this multiple times to ensure it's unmerged)
+            # Unmerge column T if needed (do this multiple times to ensure it's unmerged)
             for _ in range(3):
                 for merged_range in list(ws.merged_cells.ranges):
                     if (merged_range.min_row <= row_idx <= merged_range.max_row and
-                        merged_range.min_col <= target_col_o <= merged_range.max_col):
+                        merged_range.min_col <= target_col_t <= merged_range.max_col):
                         try:
                             min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
                             max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
@@ -2668,7 +2623,7 @@ def apply_ala_carte_package(
             formula_text = f"=COUNT({addon_range})"
             
             # Get the cell and clear it completely
-            cell = ws.cell(row=row_idx, column=target_col_o)
+            cell = ws.cell(row=row_idx, column=target_col_t)
             
             # Remove any array formula designation first
             try:
@@ -2676,7 +2631,7 @@ def apply_ala_carte_package(
                     array_formulae_to_remove = []
                     for array_range in ws.array_formulae:
                         if (array_range.min_row <= row_idx <= array_range.max_row and
-                            array_range.min_col <= target_col_o <= array_range.max_col):
+                            array_range.min_col <= target_col_t <= array_range.max_col):
                             array_formulae_to_remove.append(array_range)
                     for arr in array_formulae_to_remove:
                         ws.array_formulae.remove(arr)
@@ -2696,10 +2651,10 @@ def apply_ala_carte_package(
             if Alignment is not None:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Re-merge if it was merged (typically O23:O24, O25:O26, etc.)
+            # Re-merge if it was merged (typically T23:T24, T25:T26, etc.)
             row_second = row_idx + 1
             if safe_merge_cells:
-                safe_merge_cells(ws, f"O{row_idx}:O{row_second}")
+                safe_merge_cells(ws, f"T{row_idx}:T{row_second}")
     
     # Apply font size 20 to all cells in the A LA CARTE tab (rows 8-36+rows_to_insert, columns B-Q)
     end_row = 36 + rows_to_insert
@@ -2836,12 +2791,12 @@ def build_workbook_bytes(
         rows_to_insert_ala = (num_ala_items - 5) * 2
     totals_row_ala = 20 + rows_to_insert_ala
     
-    # Update P10: TOTAL DEVELOPMENT + TOTAL A LA CARTE
-    # P10 should sum F{totals_row_dev} (DEVELOPMENT ONLY) + K{totals_row_ala} (A LA CARTE)
+    # Update P10: TOTAL PACKAGES = TOTAL DEVELOPMENT + TOTAL A LA CARTE
+    # P10 should sum F{totals_row_dev} (DEVELOPMENT ONLY) + P{totals_row_ala} (A LA CARTE total)
     cell_p10 = ws_dev.cell(row=10, column=SUMMARY_VALUE_COL)
     if num_ala_items > 0:
         # Sum from both tabs
-        cell_p10.value = f"=F{totals_row_dev}+'A LA CARTE'!K{totals_row_ala}"
+        cell_p10.value = f"=F{totals_row_dev}+'A LA CARTE'!P{totals_row_ala}"
     else:
         # Only DEVELOPMENT ONLY
         cell_p10.value = f"=F{totals_row_dev}"
@@ -2851,12 +2806,12 @@ def build_workbook_bytes(
     if Alignment is not None:
         cell_p10.alignment = Alignment(horizontal="center", vertical="center")
     
-    # Update P12: TOTAL OPTIONAL ADD-ONS + TOTAL OPTIONAL ADD-ONS (A LA CARTE)
-    # P12 should sum L{totals_row_dev} (DEVELOPMENT ONLY) + Q{totals_row_ala} (A LA CARTE)
+    # Update P12: TOTAL OPTIONAL ADD-ONS = TOTAL OPTIONAL ADD-ONS (DEV) + TOTAL OPTIONAL ADD-ONS (A LA CARTE)
+    # P12 should sum L{totals_row_dev} (DEVELOPMENT ONLY) + V{totals_row_ala} (A LA CARTE optional add-ons)
     cell_p12 = ws_dev.cell(row=12, column=SUMMARY_VALUE_COL)
     if num_ala_items > 0:
         # Sum from both tabs
-        cell_p12.value = f"=L{totals_row_dev}+'A LA CARTE'!Q{totals_row_ala}"
+        cell_p12.value = f"=L{totals_row_dev}+'A LA CARTE'!V{totals_row_ala}"
     else:
         # Only DEVELOPMENT ONLY
         cell_p12.value = f"=L{totals_row_dev}"

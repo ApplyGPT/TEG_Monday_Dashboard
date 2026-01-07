@@ -621,32 +621,21 @@ def main():
                         date_part = (contract_date_str or '').replace(',', '').replace(' ', '_')
                         doc_name = f"{prefix}_{client_part}_{date_part}".strip('_')
                         
-                        # Ensure API is authenticated to get user email (salesman email)
+                        # Ensure API is authenticated
                         if not signnow_api.access_token:
                             if not signnow_api.authenticate():
-                                st.error("❌ Failed to authenticate with SignNow. Cannot proceed with two-party signing.")
+                                st.error("❌ Failed to authenticate with SignNow. Cannot proceed with sending.")
                                 return
                         
-                        # Get salesman email from authenticated SignNow account (logged-in user)
-                        salesman_email = signnow_api.user_email or credentials.get('username')
-                        
-                        # Extract name from email for "Confirmed By" field (e.g., "jennifer@example.com" -> "Jennifer")
-                        confirmed_by_name = None
-                        if salesman_email:
-                            name_part = salesman_email.split('@')[0]
-                            # Capitalize first letter
-                            confirmed_by_name = name_part.capitalize()
-                        
                         # Use DOCX merge path to preserve original images/logos/content
-                        # Two-party signing: Prospect signs first, then Salesman signs to confirm
+                        # Client signs 2 times (contract + terms), salesman signatures are pre-filled
                         ok, msg = signnow_api.create_and_send_merged_pair_docx(
                             pair_type=template_type,
                             contract_docx_path=preview_paths['contract'],
                             terms_docx_path=preview_paths['terms'],
                             document_name=doc_name,
-                            email=email,  # Prospect email (signs first)
-                            salesman_email=salesman_email,  # Salesman email (signs second)
-                            confirmed_by_name=confirmed_by_name,  # Name for "Confirmed By" field
+                            email=email,  # Client email (signs as Signer 1)
+                            account_name=selected_account,  # Account name for signature image
                         )
                         if ok:
                             st.success(f"✅ {msg}")

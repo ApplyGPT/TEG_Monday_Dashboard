@@ -151,3 +151,4 @@ dmypy.json
 .DS_Store
 Thumbs.db
 inputs/new_leads_current_month.json
+old_signnow_2_signs
