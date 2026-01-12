@@ -708,6 +708,17 @@ def replace_slide_with_source(target_prs: Presentation, target_slide_index: int,
                 except Exception:
                     # Silently skip if we can't copy picture
                     continue
+            elif shape.shape_type == 1:  # MSO_SHAPE_TYPE.LINE
+                # Copy line shape using XML for maximum fidelity
+                try:
+                    source_element = shape._element
+                    target_spTree = target_slide.shapes._spTree
+                    from lxml import etree
+                    new_element = etree.fromstring(etree.tostring(source_element))
+                    target_spTree.append(new_element)
+                except Exception:
+                    # Silently skip if we can't copy line
+                    continue
             elif hasattr(shape, 'has_text_frame') and shape.has_text_frame:
                 # Copy text box with formatting
                 try:
@@ -792,7 +803,17 @@ def replace_slide_with_source(target_prs: Presentation, target_slide_index: int,
                 except Exception as e:
                     # Log error but continue - some text boxes may not be copyable
                     continue
-            # Skip other shape types to avoid issues
+            else:
+                # For other shape types (lines, connectors, etc.), copy using XML for maximum fidelity
+                try:
+                    source_element = shape._element
+                    target_spTree = target_slide.shapes._spTree
+                    from lxml import etree
+                    new_element = etree.fromstring(etree.tostring(source_element))
+                    target_spTree.append(new_element)
+                except Exception:
+                    # Silently skip if we can't copy
+                    pass
         except Exception:
             # Silently continue - some shapes may not be copyable
             continue
