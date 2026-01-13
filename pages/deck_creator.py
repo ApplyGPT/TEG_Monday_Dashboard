@@ -952,7 +952,7 @@ def set_proposal_for_name(slide, client_name: str):
                 p.text = full_name.upper()
                 if p.runs:
                     p.runs[0].font.name = "Schibsted Grotesk Medium"
-                    p.runs[0].font.size = Pt(98.5)
+                    p.runs[0].font.size = Pt(86)
                 break
 
 
