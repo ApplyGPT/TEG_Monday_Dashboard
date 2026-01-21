@@ -515,118 +515,6 @@ class SignNowAPI:
         except Exception as e:
             return False
     
-    def _replace_signer2_placeholders_with_signature_image(self, doc, account_name: str):
-        """
-        Replace {{s_Signature_Signer2}} placeholders with signature images embedded in the DOCX.
-        This ensures the signature image is part of the document when uploaded to SignNow.
-        
-        Args:
-            doc: python-docx Document object
-            account_name: Account name ('heather', 'jennifer', or 'anthony') to determine which signature image to use
-        """
-        from docx.shared import Inches
-        from io import BytesIO
-        
-        try:
-            # Get signature image path based on account name
-            account_name_lower = account_name.lower()
-            signature_filename = f"{account_name_lower}_signature.png"
-            
-            # Get inputs directory
-            inputs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inputs")
-            signature_path = os.path.join(inputs_dir, signature_filename)
-            
-            # Check for heather signature with space in filename
-            if account_name_lower == "heather" and not os.path.exists(signature_path):
-                signature_path = os.path.join(inputs_dir, "heather_signature .png")
-            
-            if not os.path.exists(signature_path):
-                # If signature not found, keep the placeholder and let SignNow handle it
-                st.warning(f"⚠️ Signature image not found at {signature_path}. Signature will not be pre-filled.")
-                return
-            
-            # Read signature image
-            with open(signature_path, 'rb') as f:
-                signature_bytes = f.read()
-            
-            # Replace {{s_Signature_Signer2}} placeholders with the actual signature image
-            # We need to be careful to preserve other content (like date placeholders) in the paragraph
-            # Only replace the signature placeholder text, not the entire paragraph
-            replacements_count = 0
-            for paragraph in doc.paragraphs:
-                para_text = paragraph.text
-                if '{{s_Signature_Signer2}}' in para_text:
-                    # Save any other text in the paragraph (like date placeholders)
-                    other_text = para_text.replace('{{s_Signature_Signer2}}', '')
-                    other_text = other_text.strip()
-                    
-                    # Clear paragraph and rebuild with image + other content
-                    paragraph.clear()
-                    
-                    # Add the signature image first - make it same size as client signature box
-                    run = paragraph.add_run()
-                    try:
-                        # Match client signature box size - 2 inches wide
-                        run.add_picture(BytesIO(signature_bytes), width=Inches(2))
-                        replacements_count += 1
-                    except Exception as e:
-                        st.error(f"Error adding signature image to paragraph: {e}")
-                        # Add placeholder back as fallback
-                        paragraph.add_run('{{s_Signature_Signer2}}')
-                    
-                    # Add 3 tabs to push the date to the right place
-                    tab_run = paragraph.add_run()
-                    tab_run.text = '\t\t\t'
-                    
-                    # Add back any other text that was in the paragraph (e.g., date placeholders)
-                    if other_text:
-                        other_run = paragraph.add_run()
-                        other_run.text = other_text
-            
-            # Also check in tables
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        for paragraph in cell.paragraphs:
-                            para_text = paragraph.text
-                            if '{{s_Signature_Signer2}}' in para_text:
-                                # Save any other text in the cell (like date placeholders)
-                                other_text = para_text.replace('{{s_Signature_Signer2}}', '')
-                                other_text = other_text.strip()
-                                
-                                # Clear and rebuild with image + other content
-                                paragraph.clear()
-                                run = paragraph.add_run()
-                                try:
-                                    # Match client signature box size - 2 inches wide
-                                    run.add_picture(BytesIO(signature_bytes), width=Inches(2))
-                                    replacements_count += 1
-                                except Exception as e:
-                                    st.error(f"Error adding signature image to table cell: {e}")
-                                    # Add placeholder back as fallback
-                                    paragraph.add_run('{{s_Signature_Signer2}}')
-                                
-                                # Add 3 tabs to push the date to the right place
-                                tab_run = paragraph.add_run()
-                                tab_run.text = '\t\t\t'
-                                
-                                # Add back any other text (e.g., date placeholders)
-                                if other_text:
-                                    other_run = paragraph.add_run()
-                                    other_run.text = other_text
-            
-            if replacements_count > 0:
-                # Images successfully embedded - they'll appear in the document
-                pass  # Silent success
-            else:
-                st.warning(f"⚠️ No {{s_Signature_Signer2}} placeholders found to replace with signature image for {account_name}")
-        
-        except Exception as e:
-            # If image insertion fails, log the error
-            st.error(f"❌ Error replacing Signer 2 placeholders with signature image: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-    
     def _convert_simple_text_tags_to_signnow_format(self, doc):
         """
         Convert simple text tags to SignNow's required format.
@@ -657,8 +545,9 @@ class SignNowAPI:
                 new_text = new_text.replace('{{s_Signature_Signer1}}', signer1_tag)
                 replacements_made.append(f"Para {para_idx}: Converted {{s_Signature_Signer1}} to SignNow format")
             
-            # Skip Signer 2 - placeholders have been replaced with images already
-            # Only convert Signer 1 tags since Signer 2 signatures are embedded as static images
+            if '{{s_Signature_Signer2}}' in new_text:
+                new_text = new_text.replace('{{s_Signature_Signer2}}', signer2_tag)
+                replacements_made.append(f"Para {para_idx}: Converted {{s_Signature_Signer2}} to SignNow format")
             
             # Apply replacement if text changed
             if new_text != original_text:
@@ -691,10 +580,9 @@ class SignNowAPI:
                             new_text = new_text.replace('{{s_Signature_Signer1}}', signer1_tag)
                             replacements_made.append(f"Table {table_idx}, Cell ({row_idx},{col_idx}), Para {para_idx}: Converted {{s_Signature_Signer1}}")
                         
-                        # Don't convert Signer 2 tags in tables either - they've been replaced with images
-                        # if '{{s_Signature_Signer2}}' in new_text:
-                        #     new_text = new_text.replace('{{s_Signature_Signer2}}', signer2_tag)
-                        #     replacements_made.append(f"Table {table_idx}, Cell ({row_idx},{col_idx}), Para {para_idx}: Converted {{s_Signature_Signer2}}")
+                        if '{{s_Signature_Signer2}}' in new_text:
+                            new_text = new_text.replace('{{s_Signature_Signer2}}', signer2_tag)
+                            replacements_made.append(f"Table {table_idx}, Cell ({row_idx},{col_idx}), Para {para_idx}: Converted {{s_Signature_Signer2}}")
                         
                         if new_text != original_text:
                             paragraph.clear()
@@ -788,17 +676,10 @@ class SignNowAPI:
         else:
             st.warning("⚠️ No signature placeholders found to replace with Text Tags")
     
-    def _merge_docx(self, first_path: str, second_path: str, account_name: str = None) -> str:
-        """
-        Merge two DOCX files into one DOCX (simple append of body content). 
-        Also replaces {{s_Signature_Signer2}} placeholders with signature images.
-        Returns merged path.
-        """
+    def _merge_docx(self, first_path: str, second_path: str) -> str:
+        """Merge two DOCX files into one DOCX (simple append of body content). Returns merged path."""
         from docx import Document as Docx
-        from docx.shared import Inches
-        from io import BytesIO
         import os
-        
         merged = Docx(first_path)
         second = Docx(second_path)
 
@@ -810,16 +691,10 @@ class SignNowAPI:
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, 'merged_contract_terms.docx')
         
-        # Replace {{s_Signature_Signer2}} placeholders with signature images if account_name provided
-        if account_name:
-            self._replace_signer2_placeholders_with_signature_image(merged, account_name)
-        
         # Text Tags are already in the documents ({{s_Signature_Signer1}} and {{s_Signature_Signer2}})
         # Convert simple text tags to SignNow's required format
         # {{s_Signature_Signer1}} -> {{t:s;r:y;o:"Signer 1";}}
         # {{s_Signature_Signer2}} -> {{t:s;r:y;o:"Signer 2";}}
-        # Note: We keep {{s_Signature_Signer2}} text tags even though we've replaced them with images
-        # because SignNow needs the text tag to know where to place the signature field
         self._convert_simple_text_tags_to_signnow_format(merged)
         
         merged.save(out_path)
@@ -996,24 +871,25 @@ class SignNowAPI:
             return []
     
     def create_and_send_merged_pair_docx(self, pair_type: str, contract_docx_path: str, terms_docx_path: str,
-                                          document_name: str, email: str, account_name: str) -> tuple[bool, str]:
+                                          document_name: str, email: str, salesman_email: str = None, 
+                                          confirmed_by_name: str = None) -> tuple[bool, str]:
         """
-        Merge two processed DOCX files into one DOCX, upload, and send for signing.
-        Client signs 2 times (contract + terms), salesman signatures are pre-filled.
+        Merge two processed DOCX files into one DOCX, upload, and send for two-party signing.
         
         Args:
             pair_type: Type of document pair ('development_pair' or 'production_pair')
             contract_docx_path: Path to the contract DOCX file
             terms_docx_path: Path to the terms DOCX file
             document_name: Name for the merged document
-            email: Email address of the client (signs as Signer 1)
-            account_name: Account name ('heather', 'jennifer', or 'anthony') for signature image
+            email: Email address of the prospect (signs first)
+            salesman_email: Email address of the salesman (signs second). If None, uses account email
+            confirmed_by_name: Name to populate in "Confirmed By" text field. If None, uses account username
             
         Returns:
             tuple[bool, str]: (success, message)
         """
         try:
-            merged_docx = self._merge_docx(contract_docx_path, terms_docx_path, account_name=account_name)
+            merged_docx = self._merge_docx(contract_docx_path, terms_docx_path)
             if not merged_docx or not os.path.exists(merged_docx):
                 return False, "Failed to merge DOCX documents"
             
@@ -1027,12 +903,10 @@ class SignNowAPI:
             import time
             time.sleep(2)
             
-            # Signature images are already embedded in the DOCX, so we just need to send
-            # The {{s_Signature_Signer2}} text tags will still create fields, but the images
-            # are already in place, so SignNow should recognize them
-            # Send document - client signs, salesman signatures are already in the document
-            if self.send_document_for_signing_with_prefilled_salesman(doc_id, email, account_name):
-                return True, f"Merged document sent successfully. Client: {email}. Document ID: {doc_id}"
+            # Send for two-party signing (will verify fields exist from text tags)
+            if self.send_document_for_two_party_signing(doc_id, email, salesman_email, confirmed_by_name):
+                salesman_display = salesman_email or self.user_email or "salesman"
+                return True, f"Merged document sent successfully. Prospect: {email}, Salesman: {salesman_display}. Document ID: {doc_id}"
             return False, "Merged DOCX uploaded but failed to send for signing"
         except Exception as e:
             return False, f"Error creating/sending merged DOCX: {str(e)}"
@@ -1462,142 +1336,19 @@ class SignNowAPI:
             st.code(traceback.format_exc())
             return False
     
-    def _prefill_salesman_signatures(self, document_id: str, account_name: str) -> bool:
+    def send_document_for_two_party_signing(self, document_id: str, prospect_email: str,
+                                           salesman_email: str = None, confirmed_by_name: str = None,
+                                           placeholders: list = None) -> bool:
         """
-        Pre-fill Signer 2 (salesman) signature fields with signature image.
-        
-        Args:
-            document_id: ID of the document
-            account_name: Account name ('heather', 'jennifer', or 'anthony') to determine which signature image to use
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            # Get signature image path based on account name
-            account_name_lower = account_name.lower()
-            signature_filename = f"{account_name_lower}_signature.png"
-            
-            # Get inputs directory - signnow_integration.py is in root, inputs is in root
-            inputs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inputs")
-            signature_path = os.path.join(inputs_dir, signature_filename)
-            
-            # Check for heather signature with space in filename
-            if account_name_lower == "heather" and not os.path.exists(signature_path):
-                signature_path = os.path.join(inputs_dir, "heather_signature .png")
-            
-            if not os.path.exists(signature_path):
-                st.error(f"❌ Signature image not found: {signature_path}")
-                return False
-            
-            # Read signature image and convert to base64
-            with open(signature_path, 'rb') as f:
-                signature_bytes = f.read()
-            signature_base64 = base64.b64encode(signature_bytes).decode('utf-8')
-            
-            # Get document fields to find Signer 2 signature fields
-            doc_url = f"{self.base_url}/document/{document_id}"
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json"
-            }
-            
-            doc_response = requests.get(doc_url, headers=headers)
-            doc_response.raise_for_status()
-            doc_data = doc_response.json()
-            
-            existing_fields = doc_data.get('fields', [])
-            # Note: Signer 2 signature fields are not needed since signatures are embedded as static images
-            # Skip checking for Signer 2 fields - the pre-fill method will try to use API if fields exist,
-            # but it's not required since images are already in the document
-            signer2_fields = []  # Not used anymore
-            
-            # Pre-fill each Signer 2 signature field with the image
-            # Try multiple approaches to ensure it works
-            success_count = 0
-            
-            for field in signer2_fields[:2]:  # Pre-fill first 2 Signer 2 fields
-                field_id = field.get('id')
-                if not field_id:
-                    continue
-                
-                # Method 1: Try PUT /document/{id}/field/{field_id} to update field with signature
-                field_update_url = f"{self.base_url}/document/{document_id}/field/{field_id}"
-                field_update_data = {
-                    "data": signature_base64,
-                    "type": "signature"
-                }
-                update_response = requests.put(field_update_url, json=field_update_data, headers=headers, timeout=60)
-                
-                if update_response.status_code in [200, 201]:
-                    success_count += 1
-                    continue
-                
-                # Method 2: Try POST /document/{id}/insert endpoint
-                insert_url = f"{self.base_url}/document/{document_id}/insert"
-                insert_data = {
-                    "field_id": field_id,
-                    "data": signature_base64
-                }
-                insert_response = requests.post(insert_url, json=insert_data, headers=headers, timeout=60)
-                
-                if insert_response.status_code in [200, 201]:
-                    success_count += 1
-                    continue
-                
-                # Method 3: Try multipart/form-data for insert
-                with open(signature_path, 'rb') as f:
-                    sig_bytes_for_multipart = f.read()
-                
-                files = {
-                    'file': (signature_filename, sig_bytes_for_multipart, 'image/png')
-                }
-                form_data = {
-                    'field_id': field_id
-                }
-                multipart_headers = {
-                    "Authorization": f"Bearer {self.access_token}"
-                }
-                insert_response = requests.post(insert_url, files=files, data=form_data, headers=multipart_headers, timeout=60)
-                if insert_response.status_code in [200, 201]:
-                    success_count += 1
-                    continue
-                
-                # Method 4: Try updating the entire document with inserts array
-                update_doc_url = f"{self.base_url}/document/{document_id}"
-                doc_update_data = {
-                    "inserts": [{
-                        "field_id": field_id,
-                        "data": signature_base64,
-                        "type": "signature"
-                    }]
-                }
-                doc_update_response = requests.put(update_doc_url, json=doc_update_data, headers=headers, timeout=60)
-                if doc_update_response.status_code in [200, 201]:
-                    success_count += 1
-            
-            if success_count == 0:
-                # Log that pre-fill failed but don't block the process
-                pass  # Silent fail as before
-            
-            return success_count > 0
-            
-        except Exception as e:
-            # Log the error but don't fail the entire process
-            # The signature images embedded in DOCX should still be visible
-            return False
-    
-    def send_document_for_signing_with_prefilled_salesman(self, document_id: str, client_email: str,
-                                                         account_name: str) -> bool:
-        """
-        Send document for signing where:
-        - Client (Signer 1) signs 2 times (contract + terms)
-        - Salesman (Signer 2) signatures are pre-filled with signature image
+        Send document for two-party signing with routing order:
+        Step 1: Prospect signs first
+        Step 2: Salesman signs second (confirmation)
         
         Args:
             document_id: ID of the document to send
-            client_email: Email address of the client (signs as Signer 1)
-            account_name: Account name ('heather', 'jennifer', or 'anthony') for signature image
+            prospect_email: Email address of the prospect (signs first)
+            salesman_email: Email address of the salesman (signs second). If None, uses self.user_email
+            confirmed_by_name: Name to populate in "Confirmed By" text field. If None, uses account username
             
         Returns:
             bool: True if successful, False otherwise
@@ -1606,20 +1357,34 @@ class SignNowAPI:
             if not self.authenticate():
                 return False
         
+        # Use salesman email from account if not provided
+        if not salesman_email:
+            salesman_email = self.user_email
+        
+        # Get salesman name from username if not provided
+        if not confirmed_by_name and self.username:
+            confirmed_by_name = self.username.split('@')[0]  # Use part before @ as name
+        
         try:
+            send_url = f"{self.base_url}/document/{document_id}/invite"
+            
             headers = {
                 "Authorization": f"Bearer {self.access_token}",
                 "Content-Type": "application/json"
             }
             
-            # Fetch document to verify fields exist
+            # Fetch document to check if fields were created from Text Tags
             doc_url = f"{self.base_url}/document/{document_id}"
             doc_response = requests.get(doc_url, headers=headers)
             doc_response.raise_for_status()
             doc_data = doc_response.json()
             
+            # Check if document already has fields from Text Tags
+            # SignNow Text Tags {{s_Signature_Signer1}} and {{s_Signature_Signer2}} should create fields automatically
             existing_fields = doc_data.get('fields', [])
             
+            # Filter signature fields by role
+            # Note: SignNow may assign roles based on text tag "o" parameter
             signer1_fields = [f for f in existing_fields 
                             if (f.get('role') == 'Signer 1' or f.get('role') == 'Signer1' or 
                                 'Signer1' in str(f.get('name', '')) or 'Signer 1' in str(f.get('name', '')))
@@ -1630,13 +1395,15 @@ class SignNowAPI:
                                 'Signer2' in str(f.get('name', '')) or 'Signer 2' in str(f.get('name', '')))
                             and f.get('type') == 'signature']
             
-            # Check if we have the required fields
-            if len(signer1_fields) < 2:
-                # Wait a bit if fields aren't ready yet
+            # Check if document already has fields from Text Tags
+            # We need 2 fields for Signer 1 and 2 fields for Signer 2 (contract + terms)
+            if len(signer1_fields) < 2 or len(signer2_fields) < 2:
+                # No fields found - SignNow may not have processed text tags yet
                 if len(existing_fields) == 0:
                     import time
                     time.sleep(3)
                     
+                    # Check again
                     doc_response = requests.get(doc_url, headers=headers)
                     doc_response.raise_for_status()
                     doc_data = doc_response.json()
@@ -1648,31 +1415,33 @@ class SignNowAPI:
                                     if (f.get('role') == 'Signer 2' or f.get('role') == 'Signer2')
                                     and f.get('type') == 'signature']
                 
-                if len(signer1_fields) < 2:
-                    st.error(f"❌ Text Tags did not create expected fields. Found {len(signer1_fields)} Signer 1 fields (need 2).")
+                if len(signer1_fields) < 2 or len(signer2_fields) < 2:
+                    st.error(f"❌ Text Tags did not create expected fields. Found {len(signer1_fields)} Signer 1 and {len(signer2_fields)} Signer 2 fields (need 2 each).")
                     return False
             
-            # Pre-fill Signer 2 signature fields with signature image
-            self._prefill_salesman_signatures(document_id, account_name)
-            
-            # Send document only to client (Signer 1)
-            # When document has role-based fields, we need to use role-based invite format
-            send_url = f"{self.base_url}/document/{document_id}/invite"
-            
-            # Use role-based invite format since document has role-based fields
+            # SignNow multi-signer routing now that fields are added
+            # Note: subject and message fields removed - require subscription upgrade
             data = {
                 "to": [
                     {
-                        "email": client_email,
+                        "email": prospect_email,
+                        "role_id": "",
                         "role": "Signer 1",
                         "order": 1
+                    },
+                    {
+                        "email": salesman_email,
+                        "role_id": "",
+                        "role": "Signer 2",
+                        "order": 2
                     }
                 ],
                 "from": self.user_email
             }
             
-            response = requests.post(send_url, json=data, headers=headers, timeout=60)
+            response = requests.post(send_url, json=data, headers=headers)
             
+            # Better error handling
             if response.status_code != 200:
                 try:
                     error_detail = response.json()
@@ -1681,14 +1450,19 @@ class SignNowAPI:
                 except:
                     st.error(f"SignNow API Error ({response.status_code}): {response.text}")
                 response.raise_for_status()
+            else:
+                response.raise_for_status()
+            
+            # Note: "Confirmed By" field should be included in document template with text tag for "Signer 2"
+            # No need to map it programmatically - SignNow will handle it if the text tag exists
             
             return True
             
         except requests.exceptions.RequestException as e:
-            st.error(f"Failed to send document: {str(e)}")
+            st.error(f"Failed to send document for two-party signing: {str(e)}")
             return False
         except Exception as e:
-            st.error(f"Unexpected error sending document: {str(e)}")
+            st.error(f"Unexpected error sending document for two-party signing: {str(e)}")
             return False
     
     def _add_confirmed_by_field_mapping(self, document_id: str, confirmed_by_name: str) -> bool:
