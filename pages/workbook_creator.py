@@ -46,17 +46,34 @@ except Exception:  # pragma: no cover - fallback if dependency missing at runtim
     get_column_letter = None
 
 
-# Pricing constants
-BASE_PRICE_STANDARD_LESS_THAN_5 = 2790.00  # Standard pricing for less than 5 styles
-BASE_PRICE_STANDARD_5_OR_MORE = 2325.00  # Standard pricing for 5 or more styles
-ACTIVEWEAR_PRICE_LESS_THAN_5 = 3560.00
-ACTIVEWEAR_PRICE_5_OR_MORE = 2965.00
+# Pricing constants - New pricing table based on style count brackets and style type
+# Style types: "Regular", "Activewear/Lingerie/Swim", "Pattern Blocks"
+PRICING_TABLE = {
+    "Regular": {
+        "< 2": 3360.00,
+        "< 5": 2856.00,
+        "< 10": 2688.00,
+        "< 15": 2520.00,
+    },
+    "Activewear/Lingerie/Swim": {
+        "< 2": 3800.00,
+        "< 5": 3230.00,
+        "< 10": 3040.00,
+        "< 15": 2850.00,
+    },
+    "Pattern Blocks": {
+        "< 2": 2500.00,
+        "< 5": 2125.00,  # 5 STYLES - 15% SAVINGS
+        "< 10": 2000.00,  # 10 STYLES - 20% SAVINGS
+        "< 15": 1875.00,  # 15 STYLES - 25% SAVINGS
+    }
+}
 
 OPTIONAL_PRICES = {
     "wash_dye": 1330.00,
     "design": 1330.00,
-    "source": 1330.00,
     "treatment": 760.00,
+    # Note: "source" removed - no longer an option
 }
 SUMMARY_LABEL_COL = 14  # Column N
 SUMMARY_VALUE_COL = 16  # Column P
@@ -88,27 +105,40 @@ def get_template_path() -> str:
     return template_path
 
 
-def calculate_base_price(num_styles: int, is_activewear: bool) -> float:
-    """Calculate base price based on number of styles and activewear flag.
+def calculate_base_price(num_styles: int, style_type: str) -> float:
+    """Calculate base price based on number of styles and style type.
     
-    Standard pricing is based on total styles:
-    - Less than 5 total styles: $2,790
-    - 5 or more total styles: $2,325
-    Activewear pricing is based on total styles:
-    - Less than 5 total styles: $3,560
-    - 5 or more total styles: $2,965
+    Pricing is based on style count brackets and style type:
+    - < 2 styles: Regular=$3,360, Activewear/Lingerie/Swim=$3,800, Pattern Blocks=$2,500
+    - < 5 styles: Regular=$2,856, Activewear/Lingerie/Swim=$3,230, Pattern Blocks=$2,125
+    - < 10 styles: Regular=$2,688, Activewear/Lingerie/Swim=$3,040, Pattern Blocks=$2,000
+    - < 15 styles: Regular=$2,520, Activewear/Lingerie/Swim=$2,850, Pattern Blocks=$1,875
+    
+    Args:
+        num_styles: Total number of styles (used to determine bracket)
+        style_type: One of "Regular", "Activewear/Lingerie/Swim", or "Pattern Blocks"
+    
+    Returns:
+        Base price per style for the given bracket and style type
     """
-    if is_activewear:
-        if num_styles < 5:
-            return ACTIVEWEAR_PRICE_LESS_THAN_5
-        else:
-            return ACTIVEWEAR_PRICE_5_OR_MORE
+    # Default to "Regular" if style_type is not recognized
+    if style_type not in PRICING_TABLE:
+        style_type = "Regular"
+    
+    # Determine bracket based on number of styles
+    if num_styles < 2:
+        bracket = "< 2"
+    elif num_styles < 5:
+        bracket = "< 5"
+    elif num_styles < 10:
+        bracket = "< 10"
+    elif num_styles < 15:
+        bracket = "< 15"
     else:
-        # Standard pricing based on number of styles
-        if num_styles < 5:
-            return BASE_PRICE_STANDARD_LESS_THAN_5
-        else:
-            return BASE_PRICE_STANDARD_5_OR_MORE
+        # For 15 or more, use the < 15 pricing
+        bracket = "< 15"
+    
+    return PRICING_TABLE[style_type][bracket]
 
 
 def copy_cell_formatting(source_cell, target_cell) -> None:
@@ -184,15 +214,62 @@ def capture_deliverables_block(ws):
     for row in range(DELIVERABLE_BLOCK_START, DELIVERABLE_BLOCK_END + 1):
         row_data = []
         for col in range(DELIVERABLE_COL_START, DELIVERABLE_COL_END + 1):
-            cell = ws.cell(row=row, column=col)
+            # Handle MergedCell - use safe_get_cell_value
+            cell_value = safe_get_cell_value(ws, row, col)
+            
+            # Get cell object for formatting (handle MergedCell)
+            cell = None
+            try:
+                cell = ws.cell(row=row, column=col)
+                # Test if we can access attributes (if it's a MergedCell, some attributes might fail)
+                _ = cell.number_format
+            except Exception:
+                # If it's a MergedCell, find the top-left cell of the merged range
+                for merged_range in ws.merged_cells.ranges:
+                    if (merged_range.min_row <= row <= merged_range.max_row and
+                        merged_range.min_col <= col <= merged_range.max_col):
+                        cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        break
+                if cell is None:
+                    cell = ws.cell(row=row, column=col)
+            
+            # Safely get cell attributes (handle MergedCell)
+            number_format = None
+            font = None
+            fill = None
+            border = None
+            alignment = None
+            
+            if cell is not None:
+                try:
+                    number_format = cell.number_format if hasattr(cell, 'number_format') else None
+                except Exception:
+                    pass
+                try:
+                    font = copy(cell.font) if cell.font else None
+                except Exception:
+                    pass
+                try:
+                    fill = copy(cell.fill) if cell.fill else None
+                except Exception:
+                    pass
+                try:
+                    border = copy(cell.border) if cell.border else None
+                except Exception:
+                    pass
+                try:
+                    alignment = copy(cell.alignment) if cell.alignment else None
+                except Exception:
+                    pass
+            
             row_data.append(
                 {
-                    "value": cell.value,
-                    "number_format": cell.number_format,
-                    "font": copy(cell.font) if cell.font else None,
-                    "fill": copy(cell.fill) if cell.fill else None,
-                    "border": copy(cell.border) if cell.border else None,
-                    "alignment": copy(cell.alignment) if cell.alignment else None,
+                    "value": cell_value,
+                    "number_format": number_format,
+                    "font": font,
+                    "fill": fill,
+                    "border": border,
+                    "alignment": alignment,
                 }
             )
         block_rows.append(row_data)
@@ -253,11 +330,29 @@ def restore_deliverables_block(ws, template_block: dict, target_start_row: int) 
             if get_column_letter is not None:
                 coord = f"{get_column_letter(target_col)}{target_row}"
             value = cell_data.get("value") if cell_data else None
+            # Since we already unmerged above, we can set values directly like workbook_creator2.py
             if coord:
                 safe_set_cell_value(ws, coord, value)
             else:
-                ws.cell(row=target_row, column=target_col).value = value
+                # Direct assignment - cells are already unmerged above
+                try:
+                    cell = ws.cell(row=target_row, column=target_col)
+                    cell.value = value
+                except (AttributeError, TypeError):
+                    # If it's still a MergedCell (shouldn't happen after unmerge, but handle it)
+                    cell = safe_get_writable_cell(ws, target_row, target_col)
+                    try:
+                        cell.value = value
+                    except Exception:
+                        # Last resort: use safe_set_cell_value
+                        if get_column_letter:
+                            from openpyxl.utils import get_column_letter as gcl
+                            safe_set_cell_value(ws, f"{gcl(target_col)}{target_row}", value)
+            
+            # Get cell for formatting - cells should be unmerged by now
             cell = ws.cell(row=target_row, column=target_col)
+            
+            # Apply formatting (same as workbook_creator2.py)
             cell.number_format = cell_data.get("number_format") or cell.number_format
             if cell_data.get("font"):
                 cell.font = copy(cell_data["font"])
@@ -281,6 +376,86 @@ def restore_deliverables_block(ws, template_block: dict, target_start_row: int) 
             )
         except Exception:
             pass
+
+
+def safe_get_writable_cell(ws, row: int, column: int):
+    """Get a writable cell, handling MergedCell by returning top-left cell of merged range."""
+    # First check if the cell is part of a merged range
+    for merged_range in ws.merged_cells.ranges:
+        if (merged_range.min_row <= row <= merged_range.max_row and
+            merged_range.min_col <= column <= merged_range.max_col):
+            # It's part of a merged range, return top-left cell (always writable)
+            # But verify it's actually writable
+            top_left = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+            try:
+                # Test if writable by trying to read value
+                _ = top_left.value
+                return top_left
+            except (AttributeError, TypeError):
+                # Even top-left might be MergedCell in edge cases, find the real top-left
+                # This shouldn't happen, but handle it
+                return top_left
+    
+    # Not part of a merged range, try to get the cell
+    # But even if not in merged_cells.ranges, ws.cell() might still return MergedCell
+    # So we need to test if it's writable
+    cell = ws.cell(row=row, column=column)
+    # Check if it's a MergedCell by trying to access value (MergedCell raises AttributeError)
+    try:
+        # Try to read value - if it works, it's a regular cell
+        _ = cell.value
+        return cell
+    except (AttributeError, TypeError):
+        # It's a MergedCell even though it's not in merged_cells.ranges
+        # This can happen if the merge was just created or there's a timing issue
+        # Find the top-left cell by checking all merged ranges again
+        for merged_range in ws.merged_cells.ranges:
+            if (merged_range.min_row <= row <= merged_range.max_row and
+                merged_range.min_col <= column <= merged_range.max_col):
+                return ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+        # If we can't find it, the cell might be in a newly merged range
+        # Try to get it anyway - caller should handle exceptions
+        return cell
+
+
+def safe_get_cell_value(ws, row: int, column: int):
+    """Safely get cell value, handling MergedCell by returning value from top-left cell."""
+    # First check if the cell is part of a merged range
+    for merged_range in ws.merged_cells.ranges:
+        if (merged_range.min_row <= row <= merged_range.max_row and
+            merged_range.min_col <= column <= merged_range.max_col):
+            # It's part of a merged range, get value from top-left cell
+            try:
+                top_left_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                try:
+                    return top_left_cell.value
+                except (AttributeError, TypeError):
+                    # Even the top-left cell might be a MergedCell in some edge cases
+                    # Recursively find the actual top-left
+                    return safe_get_cell_value(ws, merged_range.min_row, merged_range.min_col)
+            except Exception:
+                return None
+    
+    # Not part of a merged range, try to get value directly
+    try:
+        cell = ws.cell(row=row, column=column)
+        # Check if it's a MergedCell by trying to access value
+        try:
+            return cell.value
+        except (AttributeError, TypeError):
+            # It's a MergedCell, find the top-left cell
+            for merged_range in ws.merged_cells.ranges:
+                if (merged_range.min_row <= row <= merged_range.max_row and
+                    merged_range.min_col <= column <= merged_range.max_col):
+                    top_left_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                    try:
+                        return top_left_cell.value
+                    except (AttributeError, TypeError):
+                        # Even the top-left cell might be a MergedCell in some edge cases
+                        return safe_get_cell_value(ws, merged_range.min_row, merged_range.min_col)
+            return None
+    except Exception:
+        return None
 
 
 def safe_merge_cells(ws, range_str: str) -> bool:
@@ -366,7 +541,23 @@ def safe_set_cell_value(ws, cell_ref: str, value) -> None:
         
         # Write to the cell using cell() method which always returns a writable cell
         target_cell = ws.cell(row=row_num, column=col_num)
-        target_cell.value = value
+        # Check if it's a MergedCell before setting value
+        try:
+            target_cell.value = value
+        except (AttributeError, TypeError):
+            # It's a MergedCell, find top-left cell or unmerge
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= row_num <= merged_range.max_row and
+                    merged_range.min_col <= col_num <= merged_range.max_col):
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                        target_cell = ws.cell(row=row_num, column=col_num)
+                        target_cell.value = value
+                        break
+                    except Exception:
+                        target_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        target_cell.value = value
+                        break
         
     except Exception:
         # Fallback: try using the cell reference directly
@@ -387,10 +578,26 @@ def safe_set_cell_value(ws, cell_ref: str, value) -> None:
                                 min_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
                                 max_cell = ws.cell(row=merged_range.max_row, column=merged_range.max_col)
                                 ws.unmerge_cells(f"{min_cell.coordinate}:{max_cell.coordinate}")
-                                ws.cell(row=cell_row, column=cell_col).value = value
+                                # After unmerging, try to set value with error handling
+                                try:
+                                    target_cell = safe_get_writable_cell(ws, cell_row, cell_col)
+                                    target_cell.value = value
+                                except (AttributeError, TypeError):
+                                    # If still a MergedCell, use top-left cell
+                                    target_cell = safe_get_writable_cell(ws, merged_range.min_row, merged_range.min_col)
+                                    target_cell.value = value
                                 break
                             except Exception:
-                                ws.cell(row=merged_range.min_row, column=merged_range.min_col).value = value
+                                # Fallback: use top-left cell directly
+                                try:
+                                    target_cell = safe_get_writable_cell(ws, merged_range.min_row, merged_range.min_col)
+                                    target_cell.value = value
+                                except (AttributeError, TypeError):
+                                    # Last resort: use safe_set_cell_value with coordinate
+                                    if get_column_letter:
+                                        from openpyxl.utils import get_column_letter as gcl
+                                        safe_set_cell_value(ws, f"{gcl(merged_range.min_col)}{merged_range.min_row}", value)
+                                    break
                                 break
         except Exception:
             pass  # Skip if all methods fail
@@ -401,12 +608,17 @@ def update_header_labels(ws, client_name: str) -> None:
     header_map = {
         "H9": "WASH/DYE",
         "I9": "DESIGN",
-        "J9": "SOURCE",
-        "K9": "TREATMENT",
-        "L9": "TOTAL",
+        "J9": "TREATMENT",
+        "K9": "TOTAL",  # K9-L9 will be merged below
     }
     for cell, label in header_map.items():
         safe_set_cell_value(ws, cell, label)
+    
+    # Merge and center K9-L9 for TOTAL header
+    safe_merge_cells(ws, "K9:L9")
+    cell_k9 = ws.cell(row=9, column=11)
+    if Alignment is not None:
+        cell_k9.alignment = Alignment(horizontal="center", vertical="center")
 
     safe_set_cell_value(ws, "B3", "TEGMADE, JUST FOR")
     client_display = (client_name or "").strip().upper()
@@ -465,11 +677,27 @@ def clear_style_rows(ws, num_styles: int = 0) -> None:
                     if cell.coordinate in merged_range:
                         # Get the top-left cell of the merged range
                         top_left = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
-                        top_left.value = None
+                        try:
+                            top_left.value = None
+                        except (AttributeError, TypeError):
+                            # If top_left is also a MergedCell, use safe_set_cell_value
+                            if get_column_letter:
+                                safe_set_cell_value(ws, f"{get_column_letter(merged_range.min_col)}{merged_range.min_row}", None)
+                            else:
+                                from openpyxl.utils import get_column_letter as gcl
+                                safe_set_cell_value(ws, f"{gcl(merged_range.min_col)}{merged_range.min_row}", None)
                         is_merged = True
                         break
                 if not is_merged:
-                    cell.value = None
+                    try:
+                        cell.value = None
+                    except (AttributeError, TypeError):
+                        # If it's a MergedCell, use safe_set_cell_value
+                        if get_column_letter:
+                            safe_set_cell_value(ws, f"{get_column_letter(col_idx)}{row_idx}", None)
+                        else:
+                            from openpyxl.utils import get_column_letter as gcl
+                            safe_set_cell_value(ws, f"{gcl(col_idx)}{row_idx}", None)
         
         # Clear the totals row
         totals_row = 20 + (num_styles - 5) * 2
@@ -504,8 +732,8 @@ def apply_development_package(
     optional_cells = {
         "H": "wash_dye",
         "I": "design",
-        "J": "source",
-        "K": "treatment",
+        "J": "treatment",
+        # Note: "source" removed - no longer an option
     }
 
     total_development = 0.0
@@ -607,12 +835,15 @@ def apply_development_package(
         entry = style_entries[idx]
         style_name = entry.get("name", "").strip() or "STYLE"
         complexity_pct = float(entry.get("complexity", 0.0))
-        is_activewear = entry.get("activewear", False)
+        style_type = entry.get("style_type", "Regular")
+        # Handle migration from old "activewear" boolean
+        if "style_type" not in entry and entry.get("activewear", False):
+            style_type = "Activewear/Lingerie/Swim"
         row_options = entry.get("options", {})
 
-        # Calculate base price based on tiered pricing and activewear
+        # Calculate base price based on tiered pricing and style type
         # Use total_styles_count (regular + custom) for pricing tier
-        line_base_price = calculate_base_price(total_styles_count, is_activewear)
+        line_base_price = calculate_base_price(total_styles_count, style_type)
 
         # Check if this is a new row (row_idx > 18) that needs Arial 20 font
         is_new_row = num_styles > 5 and row_idx > 18
@@ -640,9 +871,14 @@ def apply_development_package(
                     pass
 
         # Write style number (#) - use style_number from entry (101, 102, 103, etc.)
-        cell_b = ws.cell(row=row_idx, column=2)
         style_number = entry.get("style_number", 101 + idx)  # Default to 101, 102, 103... if not set
-        cell_b.value = style_number
+        cell_b = safe_get_writable_cell(ws, row_idx, 2)
+        try:
+            cell_b.value = style_number
+        except (AttributeError, TypeError):
+            # If still MergedCell, use safe_set_cell_value
+            safe_set_cell_value(ws, f"B{row_idx}", style_number)
+            cell_b = safe_get_writable_cell(ws, row_idx, 2)
         if is_new_row:
             apply_full_border_pair(ws, 2, row_idx, row_second)
             safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
@@ -651,8 +887,12 @@ def apply_development_package(
                 cell_b.alignment = Alignment(horizontal="left", vertical="center")
         
         # Write style name (merged across 2 rows, left-aligned)
-        cell_c = ws.cell(row=row_idx, column=3)
-        cell_c.value = style_name.upper()
+        cell_c = safe_get_writable_cell(ws, row_idx, 3)
+        try:
+            cell_c.value = style_name.upper()
+        except (AttributeError, TypeError):
+            safe_set_cell_value(ws, f"C{row_idx}", style_name.upper())
+            cell_c = safe_get_writable_cell(ws, row_idx, 3)
         if is_new_row:
             apply_full_border_pair(ws, 3, row_idx, row_second)
             safe_merge_cells(ws, f"C{row_idx}:C{row_second}")
@@ -673,8 +913,16 @@ def apply_development_package(
                 if Alignment is not None:
                     cell_e.alignment = Alignment(horizontal="center", vertical="center")
         else:
-            cell_e.value = complexity_pct / 100.0
-            cell_e.number_format = '0%'  # Percentage format
+            try:
+                cell_e.value = complexity_pct / 100.0
+                cell_e.number_format = '0%'  # Percentage format
+            except (AttributeError, TypeError):
+                safe_set_cell_value(ws, f"E{row_idx}", complexity_pct / 100.0)
+                cell_e = safe_get_writable_cell(ws, row_idx, 5)
+                try:
+                    cell_e.number_format = '0%'
+                except Exception:
+                    pass
             if is_new_row:
                 apply_full_border_pair(ws, 5, row_idx, row_second)
                 safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
@@ -698,12 +946,23 @@ def apply_development_package(
             cell_d.alignment = Alignment(horizontal="center", vertical="center")
         
         # Write total formula (column F)
-        cell_f = ws.cell(row=row_idx, column=6)
-        if complexity_pct == 0:
-            cell_f.value = f"=D{row_idx}"
-        else:
-            cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
-        cell_f.number_format = '$#,##0'  # Currency format
+        cell_f = safe_get_writable_cell(ws, row_idx, 6)
+        try:
+            if complexity_pct == 0:
+                cell_f.value = f"=D{row_idx}"
+            else:
+                cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
+            cell_f.number_format = '$#,##0'  # Currency format
+        except (AttributeError, TypeError):
+            if complexity_pct == 0:
+                safe_set_cell_value(ws, f"F{row_idx}", f"=D{row_idx}")
+            else:
+                safe_set_cell_value(ws, f"F{row_idx}", f"=D{row_idx}*(1+E{row_idx})")
+            cell_f = safe_get_writable_cell(ws, row_idx, 6)
+            try:
+                cell_f.number_format = '$#,##0'
+            except Exception:
+                pass
         if is_new_row:
             apply_full_border_pair(ws, 6, row_idx, row_second)
             safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
@@ -729,7 +988,11 @@ def apply_development_package(
                         cell_opt.alignment = Alignment(horizontal="center", vertical="center")
                 row_optional_sum += price
             else:
-                cell_opt.value = None
+                try:
+                    cell_opt.value = None
+                except (AttributeError, TypeError):
+                    safe_set_cell_value(ws, f"{col_letter}{row_idx}", None)
+                    cell_opt = safe_get_writable_cell(ws, row_idx, col_num)
                 if is_new_row:
                     apply_arial_20_font(cell_opt)
                     # Merge and center even if empty
@@ -738,15 +1001,52 @@ def apply_development_package(
                     if Alignment is not None:
                         cell_opt.alignment = Alignment(horizontal="center", vertical="center")
         
-        cell_l = ws.cell(row=row_idx, column=12)
-        cell_l.value = f"=SUM(H{row_idx}:K{row_idx})"
-        cell_l.number_format = '$#,##0'  # Currency format
+        # TOTAL OPTIONAL ADD-ONS now uses columns K and L (merged K10-L11, K12-L13, etc.)
+        # Follow the pattern from workbook_creator2.py: set value FIRST, then merge
+        cell_k = ws.cell(row=row_idx, column=11)
+        cell_k.value = f"=SUM(H{row_idx}:J{row_idx})"
+        cell_k.number_format = '$#,##0'  # Currency format
+        
+        # Always merge and center K-L for each style row (K10-L11, K12-L13, etc.)
+        # Unmerge first if needed
+        for merged_range in list(ws.merged_cells.ranges):
+            if (merged_range.min_row <= row_second <= merged_range.max_row and
+                merged_range.min_row >= row_idx and
+                merged_range.min_col <= 11 <= merged_range.max_col <= 12):
+                try:
+                    ws.unmerge_cells(range_string=str(merged_range))
+                except Exception:
+                    pass
+        
+        # Re-set value after unmerge (unmerge might have cleared it)
+        cell_k = ws.cell(row=row_idx, column=11)
+        cell_k.value = f"=SUM(H{row_idx}:J{row_idx})"
+        cell_k.number_format = '$#,##0'
+        
+        # Apply borders to individual cells BEFORE merging
+        apply_full_border_pair(ws, 11, row_idx, row_second)
+        apply_full_border_pair(ws, 12, row_idx, row_second)
+        
+        # Now merge (value should be preserved in top-left cell K)
+        safe_merge_cells(ws, f"K{row_idx}:L{row_second}")
+        
+        # Get the merged cell and apply formatting
+        cell_k = ws.cell(row=row_idx, column=11)
+        
+        # For more than 5 styles, ensure full borders on merged cell
+        # This applies to ALL style rows when total_styles_count > 5
+        if total_styles_count > 5 and Border is not None and Side is not None:
+            thin = Side(style="thin")
+            full_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            try:
+                cell_k.border = full_border
+            except Exception:
+                pass
+        
         if is_new_row:
-            apply_arial_20_font(cell_l)
-            apply_full_border_pair(ws, 12, row_idx, row_second)
-            safe_merge_cells(ws, f"L{row_idx}:L{row_second}")
-            if Alignment is not None:
-                cell_l.alignment = Alignment(horizontal="center", vertical="center")
+            apply_arial_20_font(cell_k)
+        if Alignment is not None:
+            cell_k.alignment = Alignment(horizontal="center", vertical="center")
 
         total_development += line_base_price * (1 + complexity_pct / 100.0)
         total_optional += row_optional_sum
@@ -791,10 +1091,14 @@ def apply_development_package(
                         pass
             
             # Write style number (#) - use the style_number from entry if available, otherwise default
-            cell_b = ws.cell(row=row_idx, column=2)
             # Use style_number from entry if set, otherwise default to 101 + num_styles + idx
             style_number = entry.get("style_number", 101 + num_styles + idx)
-            cell_b.value = style_number
+            cell_b = safe_get_writable_cell(ws, row_idx, 2)
+            try:
+                cell_b.value = style_number
+            except (AttributeError, TypeError):
+                safe_set_cell_value(ws, f"B{row_idx}", style_number)
+                cell_b = safe_get_writable_cell(ws, row_idx, 2)
             if is_new_row:
                 apply_full_border_pair(ws, 2, row_idx, row_second)
                 safe_merge_cells(ws, f"B{row_idx}:B{row_second}")
@@ -803,8 +1107,12 @@ def apply_development_package(
                     cell_b.alignment = Alignment(horizontal="left", vertical="center")
             
             # Write style name
-            cell_c = ws.cell(row=row_idx, column=3)
-            cell_c.value = style_name.upper()
+            cell_c = safe_get_writable_cell(ws, row_idx, 3)
+            try:
+                cell_c.value = style_name.upper()
+            except (AttributeError, TypeError):
+                safe_set_cell_value(ws, f"C{row_idx}", style_name.upper())
+                cell_c = safe_get_writable_cell(ws, row_idx, 3)
             if is_new_row:
                 apply_full_border_pair(ws, 3, row_idx, row_second)
                 safe_merge_cells(ws, f"C{row_idx}:C{row_second}")
@@ -813,9 +1121,17 @@ def apply_development_package(
                     cell_c.alignment = Alignment(horizontal="left", vertical="center")
             
             # Write custom price
-            cell_d = ws.cell(row=row_idx, column=4)
-            cell_d.value = int(custom_price)
-            cell_d.number_format = '$#,##0'
+            cell_d = safe_get_writable_cell(ws, row_idx, 4)
+            try:
+                cell_d.value = int(custom_price)
+                cell_d.number_format = '$#,##0'
+            except (AttributeError, TypeError):
+                safe_set_cell_value(ws, f"D{row_idx}", int(custom_price))
+                cell_d = safe_get_writable_cell(ws, row_idx, 4)
+                try:
+                    cell_d.number_format = '$#,##0'
+                except Exception:
+                    pass
             if is_new_row:
                 apply_full_border_pair(ws, 4, row_idx, row_second)
                 safe_merge_cells(ws, f"D{row_idx}:D{row_second}")
@@ -828,8 +1144,16 @@ def apply_development_package(
             if complexity_pct == 0:
                 cell_e.value = None
             else:
-                cell_e.value = complexity_pct / 100.0
-                cell_e.number_format = '0%'
+                try:
+                    cell_e.value = complexity_pct / 100.0
+                    cell_e.number_format = '0%'
+                except (AttributeError, TypeError):
+                    safe_set_cell_value(ws, f"E{row_idx}", complexity_pct / 100.0)
+                    cell_e = safe_get_writable_cell(ws, row_idx, 5)
+                    try:
+                        cell_e.number_format = '0%'
+                    except Exception:
+                        pass
             if is_new_row:
                 apply_full_border_pair(ws, 5, row_idx, row_second)
                 safe_merge_cells(ws, f"E{row_idx}:E{row_second}")
@@ -838,12 +1162,23 @@ def apply_development_package(
                     cell_e.alignment = Alignment(horizontal="center", vertical="center")
             
             # Write total formula
-            cell_f = ws.cell(row=row_idx, column=6)
-            if complexity_pct == 0:
-                cell_f.value = f"=D{row_idx}"
-            else:
-                cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
-            cell_f.number_format = '$#,##0'
+            cell_f = safe_get_writable_cell(ws, row_idx, 6)
+            try:
+                if complexity_pct == 0:
+                    cell_f.value = f"=D{row_idx}"
+                else:
+                    cell_f.value = f"=D{row_idx}*(1+E{row_idx})"
+                cell_f.number_format = '$#,##0'
+            except (AttributeError, TypeError):
+                if complexity_pct == 0:
+                    safe_set_cell_value(ws, f"F{row_idx}", f"=D{row_idx}")
+                else:
+                    safe_set_cell_value(ws, f"F{row_idx}", f"=D{row_idx}*(1+E{row_idx})")
+                cell_f = safe_get_writable_cell(ws, row_idx, 6)
+                try:
+                    cell_f.number_format = '$#,##0'
+                except Exception:
+                    pass
             if is_new_row:
                 apply_full_border_pair(ws, 6, row_idx, row_second)
                 safe_merge_cells(ws, f"F{row_idx}:F{row_second}")
@@ -851,8 +1186,8 @@ def apply_development_package(
                 if Alignment is not None:
                     cell_f.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Clear add-ons (Custom Items don't have add-ons)
-            for col_letter in ["H", "I", "J", "K"]:
+            # Clear add-ons (Custom Items don't have add-ons) - only H, I, J now (no K)
+            for col_letter in ["H", "I", "J"]:
                 col_num = ord(col_letter) - 64
                 cell_opt = ws.cell(row=row_idx, column=col_num)
                 cell_opt.value = None
@@ -862,14 +1197,32 @@ def apply_development_package(
                     if Alignment is not None:
                         cell_opt.alignment = Alignment(horizontal="center", vertical="center")
             
-            # Clear total optional add-on
-            cell_l = ws.cell(row=row_idx, column=12)
-            cell_l.value = None
+            # Clear total optional add-on - now uses K-L merged
+            cell_k = safe_get_writable_cell(ws, row_idx, 11)
+            cell_l = safe_get_writable_cell(ws, row_idx, 12)
+            try:
+                cell_k.value = None
+                cell_l.value = None
+            except (AttributeError, TypeError):
+                safe_set_cell_value(ws, f"K{row_idx}", None)
+                safe_set_cell_value(ws, f"L{row_idx}", None)
             if is_new_row:
+                apply_full_border_pair(ws, 11, row_idx, row_second)
                 apply_full_border_pair(ws, 12, row_idx, row_second)
-                safe_merge_cells(ws, f"L{row_idx}:L{row_second}")
+                safe_merge_cells(ws, f"K{row_idx}:L{row_second}")
+                # Get merged cell and ensure borders are applied (for more than 5 styles)
+                cell_k = safe_get_writable_cell(ws, row_idx, 11)
+                if total_styles_count > 5 and Border is not None and Side is not None:
+                    thin = Side(style="thin")
+                    try:
+                        cell_k.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+                    except Exception:
+                        pass
                 if Alignment is not None:
-                    cell_l.alignment = Alignment(horizontal="center", vertical="center")
+                    try:
+                        cell_k.alignment = Alignment(horizontal="center", vertical="center")
+                    except Exception:
+                        pass
             
             total_development += custom_price * (1 + complexity_pct / 100.0)
         
@@ -891,9 +1244,17 @@ def apply_development_package(
     else:
         last_regular_style_row = 10
 
-    # Count activewear and regular styles
-    num_activewear = sum(1 for entry in style_entries if entry.get("activewear", False))
-    num_regular = sum(1 for entry in style_entries if not entry.get("activewear", False))
+    # Count styles by type
+    # Handle migration from old "activewear" boolean
+    num_activewear = sum(1 for entry in style_entries if (
+        entry.get("style_type") == "Activewear/Lingerie/Swim" or 
+        (entry.get("style_type") is None and entry.get("activewear", False))
+    ))
+    num_regular = sum(1 for entry in style_entries if (
+        entry.get("style_type") == "Regular" or 
+        (entry.get("style_type") is None and not entry.get("activewear", False))
+    ))
+    num_pattern_blocks = sum(1 for entry in style_entries if entry.get("style_type") == "Pattern Blocks")
     
     total_extra_rows = max(total_styles_count - len(ROW_INDICES), 0) * 2
     deliverables_block_start = DELIVERABLE_BLOCK_START + total_extra_rows
@@ -910,7 +1271,7 @@ def apply_development_package(
         
         # Find the "FINAL SAMPLES" row (should be around row 31-32)
         for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
-            value = ws.cell(row=scan_row, column=label_column_idx).value
+            value = safe_get_cell_value(ws, scan_row, label_column_idx)
             if isinstance(value, str):
                 value_lower = value.strip().lower()
                 if "final samples" in value_lower and final_samples_row is None:
@@ -932,31 +1293,47 @@ def apply_development_package(
 
             # Clear values in row 32 (second row of pair) for columns B-D
             for col in [label_column_idx, col_c_idx, col_d_idx]:
+                # Always use safe_set_cell_value to handle MergedCell
                 if get_column_letter:
                     safe_set_cell_value(ws, f"{get_column_letter(col)}{final_samples_row + 1}", None)
                 else:
-                    ws.cell(row=final_samples_row + 1, column=col).value = None
+                    # Fallback: use column letter directly
+                    from openpyxl.utils import get_column_letter as gcl
+                    safe_set_cell_value(ws, f"{gcl(col)}{final_samples_row + 1}", None)
 
             # Clear column C in row 31 (to ensure no leftover values)
+            # Always use safe_set_cell_value to handle MergedCell
             if get_column_letter:
                 safe_set_cell_value(ws, f"{get_column_letter(col_c_idx)}{final_samples_row}", None)
             else:
-                ws.cell(row=final_samples_row, column=col_c_idx).value = None
+                safe_set_cell_value(ws, f"C{final_samples_row}", None)
 
             # Set SECOND SAMPLES in row 31, column B, count in column D
+            # Always use safe_set_cell_value to handle MergedCell
             if get_column_letter:
                 safe_set_cell_value(ws, f"{get_column_letter(label_column_idx)}{final_samples_row}", "SECOND SAMPLES")
                 safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{final_samples_row}", num_activewear)
             else:
-                ws.cell(row=final_samples_row, column=label_column_idx).value = "SECOND SAMPLES"
-                ws.cell(row=final_samples_row, column=col_d_idx).value = num_activewear
-            ws.cell(row=final_samples_row, column=col_d_idx).number_format = "0"
+                safe_set_cell_value(ws, f"B{final_samples_row}", "SECOND SAMPLES")
+                safe_set_cell_value(ws, f"D{final_samples_row}", num_activewear)
+            # Set number format - handle MergedCell
+            try:
+                count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                count_cell.number_format = "0"
+            except AttributeError:
+                # If it's a MergedCell, find top-left cell
+                for merged_range in ws.merged_cells.ranges:
+                    if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        count_cell.number_format = "0"
+                        break
             
             # Use row 29 (ROUND OF REVISIONS) as reference - it should be around row 29
             # Find ROUND OF REVISIONS row (should be row 29)
             reference_row = None
             for scan_row in range(deliverables_block_start, final_samples_row):
-                value = ws.cell(row=scan_row, column=label_column_idx).value
+                value = safe_get_cell_value(ws, scan_row, label_column_idx)
                 if isinstance(value, str) and "round of revisions" in value.lower():
                     reference_row = scan_row
                     break
@@ -1048,48 +1425,65 @@ def apply_development_package(
             # Row 33-34: 2ND ROUND OF FITTINGS (count in column D)
             row_2nd_fittings = insert_row
             # Clear column C to ensure no leftover values
+            # Always use safe_set_cell_value to handle MergedCell
             if get_column_letter:
                 safe_set_cell_value(ws, f"{get_column_letter(col_c_idx)}{row_2nd_fittings}", None)
-            else:
-                ws.cell(row=row_2nd_fittings, column=col_c_idx).value = None
-            if get_column_letter:
                 safe_set_cell_value(ws, f"{get_column_letter(label_column_idx)}{row_2nd_fittings}", "2ND ROUND OF FITTINGS")
                 safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{row_2nd_fittings}", 1)
             else:
-                ws.cell(row=row_2nd_fittings, column=label_column_idx).value = "2ND ROUND OF FITTINGS"
-                ws.cell(row=row_2nd_fittings, column=col_d_idx).value = 1
-            ws.cell(row=row_2nd_fittings, column=col_d_idx).number_format = "0"
+                safe_set_cell_value(ws, f"C{row_2nd_fittings}", None)
+                safe_set_cell_value(ws, f"B{row_2nd_fittings}", "2ND ROUND OF FITTINGS")
+                safe_set_cell_value(ws, f"D{row_2nd_fittings}", 1)
+            # Set number format - handle MergedCell
+            try:
+                count_cell = ws.cell(row=row_2nd_fittings, column=col_d_idx)
+                count_cell.number_format = "0"
+            except AttributeError:
+                # If it's a MergedCell, find top-left cell
+                for merged_range in ws.merged_cells.ranges:
+                    if (merged_range.min_row <= row_2nd_fittings <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        count_cell.number_format = "0"
+                        break
             row_2nd_fittings_2 = insert_row + 1
             
             # Row 35-36: 2ND ROUND OF REVISIONS (count in column D)
             row_2nd_revisions = insert_row + 2
             # Clear column C to ensure no leftover values
+            # Always use safe_set_cell_value to handle MergedCell
             if get_column_letter:
                 safe_set_cell_value(ws, f"{get_column_letter(col_c_idx)}{row_2nd_revisions}", None)
-            else:
-                ws.cell(row=row_2nd_revisions, column=col_c_idx).value = None
-            if get_column_letter:
                 safe_set_cell_value(ws, f"{get_column_letter(label_column_idx)}{row_2nd_revisions}", "2ND ROUND OF REVISIONS")
                 safe_set_cell_value(ws, f"{get_column_letter(col_d_idx)}{row_2nd_revisions}", 1)
             else:
-                ws.cell(row=row_2nd_revisions, column=label_column_idx).value = "2ND ROUND OF REVISIONS"
-                ws.cell(row=row_2nd_revisions, column=col_d_idx).value = 1
-            ws.cell(row=row_2nd_revisions, column=col_d_idx).number_format = "0"
+                safe_set_cell_value(ws, f"C{row_2nd_revisions}", None)
+                safe_set_cell_value(ws, f"B{row_2nd_revisions}", "2ND ROUND OF REVISIONS")
+                safe_set_cell_value(ws, f"D{row_2nd_revisions}", 1)
+            # Set number format - handle MergedCell
+            try:
+                count_cell = ws.cell(row=row_2nd_revisions, column=col_d_idx)
+                count_cell.number_format = "0"
+            except AttributeError:
+                # If it's a MergedCell, find top-left cell
+                for merged_range in ws.merged_cells.ranges:
+                    if (merged_range.min_row <= row_2nd_revisions <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        count_cell.number_format = "0"
+                        break
             row_2nd_revisions_2 = insert_row + 3
             
             # Row 37-38: FINAL SAMPLES (count of all styles)
             row_final_samples = insert_row + 4
             row_final_samples_new = row_final_samples  # Store for later use
-            # Clear column C to ensure no leftover values
+            # Clear column C to ensure no leftover values - always use safe_set_cell_value to handle MergedCell
             if get_column_letter:
                 safe_set_cell_value(ws, f"{get_column_letter(col_c_idx)}{row_final_samples}", None)
-            else:
-                ws.cell(row=row_final_samples, column=col_c_idx).value = None
-            if get_column_letter:
                 safe_set_cell_value(ws, f"{get_column_letter(label_column_idx)}{row_final_samples}", "FINAL SAMPLES")
-                # Will be set by formulas section below
             else:
-                ws.cell(row=row_final_samples, column=label_column_idx).value = "FINAL SAMPLES"
+                safe_set_cell_value(ws, f"C{row_final_samples}", None)
+                safe_set_cell_value(ws, f"B{row_final_samples}", "FINAL SAMPLES")
             row_final_samples_2 = insert_row + 5
             
             # Step 4: Copy exact formatting from B29-D30 to each new row pair (B33-D34, B35-D36, B37-D38)
@@ -1154,18 +1548,24 @@ def apply_development_package(
                             pass
                         # Set the count value (total styles: regular + activewear, excluding custom line items)
                         count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
-                        # Clear the cell completely (including any formulas) before setting value
-                        count_cell = ws.cell(row=base_row, column=col_d_idx)
-                        count_cell.value = None
-                        # Set direct numeric value (not a formula)
-                        count_cell.value = count_value
-                        count_cell.number_format = "0"
+                        # Use safe_set_cell_value to handle MergedCell
+                        safe_set_cell_value(ws, f"D{base_row}", None)
+                        safe_set_cell_value(ws, f"D{base_row}", count_value)
+                        # Set number format on the actual cell (handle MergedCell)
+                        count_cell = safe_get_writable_cell(ws, base_row, col_d_idx)
+                        try:
+                            count_cell.number_format = "0"
+                        except Exception:
+                            pass
                         # Re-merge column D
                         safe_merge_cells(ws, f"D{base_row}:D{row_second}")
                         # Restore center alignment
                         if Alignment:
-                            cell_d = ws.cell(row=base_row, column=col_d_idx)
-                            cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                            cell_d = safe_get_writable_cell(ws, base_row, col_d_idx)
+                            try:
+                                cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                            except Exception:
+                                pass
             
             # Restore merged cells for right side columns (H-P) using template merge patterns
             if deliverables_template and "merges" in deliverables_template:
@@ -1187,8 +1587,11 @@ def apply_development_package(
                                 safe_merge_cells(ws, range_str)
                                 # Center align the merged cell
                                 if Alignment:
-                                    cell = ws.cell(row=base_row, column=min_col)
-                                    cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                                    cell = safe_get_writable_cell(ws, base_row, min_col)
+                                    try:
+                                        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                                    except Exception:
+                                        pass
                         except Exception:
                             pass
             
@@ -1250,8 +1653,7 @@ def apply_development_package(
         deliverable_addon_map = [
             ("WASH/TREATMENT", "H"),
             ("DESIGN", "I"),
-            ("SOURCING", "J"),
-            ("TREATMENT", "K"),
+            ("TREATMENT", "J"),  # TREATMENT moved to column J (SOURCING removed)
         ]
 
         def find_label_row(label_text: str) -> int | None:
@@ -1259,7 +1661,7 @@ def apply_development_package(
             lowered = label_text.strip().lower()
             partial_match_row = None
             for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
-                value = ws.cell(row=scan_row, column=label_column_idx).value
+                value = safe_get_cell_value(ws, scan_row, label_column_idx)
                 if not isinstance(value, str):
                     continue
                 value_clean = value.strip().lower()
@@ -1274,9 +1676,24 @@ def apply_development_package(
             if row_idx is None:
                 continue
             addon_range = f"{addon_col_letter}10:{addon_col_letter}{last_style_row}"
-            cell = ws.cell(row=row_idx, column=target_col_j)
-            cell.value = f"=COUNT({addon_range})"
-            cell.number_format = "0"
+            # Use safe_set_cell_value to handle MergedCell
+            if get_column_letter:
+                safe_set_cell_value(ws, f"{get_column_letter(target_col_j)}{row_idx}", f"=COUNT({addon_range})")
+            else:
+                from openpyxl.utils import get_column_letter as gcl
+                safe_set_cell_value(ws, f"{gcl(target_col_j)}{row_idx}", f"=COUNT({addon_range})")
+            # Set number format - handle MergedCell
+            try:
+                cell = ws.cell(row=row_idx, column=target_col_j)
+                cell.number_format = "0"
+            except AttributeError:
+                # If it's a MergedCell, find top-left cell
+                for merged_range in ws.merged_cells.ranges:
+                    if (merged_range.min_row <= row_idx <= merged_range.max_row and
+                        merged_range.min_col <= target_col_j <= merged_range.max_col):
+                        cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        cell.number_format = "0"
+                        break
 
         # Round of Fittings: always 1
         fittings_row = find_label_row("ROUND OF FITTINGS")
@@ -1290,12 +1707,21 @@ def apply_development_package(
                         ws.unmerge_cells(range_string=str(merged_range))
                     except Exception:
                         pass
-            # Clear the cell completely (including any formulas)
-            count_cell = ws.cell(row=fittings_row, column=col_d_idx)
-            count_cell.value = None
-            # Set direct numeric value (not a formula)
-            count_cell.value = 1
-            count_cell.number_format = "0"
+            # Use safe_set_cell_value to handle MergedCell
+            safe_set_cell_value(ws, f"D{fittings_row}", None)
+            safe_set_cell_value(ws, f"D{fittings_row}", 1)
+            # Set number format on the actual cell (handle MergedCell)
+            try:
+                count_cell = ws.cell(row=fittings_row, column=col_d_idx)
+                count_cell.number_format = "0"
+            except AttributeError:
+                # If it's a MergedCell, find top-left cell
+                for merged_range in ws.merged_cells.ranges:
+                    if (merged_range.min_row <= fittings_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        count_cell.number_format = "0"
+                        break
         
         # Round of Revisions: 
         # - 1 if there's ONLY Regular styles (non-Activewear) OR ONLY Activewear styles
@@ -1305,7 +1731,7 @@ def apply_development_package(
         revisions_row = None
         revisions_label_lower = "round of revisions"
         for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
-            value = ws.cell(row=scan_row, column=label_col_b).value
+            value = safe_get_cell_value(ws, scan_row, label_col_b)
             if isinstance(value, str) and revisions_label_lower in value.strip().lower():
                 revisions_row = scan_row
                 break
@@ -1332,13 +1758,21 @@ def apply_development_package(
             # num_regular and num_activewear are calculated at lines 884-885 from style_entries
             revisions_count = 2 if (num_regular > 0 and num_activewear > 0) else 1
             
-            # Clear the cell completely (including any formulas)
-            count_cell = ws.cell(row=revisions_row, column=col_d_idx)
-            count_cell.value = None
-            
-            # Set the calculated value directly (not a formula) - this will ALWAYS work
-            count_cell.value = revisions_count
-            count_cell.number_format = "0"
+            # Use safe_set_cell_value to handle MergedCell
+            safe_set_cell_value(ws, f"D{revisions_row}", None)
+            safe_set_cell_value(ws, f"D{revisions_row}", revisions_count)
+            # Set number format on the actual cell (handle MergedCell)
+            try:
+                count_cell = ws.cell(row=revisions_row, column=col_d_idx)
+                count_cell.number_format = "0"
+            except AttributeError:
+                # If it's a MergedCell, find top-left cell
+                for merged_range in ws.merged_cells.ranges:
+                    if (merged_range.min_row <= revisions_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                        count_cell.number_format = "0"
+                        break
             if Alignment is not None:
                 count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
             
@@ -1352,8 +1786,18 @@ def apply_development_package(
                     safe_merge_cells(ws, range_str)
                     # Re-apply alignment after merging
                     if Alignment is not None:
-                        merged_cell = ws.cell(row=revisions_row, column=col_d_idx)
-                        merged_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                        # Get top-left cell of merged range for alignment
+                        try:
+                            merged_cell = ws.cell(row=revisions_row, column=col_d_idx)
+                            merged_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                        except Exception:
+                            # If it's a MergedCell, find top-left cell
+                            for merged_range in ws.merged_cells.ranges:
+                                if (merged_range.min_row <= revisions_row <= merged_range.max_row and
+                                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                                    merged_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                                    merged_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                                    break
         
         # If activewear exists, handle SECOND SAMPLES and the new rows
         if num_activewear > 0:
@@ -1370,12 +1814,21 @@ def apply_development_package(
                             ws.unmerge_cells(range_string=str(merged_range))
                         except Exception:
                             pass
-                # Clear the cell completely (including any formulas)
-                count_cell = ws.cell(row=second_sample_row, column=col_d_idx)
-                count_cell.value = None
-                # Set direct numeric value (not a formula)
-                count_cell.value = num_activewear
-                count_cell.number_format = "0"
+                # Use safe_set_cell_value to handle MergedCell
+                safe_set_cell_value(ws, f"D{second_sample_row}", None)
+                safe_set_cell_value(ws, f"D{second_sample_row}", num_activewear)
+                # Set number format on the actual cell (handle MergedCell)
+                try:
+                    count_cell = ws.cell(row=second_sample_row, column=col_d_idx)
+                    count_cell.number_format = "0"
+                except AttributeError:
+                    # If it's a MergedCell, find top-left cell
+                    for merged_range in ws.merged_cells.ranges:
+                        if (merged_range.min_row <= second_sample_row <= merged_range.max_row and
+                            merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                            count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                            count_cell.number_format = "0"
+                            break
             
             # 2nd Round of Fittings: always 1 (already set in column D above)
             second_fittings_row = find_label_row("2ND ROUND OF FITTINGS")
@@ -1389,31 +1842,41 @@ def apply_development_package(
                             ws.unmerge_cells(range_string=str(merged_range))
                         except Exception:
                             pass
-                # Clear the cell completely (including any formulas)
-                count_cell = ws.cell(row=second_fittings_row, column=col_d_idx)
-                count_cell.value = None
-                # Set direct numeric value (not a formula)
-                count_cell.value = 1
-                count_cell.number_format = "0"
+                # Use safe_set_cell_value to handle MergedCell
+                safe_set_cell_value(ws, f"D{second_fittings_row}", None)
+                safe_set_cell_value(ws, f"D{second_fittings_row}", 1)
+                # Set number format on the actual cell (handle MergedCell)
+                try:
+                    count_cell = ws.cell(row=second_fittings_row, column=col_d_idx)
+                    count_cell.number_format = "0"
+                except AttributeError:
+                    # If it's a MergedCell, find top-left cell
+                    for merged_range in ws.merged_cells.ranges:
+                        if (merged_range.min_row <= second_fittings_row <= merged_range.max_row and
+                            merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                            count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                            count_cell.number_format = "0"
+                            break
             
             # 2nd Round of Revisions: always 1 for Active category (already set in column D above)
+            # Merge and alignment will be handled in the unified deliverables section below
             second_revisions_row = find_label_row("2ND ROUND OF REVISIONS")
             if second_revisions_row:
                 col_d_idx = column_index_from_string("D")
-                # Unmerge if needed and clear any formulas
-                for merged_range in list(ws.merged_cells.ranges):
-                    if (merged_range.min_row <= second_revisions_row <= merged_range.max_row and
-                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                        try:
-                            ws.unmerge_cells(range_string=str(merged_range))
-                        except Exception:
-                            pass
-                # Clear the cell completely (including any formulas)
-                count_cell = ws.cell(row=second_revisions_row, column=col_d_idx)
-                count_cell.value = None
-                # Set direct numeric value (not a formula)
-                count_cell.value = 1
-                count_cell.number_format = "0"
+                # Use safe_set_cell_value to handle MergedCell
+                safe_set_cell_value(ws, f"D{second_revisions_row}", 1)
+                # Set number format on the actual cell (handle MergedCell)
+                try:
+                    count_cell = ws.cell(row=second_revisions_row, column=col_d_idx)
+                    count_cell.number_format = "0"
+                except AttributeError:
+                    # If it's a MergedCell, find top-left cell
+                    for merged_range in ws.merged_cells.ranges:
+                        if (merged_range.min_row <= second_revisions_row <= merged_range.max_row and
+                            merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                            count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                            count_cell.number_format = "0"
+                            break
             
             # Final Samples: count is already set in the merge section above, but verify it's correct here
             # (This is a backup check - the count should already be set when merging FINAL SAMPLES)
@@ -1425,36 +1888,24 @@ def apply_development_package(
                 # Use direct count instead of formula
                 count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
                 col_d_idx = column_index_from_string("D")
-                # Unmerge temporarily to set value and clear any formulas
-                was_merged = False
-                merge_pattern = None
-                for merged_range in list(ws.merged_cells.ranges):
-                    if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
-                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                        was_merged = True
-                        merge_pattern = (merged_range.min_row, merged_range.max_row, merged_range.min_col, merged_range.max_col)
-                        try:
-                            ws.unmerge_cells(range_string=str(merged_range))
-                        except Exception:
-                            pass
-                        break
-                # Clear the cell completely (including any formulas)
-                count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
-                count_cell.value = None
-                # Set direct numeric value (not a formula)
-                count_cell.value = count_value
-                count_cell.number_format = "0"
-                # Re-merge if it was merged before
-                if was_merged and merge_pattern and safe_merge_cells:
-                    min_row, max_row, min_col, max_col = merge_pattern
-                    if get_column_letter:
-                        start_col_letter = get_column_letter(min_col)
-                        end_col_letter = get_column_letter(max_col)
-                        range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
-                        safe_merge_cells(ws, range_str)
-                    if Alignment:
-                        cell_d = ws.cell(row=final_samples_row, column=col_d_idx)
-                        cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                col_b_idx = column_index_from_string("B")
+                col_c_idx = column_index_from_string("C")
+                # Use safe_set_cell_value to handle MergedCell
+                safe_set_cell_value(ws, f"D{final_samples_row}", count_value)
+                # Set number format - handle MergedCell
+                try:
+                    count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                    count_cell.number_format = "0"
+                except AttributeError:
+                    # If it's a MergedCell, find top-left cell
+                    for merged_range in ws.merged_cells.ranges:
+                        if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
+                            merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                            count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                            count_cell.number_format = "0"
+                            break
+                # Store row for later merge (we'll do merges at the very end)
+                # Merges will be handled separately at the end of deliverables section
         else:
             # When there's no activewear, set FINAL SAMPLES here
             # Final Samples: all styles (regular only, no activewear, excluding custom line items)
@@ -1462,7 +1913,7 @@ def apply_development_package(
             final_samples_row = None
             label_col_b = column_index_from_string("B")
             for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
-                value = ws.cell(row=scan_row, column=label_col_b).value
+                value = safe_get_cell_value(ws, scan_row, label_col_b)
                 if isinstance(value, str) and "final" in value.lower() and "sample" in value.lower():
                     final_samples_row = scan_row
                     break
@@ -1470,36 +1921,22 @@ def apply_development_package(
                 # Use direct count instead of formula
                 count_value = num_styles  # num_styles is already regular + activewear (excluding custom)
                 col_d_idx = column_index_from_string("D")
-                # Unmerge temporarily to set value and clear any formulas
-                was_merged = False
-                merge_pattern = None
-                for merged_range in list(ws.merged_cells.ranges):
-                    if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
-                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
-                        was_merged = True
-                        merge_pattern = (merged_range.min_row, merged_range.max_row, merged_range.min_col, merged_range.max_col)
-                        try:
-                            ws.unmerge_cells(range_string=str(merged_range))
-                        except Exception:
-                            pass
-                        break
-                # Clear the cell completely (including any formulas)
-                count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
-                count_cell.value = None
-                # Set direct numeric value (not a formula)
-                count_cell.value = count_value
-                count_cell.number_format = "0"
-                # Re-merge if it was merged before
-                if was_merged and merge_pattern and safe_merge_cells:
-                    min_row, max_row, min_col, max_col = merge_pattern
-                    if get_column_letter:
-                        start_col_letter = get_column_letter(min_col)
-                        end_col_letter = get_column_letter(max_col)
-                        range_str = f"{start_col_letter}{min_row}:{end_col_letter}{max_row}"
-                        safe_merge_cells(ws, range_str)
-                    if Alignment:
-                        cell_d = ws.cell(row=final_samples_row, column=col_d_idx)
-                        cell_d.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                # Use safe_set_cell_value to handle MergedCell
+                safe_set_cell_value(ws, f"D{final_samples_row}", count_value)
+                # Set number format on the actual cell (handle MergedCell)
+                try:
+                    count_cell = ws.cell(row=final_samples_row, column=col_d_idx)
+                    count_cell.number_format = "0"
+                except AttributeError:
+                    # If it's a MergedCell, find top-left cell
+                    for merged_range in ws.merged_cells.ranges:
+                        if (merged_range.min_row <= final_samples_row <= merged_range.max_row and
+                            merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                            count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                            count_cell.number_format = "0"
+                            break
+                # Store row for later merge (we'll do merges at the very end)
+                # Merges will be handled separately at the end of deliverables section
         
         # Update PATTERNS and FIRST SAMPLES to have the same value as FINAL SAMPLES (num_styles)
         # This applies to both activewear and non-activewear cases, after find_label_row is defined
@@ -1507,7 +1944,7 @@ def apply_development_package(
         # So we need to search column B instead
         patterns_row = None
         for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
-            value = ws.cell(row=scan_row, column=column_index_from_string("B")).value
+            value = safe_get_cell_value(ws, scan_row, column_index_from_string("B"))
             if isinstance(value, str) and "pattern" in value.lower():
                 patterns_row = scan_row
                 break
@@ -1522,22 +1959,31 @@ def apply_development_package(
                         ws.unmerge_cells(range_string=str(merged_range))
                     except Exception:
                         pass
-            # Clear the cell completely (including any formulas)
-            count_cell = ws.cell(row=patterns_row, column=col_d_idx)
-            count_cell.value = None
-            # Set direct numeric value (same as FINAL SAMPLES: num_styles)
-            count_cell.value = num_styles
-            count_cell.number_format = "0"
+            # Use safe_set_cell_value to handle MergedCell
+            safe_set_cell_value(ws, f"D{patterns_row}", None)
+            safe_set_cell_value(ws, f"D{patterns_row}", num_styles)
             # Merge and center (PATTERNS typically spans 2 rows)
             patterns_row_second = patterns_row + 1
+            col_b_idx = column_index_from_string("B")
+            col_c_idx = column_index_from_string("C")
+            # Merge B:C for label
             if safe_merge_cells:
+                safe_merge_cells(ws, f"B{patterns_row}:C{patterns_row_second}")
                 safe_merge_cells(ws, f"D{patterns_row}:D{patterns_row_second}")
-            if Alignment:
-                count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            # Set number format and alignment - handle MergedCell
+            count_cell = safe_get_writable_cell(ws, patterns_row, col_d_idx)
+            label_cell = safe_get_writable_cell(ws, patterns_row, col_b_idx)
+            try:
+                count_cell.number_format = "0"
+                if Alignment:
+                    count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                    label_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            except Exception:
+                pass
         
         first_samples_row = None
         for scan_row in range(deliverables_block_start, deliverables_block_end + 1):
-            value = ws.cell(row=scan_row, column=column_index_from_string("B")).value
+            value = safe_get_cell_value(ws, scan_row, column_index_from_string("B"))
             if isinstance(value, str) and "first" in value.lower() and "sample" in value.lower():
                 first_samples_row = scan_row
                 break
@@ -1552,18 +1998,275 @@ def apply_development_package(
                         ws.unmerge_cells(range_string=str(merged_range))
                     except Exception:
                         pass
-            # Clear the cell completely (including any formulas)
-            count_cell = ws.cell(row=first_samples_row, column=col_d_idx)
-            count_cell.value = None
-            # Set direct numeric value (same as FINAL SAMPLES: num_styles)
-            count_cell.value = num_styles
-            count_cell.number_format = "0"
+            # Use safe_set_cell_value to handle MergedCell
+            safe_set_cell_value(ws, f"D{first_samples_row}", None)
+            safe_set_cell_value(ws, f"D{first_samples_row}", num_styles)
             # Merge and center (FIRST SAMPLES typically spans 2 rows)
             first_samples_row_second = first_samples_row + 1
+            col_b_idx = column_index_from_string("B")
+            col_c_idx = column_index_from_string("C")
+            # Merge B:C for label
             if safe_merge_cells:
+                safe_merge_cells(ws, f"B{first_samples_row}:C{first_samples_row_second}")
                 safe_merge_cells(ws, f"D{first_samples_row}:D{first_samples_row_second}")
-            if Alignment:
-                count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            # Set number format and alignment - handle MergedCell
+            count_cell = safe_get_writable_cell(ws, first_samples_row, col_d_idx)
+            label_cell = safe_get_writable_cell(ws, first_samples_row, col_b_idx)
+            try:
+                count_cell.number_format = "0"
+                if Alignment:
+                    count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                    label_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            except Exception:
+                pass
+        
+        # Set TSU TechPak and Costing Workbook to number of styles
+        # These are typically at rows 33 and 35 (column D), but may shift with row insertions
+        teg_tech_pack_row = None
+        costing_workbook_row = None
+        col_b_idx = column_index_from_string("B")
+        # Scan more broadly to find them, including checking merged cells
+        scan_end_row = min(deliverables_block_end + 5, ws.max_row)
+        for scan_row in range(deliverables_block_start, scan_end_row + 1):
+            value = safe_get_cell_value(ws, scan_row, col_b_idx)
+            # Also check if it's in a merged cell
+            if not value or not isinstance(value, str):
+                for merged_range in ws.merged_cells.ranges:
+                    if (merged_range.min_row <= scan_row <= merged_range.max_row and
+                        merged_range.min_col <= col_b_idx <= merged_range.max_col):
+                        value = safe_get_cell_value(ws, merged_range.min_row, merged_range.min_col)
+                        scan_row = merged_range.min_row
+                        break
+            
+            if isinstance(value, str):
+                value_lower = value.lower().strip()
+                if "teg" in value_lower and "tech" in value_lower and "pack" in value_lower:
+                    if teg_tech_pack_row is None:
+                        teg_tech_pack_row = scan_row
+                elif "costing" in value_lower and "workbook" in value_lower:
+                    if costing_workbook_row is None:
+                        costing_workbook_row = scan_row
+        
+        col_d_idx = column_index_from_string("D")
+        col_b_idx = column_index_from_string("B")
+        col_c_idx = column_index_from_string("C")
+        
+        # Set TEG TECH PACK - merge and center like other deliverables
+        if teg_tech_pack_row:
+            # Ensure TEG TECH PACK label exists in column B
+            teg_label = safe_get_cell_value(ws, teg_tech_pack_row, col_b_idx)
+            if not teg_label or not isinstance(teg_label, str) or "teg" not in teg_label.lower():
+                # Label is missing, set it
+                safe_set_cell_value(ws, f"B{teg_tech_pack_row}", "TEG TECH PACK")
+            
+            # Unmerge B:C and D first to set value
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= teg_tech_pack_row <= merged_range.max_row and
+                    (merged_range.min_col <= col_b_idx <= merged_range.max_col or
+                     merged_range.min_col <= col_d_idx <= merged_range.max_col)):
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+            # Clear and set value to num_styles (should be 4)
+            safe_set_cell_value(ws, f"D{teg_tech_pack_row}", None)
+            safe_set_cell_value(ws, f"D{teg_tech_pack_row}", num_styles)
+            # Merge B:C and D, then center
+            teg_tech_pack_row_2 = teg_tech_pack_row + 1
+            if safe_merge_cells:
+                safe_merge_cells(ws, f"B{teg_tech_pack_row}:C{teg_tech_pack_row_2}")
+                safe_merge_cells(ws, f"D{teg_tech_pack_row}:D{teg_tech_pack_row_2}")
+            # Set number format and alignment
+            count_cell = safe_get_writable_cell(ws, teg_tech_pack_row, col_d_idx)
+            label_cell = safe_get_writable_cell(ws, teg_tech_pack_row, col_b_idx)
+            try:
+                count_cell.number_format = "0"
+                if Alignment:
+                    count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                    label_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            except Exception:
+                pass
+        
+        if costing_workbook_row and teg_tech_pack_row:
+            # Ensure COSTING WORKBOOK label exists in column B
+            costing_label = safe_get_cell_value(ws, costing_workbook_row, col_b_idx)
+            if not costing_label or not isinstance(costing_label, str) or "costing" not in costing_label.lower():
+                # Label is missing, set it
+                safe_set_cell_value(ws, f"B{costing_workbook_row}", "COSTING WORKBOOK")
+            
+            # Read the actual value from TEG TECH PACK cell to ensure they match
+            teg_tech_pack_value = safe_get_cell_value(ws, teg_tech_pack_row, col_d_idx)
+            # If TEG TECH PACK value is wrong, use num_styles directly
+            if teg_tech_pack_value != num_styles:
+                teg_tech_pack_value = num_styles
+            
+            # Unmerge B:C and D first to set value
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= costing_workbook_row <= merged_range.max_row and
+                    (merged_range.min_col <= col_b_idx <= merged_range.max_col or
+                     merged_range.min_col <= col_d_idx <= merged_range.max_col)):
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+            # Set COSTING WORKBOOK value
+            if get_column_letter:
+                costing_workbook_ref = f"{get_column_letter(col_d_idx)}{costing_workbook_row}"
+                safe_set_cell_value(ws, costing_workbook_ref, teg_tech_pack_value)
+            else:
+                safe_set_cell_value(ws, f"D{costing_workbook_row}", teg_tech_pack_value)
+            # Merge B:C and D, then center
+            costing_workbook_row_2 = costing_workbook_row + 1
+            if safe_merge_cells:
+                safe_merge_cells(ws, f"B{costing_workbook_row}:C{costing_workbook_row_2}")
+                safe_merge_cells(ws, f"D{costing_workbook_row}:D{costing_workbook_row_2}")
+            # Set number format and alignment
+            count_cell = safe_get_writable_cell(ws, costing_workbook_row, col_d_idx)
+            label_cell = safe_get_writable_cell(ws, costing_workbook_row, col_b_idx)
+            try:
+                count_cell.number_format = "0"
+                if Alignment:
+                    count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                    label_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            except Exception:
+                pass
+        elif costing_workbook_row:
+            # Fallback if TEG TECH PACK not found
+            if get_column_letter:
+                costing_workbook_ref = f"{get_column_letter(col_d_idx)}{costing_workbook_row}"
+                safe_set_cell_value(ws, costing_workbook_ref, num_styles)
+                # Set number format - use safe_get_writable_cell
+                count_cell = safe_get_writable_cell(ws, costing_workbook_row, col_d_idx)
+                try:
+                    count_cell.number_format = "0"
+                except Exception:
+                    pass
+            else:
+                # Fallback - handle MergedCell
+                try:
+                    count_cell = ws.cell(row=costing_workbook_row, column=col_d_idx)
+                    count_cell.value = num_styles
+                    count_cell.number_format = "0"
+                except Exception:
+                    # Handle MergedCell by finding top-left cell or unmerging
+                    for merged_range in list(ws.merged_cells.ranges):
+                        if (merged_range.min_row <= costing_workbook_row <= merged_range.max_row and
+                            merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                            try:
+                                # Use safe_set_cell_value to handle MergedCell
+                                if get_column_letter:
+                                    safe_set_cell_value(ws, f"{get_column_letter(merged_range.min_col)}{merged_range.min_row}", num_styles)
+                                else:
+                                    from openpyxl.utils import get_column_letter as gcl
+                                    safe_set_cell_value(ws, f"{gcl(merged_range.min_col)}{merged_range.min_row}", num_styles)
+                                # Set number format - handle MergedCell
+                                try:
+                                    count_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                                    count_cell.number_format = "0"
+                                except AttributeError:
+                                    pass
+                                break
+                            except Exception:
+                                pass
+        
+        # Add right borders to column D (values) for all deliverables in the block
+        # Find all deliverable rows and add right border to their D column values
+        if Border is not None and Side is not None:
+            thin = Side(style="thin")
+            col_b_idx = column_index_from_string("B")
+            col_d_idx = column_index_from_string("D")
+            
+            # Scan for all deliverables and add right border to their D column
+            for scan_row in range(deliverables_block_start, deliverables_block_end + 5):
+                value = safe_get_cell_value(ws, scan_row, col_b_idx)
+                if isinstance(value, str) and value.strip():
+                    value_lower = value.lower().strip()
+                    # Check if it's a deliverable label
+                    deliverable_keywords = ["pattern", "sample", "fitting", "revision", "tech pack", "costing", "workbook"]
+                    if any(keyword in value_lower for keyword in deliverable_keywords):
+                        # Found a deliverable, add right border to its D column
+                        count_cell = safe_get_writable_cell(ws, scan_row, col_d_idx)
+                        try:
+                            existing_border = count_cell.border
+                            if existing_border:
+                                count_cell.border = Border(
+                                    left=existing_border.left,
+                                    right=thin,
+                                    top=existing_border.top,
+                                    bottom=existing_border.bottom
+                                )
+                            else:
+                                count_cell.border = Border(right=thin)
+                        except Exception:
+                            pass
+        
+        # Final check: Ensure TEG TECH PACK and COSTING WORKBOOK are correct
+        # Re-scan to make sure we have the right rows
+        if not teg_tech_pack_row or not costing_workbook_row:
+            for scan_row in range(deliverables_block_start, min(deliverables_block_end + 5, ws.max_row + 1)):
+                value = safe_get_cell_value(ws, scan_row, col_b_idx)
+                if isinstance(value, str):
+                    value_lower = value.lower().strip()
+                    if "teg" in value_lower and "tech" in value_lower and "pack" in value_lower:
+                        if not teg_tech_pack_row:
+                            teg_tech_pack_row = scan_row
+                    elif "costing" in value_lower and "workbook" in value_lower:
+                        if not costing_workbook_row:
+                            costing_workbook_row = scan_row
+        
+        # Ensure COSTING WORKBOOK has the same value as TEG TECH PACK (final check after all processing)
+        if teg_tech_pack_row and costing_workbook_row:
+            # Ensure labels exist
+            teg_label = safe_get_cell_value(ws, teg_tech_pack_row, col_b_idx)
+            if not teg_label or not isinstance(teg_label, str) or "teg" not in teg_label.lower():
+                safe_set_cell_value(ws, f"B{teg_tech_pack_row}", "TEG TECH PACK")
+            
+            costing_label = safe_get_cell_value(ws, costing_workbook_row, col_b_idx)
+            if not costing_label or not isinstance(costing_label, str) or "costing" not in costing_label.lower():
+                safe_set_cell_value(ws, f"B{costing_workbook_row}", "COSTING WORKBOOK")
+            
+            # Read TEG TECH PACK value, but use num_styles if it's wrong
+            teg_tech_pack_value = safe_get_cell_value(ws, teg_tech_pack_row, col_d_idx)
+            if teg_tech_pack_value != num_styles:
+                # TEG TECH PACK has wrong value, fix it
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_row <= teg_tech_pack_row <= merged_range.max_row and
+                        merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+                safe_set_cell_value(ws, f"D{teg_tech_pack_row}", None)
+                safe_set_cell_value(ws, f"D{teg_tech_pack_row}", num_styles)
+                teg_tech_pack_value = num_styles
+                # Re-merge
+                if safe_merge_cells:
+                    safe_merge_cells(ws, f"D{teg_tech_pack_row}:D{teg_tech_pack_row + 1}")
+            
+            # Set COSTING WORKBOOK to match TEG TECH PACK
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= costing_workbook_row <= merged_range.max_row and
+                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+            safe_set_cell_value(ws, f"D{costing_workbook_row}", None)
+            safe_set_cell_value(ws, f"D{costing_workbook_row}", teg_tech_pack_value)
+            # Re-merge
+            if safe_merge_cells:
+                safe_merge_cells(ws, f"B{costing_workbook_row}:C{costing_workbook_row + 1}")
+                safe_merge_cells(ws, f"D{costing_workbook_row}:D{costing_workbook_row + 1}")
+            # Set alignment
+            count_cell = safe_get_writable_cell(ws, costing_workbook_row, col_d_idx)
+            label_cell = safe_get_writable_cell(ws, costing_workbook_row, col_b_idx)
+            try:
+                count_cell.number_format = "0"
+                if Alignment:
+                    count_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+                    label_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+            except Exception:
+                pass
 
     # Totals section - dynamically calculate totals row and range based on number of styles
     # For 5 or fewer styles: totals at row 20 (original position)
@@ -1596,10 +2299,35 @@ def apply_development_package(
         if Font is not None:
             cell_b_totals.font = Font(bold=True)
         
+        # Merge and center "TOTAL OPTIONAL ADD-ONS" H20-J20
         cell_h_totals = ws.cell(row=totals_row, column=8)
         cell_h_totals.value = "TOTAL OPTIONAL ADD-ONS"
         if Font is not None:
             cell_h_totals.font = Font(bold=True)
+        # Unmerge any existing merges in H-J for totals row
+        for merged_range in list(ws.merged_cells.ranges):
+            if (merged_range.min_row <= totals_row <= merged_range.max_row and
+                merged_range.min_col <= 8 <= merged_range.max_col <= 10):
+                try:
+                    ws.unmerge_cells(range_string=str(merged_range))
+                except Exception:
+                    pass
+        # Merge H-J
+        safe_merge_cells(ws, f"H{totals_row}:J{totals_row}")
+        # Get writable cell after merge for alignment and borders
+        cell_h_totals = safe_get_writable_cell(ws, totals_row, 8)
+        if Alignment is not None:
+            try:
+                cell_h_totals.alignment = Alignment(horizontal="center", vertical="center")
+            except Exception:
+                pass
+        # Apply full borders to H-J merged cell (for more than 5 styles)
+        if total_styles_count > 5 and Border is not None and Side is not None:
+            thin = Side(style="thin")
+            try:
+                cell_h_totals.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            except Exception:
+                pass
         
         # Set totals formulas - sum all style rows (dynamic based on actual style rows)
         cell_f_totals = ws.cell(row=totals_row, column=6)
@@ -1613,16 +2341,127 @@ def apply_development_package(
         if PatternFill is not None:
             cell_f_totals.fill = PatternFill(start_color="709171", end_color="709171", fill_type="solid")
         
+        # TOTAL OPTIONAL ADD-ONS now uses columns K-L (merged K20-L20)
+        cell_k_totals = ws.cell(row=totals_row, column=11)
         cell_l_totals = ws.cell(row=totals_row, column=12)
-        cell_l_totals.value = f"=SUM(L10:L{last_style_row})"
-        cell_l_totals.number_format = '$#,##0'  # Currency format
+        # Formula now sums K column (which contains SUM(H:J) for each row)
+        cell_k_totals.value = f"=SUM(K10:K{last_style_row})"
+        cell_k_totals.number_format = '$#,##0'  # Currency format
         if Font is not None:
-            cell_l_totals.font = Font(bold=True)
+            cell_k_totals.font = Font(bold=True)
+        # Unmerge any existing merges in K-L for totals row
+        for merged_range in list(ws.merged_cells.ranges):
+            if (merged_range.min_row <= totals_row <= merged_range.max_row and
+                merged_range.min_col <= 11 <= merged_range.max_col <= 12):
+                try:
+                    ws.unmerge_cells(range_string=str(merged_range))
+                except Exception:
+                    pass
+        # Merge and center K-L
+        safe_merge_cells(ws, f"K{totals_row}:L{totals_row}")
+        # Get writable cell after merge for alignment, font, fill, and borders
+        cell_k_totals = safe_get_writable_cell(ws, totals_row, 11)
         if Alignment is not None:
-            cell_l_totals.alignment = Alignment(horizontal="center", vertical="center")
+            try:
+                cell_k_totals.alignment = Alignment(horizontal="center", vertical="center")
+            except Exception:
+                pass
+        # Apply font size 20 to TOTAL OPTIONAL ADD-ONS
+        if Font is not None:
+            try:
+                cell_k_totals.font = Font(name="Arial", size=20, bold=True)
+            except Exception:
+                pass
         # Apply cell color #f0cfbb to TOTAL OPTIONAL ADD-ONS
         if PatternFill is not None:
-            cell_l_totals.fill = PatternFill(start_color="F0CFBB", end_color="F0CFBB", fill_type="solid")
+            try:
+                cell_k_totals.fill = PatternFill(start_color="F0CFBB", end_color="F0CFBB", fill_type="solid")
+            except Exception:
+                pass
+        # Clear L cell since it's merged with K
+        try:
+            cell_l_totals.value = None
+        except Exception:
+            pass
+        
+        # Apply full borders to K-L merged cell (ALWAYS, not just for more than 5 styles)
+        # For merged cells, we need to ensure the border is applied correctly
+        # Get the merged cell and apply borders
+        cell_k_totals = safe_get_writable_cell(ws, totals_row, 11)
+        if Border is not None and Side is not None:
+            thin = Side(style="thin")
+            full_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+            try:
+                # Apply border to the merged cell (top-left cell K)
+                cell_k_totals.border = full_border
+            except Exception:
+                try:
+                    # Fallback: get cell directly
+                    cell_k_totals = ws.cell(row=totals_row, column=11)
+                    cell_k_totals.border = full_border
+                except Exception:
+                    pass
+            
+            # Also ensure column L (rightmost of merged range) has the right border
+            # This is important for merged cells - sometimes the right border needs to be on the rightmost column
+            try:
+                cell_l_totals = ws.cell(row=totals_row, column=12)
+                # Get existing border or create new one
+                existing_border = cell_l_totals.border if cell_l_totals.border else Border()
+                # Ensure right border is set
+                cell_l_totals.border = Border(
+                    left=existing_border.left if existing_border.left else thin,
+                    right=thin,  # Ensure right border is set
+                    top=existing_border.top if existing_border.top else thin,
+                    bottom=existing_border.bottom if existing_border.bottom else thin
+                )
+            except Exception:
+                pass
+        
+        # For less than 5 styles, merge, center and apply all borders to empty OPTIONAL ADD-ONS totals
+        if total_styles_count <= 5 and Border is not None and Side is not None:
+            # Find which style rows are empty (not used)
+            used_rows = set()
+            if dynamic_row_indices:
+                for row_idx in dynamic_row_indices:
+                    used_rows.add(row_idx)
+            
+            # Process each row in ROW_INDICES that wasn't used
+            for row_idx in ROW_INDICES:
+                if row_idx not in used_rows:
+                    row_second = row_idx + 1
+                    # Check if K-L cells are empty (no formula/value)
+                    cell_k_value = safe_get_cell_value(ws, row_idx, 11)
+                    if cell_k_value is None or (isinstance(cell_k_value, str) and cell_k_value.strip() == ""):
+                        # Unmerge any existing merges in K-L for this row pair
+                        for merged_range in list(ws.merged_cells.ranges):
+                            if (merged_range.min_row <= row_idx <= merged_range.max_row <= row_second and
+                                merged_range.min_col <= 11 <= merged_range.max_col <= 12):
+                                try:
+                                    ws.unmerge_cells(range_string=str(merged_range))
+                                except Exception:
+                                    pass
+                        
+                        # Apply full borders to K and L columns
+                        apply_full_border_pair(ws, 11, row_idx, row_second)
+                        apply_full_border_pair(ws, 12, row_idx, row_second)
+                        
+                        # Merge and center K-L
+                        safe_merge_cells(ws, f"K{row_idx}:L{row_second}")
+                        if Alignment is not None:
+                            # Get writable cell for alignment
+                            cell_k = safe_get_writable_cell(ws, row_idx, 11)
+                            try:
+                                cell_k.alignment = Alignment(horizontal="center", vertical="center")
+                            except Exception:
+                                pass
+                        # Clear L cell since it's merged with K (handle MergedCell)
+                        try:
+                            cell_l = safe_get_writable_cell(ws, row_idx, 12)
+                            cell_l.value = None
+                        except Exception:
+                            # If it's a MergedCell, the value is already None or handled by merge
+                            pass
 
         # SUB-TOTAL row (new) and Discount row (moved down)
         subtotal_row = SUMMARY_SUBTOTAL_ROW
@@ -1702,7 +2541,8 @@ def apply_development_package(
         # Clear N23 if it contains discount percentage (remove duplicate)
         # N23 should remain empty or contain "TOTAL DUE AT SIGNING" if that's what the template has
         cell_n23_check = ws.cell(row=23, column=SUMMARY_LABEL_COL)
-        if cell_n23_check.value and "%" in str(cell_n23_check.value):
+        cell_n23_check_value = safe_get_cell_value(ws, 23, SUMMARY_LABEL_COL)
+        if cell_n23_check_value and "%" in str(cell_n23_check_value):
             # Clear the duplicate discount percentage from N23
             cell_n23_check.value = None
         
@@ -1761,7 +2601,8 @@ def apply_development_package(
                     bottom=new_bottom,
                 )
 
-        # Apply full borders (top/bottom/left/right) to key totals cells (B, F, H, L, N, P)
+        # Apply full borders (top/bottom/left/right) to key totals cells (B, F, H-J merged, K-L merged, N, P)
+        # Note: H-J and K-L are merged, so we need to handle them separately
         if Border is not None and Side is not None:
             full_border = Border(
                 left=Side(style="thin"),
@@ -1769,26 +2610,96 @@ def apply_development_package(
                 top=Side(style="thin"),
                 bottom=Side(style="thin"),
             )
-            for col_idx in [2, 6, 8, 12, 14, 16]:
-                cell = ws.cell(row=totals_row, column=col_idx)
-                cell.border = full_border
+            # Apply borders to individual cells (B, F, N, P)
+            for col_idx in [2, 6, 14, 16]:
+                cell = safe_get_writable_cell(ws, totals_row, col_idx)
+                try:
+                    cell.border = full_border
+                except Exception:
+                    pass
+            # Apply borders to merged cells H-J and K-L (for more than 5 styles)
+            if total_styles_count > 5:
+                # H-J merged cell
+                cell_h_totals = safe_get_writable_cell(ws, totals_row, 8)
+                try:
+                    cell_h_totals.border = full_border
+                except Exception:
+                    pass
+                # K-L merged cell - ensure right border is on column L
+                cell_k_totals = safe_get_writable_cell(ws, totals_row, 11)
+                try:
+                    cell_k_totals.border = full_border
+                except Exception:
+                    pass
+                # Also set right border on column L (rightmost of merged range)
+                try:
+                    cell_l_totals = ws.cell(row=totals_row, column=12)
+                    existing_border = cell_l_totals.border if cell_l_totals.border else Border()
+                    cell_l_totals.border = Border(
+                        left=existing_border.left if existing_border.left else Side(style="thin"),
+                        right=Side(style="thin"),  # Ensure right border
+                        top=existing_border.top if existing_border.top else Side(style="thin"),
+                        bottom=existing_border.bottom if existing_border.bottom else Side(style="thin")
+                    )
+                except Exception:
+                    pass
+            else:
+                # For <=5 styles, also ensure K-L merged cell has full borders including right border
+                cell_k_totals = safe_get_writable_cell(ws, totals_row, 11)
+                try:
+                    cell_k_totals.border = full_border
+                except Exception:
+                    pass
+                # Also set right border on column L
+                try:
+                    cell_l_totals = ws.cell(row=totals_row, column=12)
+                    existing_border = cell_l_totals.border if cell_l_totals.border else Border()
+                    cell_l_totals.border = Border(
+                        left=existing_border.left if existing_border.left else Side(style="thin"),
+                        right=Side(style="thin"),  # Ensure right border
+                        top=existing_border.top if existing_border.top else Side(style="thin"),
+                        bottom=existing_border.bottom if existing_border.bottom else Side(style="thin")
+                    )
+                except Exception:
+                    pass
+                # Also apply to individual H cell (H-J is merged, but H still needs border)
+                cell_h_totals = safe_get_writable_cell(ws, totals_row, 8)
+                try:
+                    cell_h_totals.border = full_border
+                except Exception:
+                    pass
         
         # Update P10 and P12 to use dynamic references (they reference F20 and L20 statically)
         # P10 should reference F{totals_row}, P12 should reference L{totals_row}
-        cell_p10 = ws.cell(row=10, column=16)  # Column P, row 10
-        if cell_p10.value and isinstance(cell_p10.value, str) and cell_p10.value.startswith("="):
-            if "F20" in cell_p10.value:
-                cell_p10.value = f"=F{totals_row}"
+        cell_p10 = safe_get_writable_cell(ws, 10, 16)  # Column P, row 10
+        cell_p10_value = safe_get_cell_value(ws, 10, 16)
+        if cell_p10_value and isinstance(cell_p10_value, str) and cell_p10_value.startswith("="):
+            if "F20" in cell_p10_value:
+                try:
+                    cell_p10.value = f"=F{totals_row}"
+                except Exception:
+                    safe_set_cell_value(ws, "P10", f"=F{totals_row}")
         
         cell_p12 = ws.cell(row=12, column=16)  # Column P, row 12
-        if cell_p12.value and isinstance(cell_p12.value, str) and cell_p12.value.startswith("="):
-            if "L20" in cell_p12.value:
-                cell_p12.value = f"=L{totals_row}"
+        cell_p12 = safe_get_writable_cell(ws, 12, 16)
+        cell_p12_value = safe_get_cell_value(ws, 12, 16)
+        if cell_p12_value and isinstance(cell_p12_value, str) and cell_p12_value.startswith("="):
+            # Update to reference K{totals_row} (the merged K-L cell where TOTAL OPTIONAL ADD-ONS value is)
+            # Check for both L20 and K20 references, and also check if it's referencing a style row instead of totals
+            if "L20" in cell_p12_value or "K20" in cell_p12_value:
+                cell_p12.value = f"=K{totals_row}"
+            elif "L10" in cell_p12_value or "L12" in cell_p12_value or "L14" in cell_p12_value or "L16" in cell_p12_value or "L18" in cell_p12_value:
+                # If it's referencing a style row (L10, L12, etc.), update to totals row
+                cell_p12.value = f"=K{totals_row}"
+            elif "K10" in cell_p12_value or "K12" in cell_p12_value or "K14" in cell_p12_value or "K16" in cell_p12_value or "K18" in cell_p12_value:
+                # If it's referencing a style row in K, update to totals row
+                cell_p12.value = f"=K{totals_row}"
         
         # Find and update "TOTAL DUE AT SIGNING" formula
         # The label is in column N (14) and the formula is in column P (16) of the totals row
         cell_n_totals = ws.cell(row=totals_row, column=14)  # Column N
-        if cell_n_totals.value and "TOTAL DUE AT SIGNING" in str(cell_n_totals.value).upper():
+        cell_n_totals_value = safe_get_cell_value(ws, totals_row, SUMMARY_LABEL_COL)
+        if cell_n_totals_value and "TOTAL DUE AT SIGNING" in str(cell_n_totals_value).upper():
             # Update the formula in column P to reference the dynamic totals row
             cell_p_totals = ws.cell(row=totals_row, column=16)  # Column P
             # If discount is 0, don't subtract discount; otherwise subtract P{discount_row}
@@ -1843,7 +2754,7 @@ def apply_development_package(
         # Also update any other formulas in column P that reference F20 or L20 statically
         # Check a few rows around the totals row
         for check_row in range(totals_row - 2, totals_row + 3):
-            cell_p = ws.cell(row=check_row, column=16)  # Column P
+            cell_p = safe_get_writable_cell(ws, check_row, 16)  # Column P
             if cell_p.value and isinstance(cell_p.value, str) and cell_p.value.startswith("="):
                 # Check if it references F20 or L20 (static references)
                 if "F20" in cell_p.value or "L20" in cell_p.value:
@@ -1863,6 +2774,65 @@ def apply_development_package(
     else:
         safe_set_cell_value(ws, "F20", None)
         safe_set_cell_value(ws, "L20", None)
+    
+    # Final absolute check: Ensure COSTING WORKBOOK matches TEG TECH PACK (right before return)
+    col_d_idx = column_index_from_string("D")
+    teg_tech_pack_row_final = None
+    costing_workbook_row_final = None
+    for scan_row in range(20, 50):  # Scan a reasonable range
+        # Handle MergedCell when reading value
+        value = None
+        try:
+            cell = ws.cell(row=scan_row, column=column_index_from_string("B"))
+            value = cell.value
+        except Exception:
+            # If it's a MergedCell, find top-left cell
+            for merged_range in ws.merged_cells.ranges:
+                if (merged_range.min_row <= scan_row <= merged_range.max_row and
+                    merged_range.min_col <= column_index_from_string("B") <= merged_range.max_col):
+                    cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
+                    value = cell.value
+                    break
+        
+        if isinstance(value, str):
+            value_lower = value.lower()
+            if "teg" in value_lower and "tech" in value_lower and "pack" in value_lower:
+                teg_tech_pack_row_final = scan_row
+            elif "costing" in value_lower and "workbook" in value_lower:
+                costing_workbook_row_final = scan_row
+    
+    if teg_tech_pack_row_final and costing_workbook_row_final:
+        # Read TEG TECH PACK value (handle merged cells)
+        teg_tech_pack_value_final = safe_get_cell_value(ws, teg_tech_pack_row_final, col_d_idx)
+        
+        if teg_tech_pack_value_final is not None:
+            # Find top-left cell of merged range if COSTING WORKBOOK is merged
+            costing_workbook_top_row = costing_workbook_row_final
+            for merged_range in ws.merged_cells.ranges:
+                if (merged_range.min_row <= costing_workbook_row_final <= merged_range.max_row and
+                    merged_range.min_col <= col_d_idx <= merged_range.max_col):
+                    costing_workbook_top_row = merged_range.min_row
+                    break
+            
+            # Use safe_set_cell_value to handle merged cells properly
+            if get_column_letter:
+                costing_workbook_ref = f"{get_column_letter(col_d_idx)}{costing_workbook_top_row}"
+                safe_set_cell_value(ws, costing_workbook_ref, teg_tech_pack_value_final)
+                # Set number format on the actual cell - use safe_get_writable_cell
+                costing_workbook_cell_final = safe_get_writable_cell(ws, costing_workbook_top_row, col_d_idx)
+                try:
+                    costing_workbook_cell_final.number_format = "0"
+                except Exception:
+                    pass
+            else:
+                # Fallback if get_column_letter not available - use safe functions
+                safe_set_cell_value(ws, f"D{costing_workbook_top_row}", teg_tech_pack_value_final)
+                costing_workbook_cell_final = safe_get_writable_cell(ws, costing_workbook_top_row, col_d_idx)
+                try:
+                    costing_workbook_cell_final.number_format = "0"
+                except Exception:
+                    pass
+    
     return total_development, total_optional
 
 
@@ -1918,7 +2888,7 @@ def build_workbook_bytes(
         project_notes_row = None
         # Search for "PROJECT NOTES" in column N (column 14)
         for search_row in range(20, 50):  # Search from row 20 to 50
-            cell_value = ws.cell(row=search_row, column=SUMMARY_LABEL_COL).value
+            cell_value = safe_get_cell_value(ws, search_row, SUMMARY_LABEL_COL)
             if cell_value and isinstance(cell_value, str):
                 if "PROJECT" in cell_value.upper() and "NOTES" in cell_value.upper():
                     project_notes_row = search_row
@@ -2567,28 +3537,28 @@ def main() -> None:
             for i in range(current_count, num_styles_input):
                 st.session_state["style_entries"].append({
                     "name": "",  # Leave blank, don't default to "Style 1", etc.
-                    "activewear": False,
+                    "style_type": "Regular",  # Default to Regular
                     "complexity": 0.0,
                     "style_number": 101 + i,  # Default style numbers: 101, 102, 103...
                     "options": {
                         "wash_dye": False,
                         "design": False,
-                        "source": False,
                         "treatment": False,
+                        # Note: "source" removed - no longer an option
                     },
                 })
         elif num_styles_input < current_count:
             # Remove excess styles
             st.session_state["style_entries"] = st.session_state["style_entries"][:num_styles_input]
     
-    # Column headers
-    header_cols = st.columns([1.1, 1.8, 0.8, 1.2, 1.2, 1, 1, 1.1])
+    # Column headers (removed Source column)
+    header_cols = st.columns([1.1, 1.8, 1.2, 1.2, 1.2, 1, 1.1])
     with header_cols[0]:
         st.markdown("**Style Number**")
     with header_cols[1]:
         st.markdown("**Style Name**")
     with header_cols[2]:
-        st.markdown("**Activewear?**")
+        st.markdown("**Style Type**")
     with header_cols[3]:
         st.markdown("**Complexity (%)**")
     with header_cols[4]:
@@ -2596,15 +3566,13 @@ def main() -> None:
     with header_cols[5]:
         st.markdown("**Design ($1,330)**")
     with header_cols[6]:
-        st.markdown("**Source ($1,330)**")
-    with header_cols[7]:
         st.markdown("**Treatment ($760)**")
     
     # Display existing style entries in horizontal rows
     if st.session_state["style_entries"]:
         for i, entry in enumerate(st.session_state["style_entries"]):
             with st.container():
-                cols = st.columns([1.2, 1.8, 1, 1.2, 1.2, 1, 1, 1])
+                cols = st.columns([1.2, 1.8, 1.2, 1.2, 1.2, 1, 1.1])  # Removed source column
                 with cols[0]:
                     # Style Number field with default value (101, 102, 103...)
                     default_style_number = entry.get("style_number", 101 + i)
@@ -2627,13 +3595,23 @@ def main() -> None:
                     )
                     entry["name"] = style_name
                 with cols[2]:
-                    activewear = st.checkbox(
-                        "",
-                        value=entry.get("activewear", False),
-                        key=f"activewear_{i}",
-                        label_visibility="visible",
+                    # Style Type dropdown instead of checkbox
+                    style_type_options = ["Regular", "Activewear/Lingerie/Swim", "Pattern Blocks"]
+                    current_style_type = entry.get("style_type", "Regular")
+                    # Handle migration from old "activewear" boolean
+                    if "style_type" not in entry and entry.get("activewear", False):
+                        current_style_type = "Activewear/Lingerie/Swim"
+                    style_type = st.selectbox(
+                        "Style Type",
+                        options=style_type_options,
+                        index=style_type_options.index(current_style_type) if current_style_type in style_type_options else 0,
+                        key=f"style_type_{i}",
+                        label_visibility="collapsed",
                     )
-                    entry["activewear"] = activewear
+                    entry["style_type"] = style_type
+                    # Remove old activewear key if it exists
+                    if "activewear" in entry:
+                        del entry["activewear"]
                 with cols[3]:
                     complexity = st.number_input(
                         "Complexity (%)",
@@ -2662,15 +3640,8 @@ def main() -> None:
                         label_visibility="visible",
                     )
                     entry.setdefault("options", {})["design"] = design
+                # Removed source column - no longer an option
                 with cols[6]:
-                    source = st.checkbox(
-                        "",
-                        value=entry.get("options", {}).get("source", False),
-                        key=f"source_{i}",
-                        label_visibility="visible",
-                    )
-                    entry.setdefault("options", {})["source"] = source
-                with cols[7]:
                     treatment = st.checkbox(
                         "",
                         value=entry.get("options", {}).get("treatment", False),
