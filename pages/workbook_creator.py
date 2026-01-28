@@ -1206,7 +1206,8 @@ def apply_development_package(
             except (AttributeError, TypeError):
                 safe_set_cell_value(ws, f"K{row_idx}", None)
                 safe_set_cell_value(ws, f"L{row_idx}", None)
-            if is_new_row:
+
+            if is_new_row or total_styles_count > 5:
                 apply_full_border_pair(ws, 11, row_idx, row_second)
                 apply_full_border_pair(ws, 12, row_idx, row_second)
                 safe_merge_cells(ws, f"K{row_idx}:L{row_second}")
@@ -2462,6 +2463,184 @@ def apply_development_package(
                         except Exception:
                             # If it's a MergedCell, the value is already None or handled by merge
                             pass
+
+        try:
+            first_note_row = None
+            second_note_row = None
+
+            # Search a reasonable band of rows where the notes live
+            for row in range(20, 90):
+                for col in (5, 6):  # Columns E (5) and F (6)
+                    value = safe_get_cell_value(ws, row, col)
+                    if not isinstance(value, str):
+                        continue
+                    upper = value.upper()
+                    if ("DESIGNS ARE REVIEWED" in upper and
+                        "SURCHARGE APPLIES" in upper and
+                        first_note_row is None):
+                        first_note_row = row
+                    if ("DEVELOPMENT DOES NOT INCLUDE" in upper and
+                        "BULK PRODUCTION INVENTORY" in upper and
+                        second_note_row is not None) is False:
+                        # Only set once when found
+                        if ("DEVELOPMENT DOES NOT INCLUDE" in upper and
+                            "BULK PRODUCTION INVENTORY" in upper and
+                            second_note_row is None):
+                            second_note_row = row
+                if first_note_row is not None and second_note_row is not None:
+                    break
+
+            # Helper to (re)merge and fully border a note block in E-F
+            def _format_note_block(start_row: int, row_span: int) -> None:
+                end_row = start_row + row_span - 1
+                # Unmerge any existing merges in E-F intersecting this vertical span
+                for merged_range in list(ws.merged_cells.ranges):
+                    if (merged_range.min_col <= 6 and merged_range.max_col >= 5 and
+                        merged_range.min_row <= end_row and merged_range.max_row >= start_row):
+                        try:
+                            ws.unmerge_cells(range_string=str(merged_range))
+                        except Exception:
+                            pass
+
+                # Merge E-F across the span
+                safe_merge_cells(ws, f"E{start_row}:F{end_row}")
+
+                # Center-align the merged cell
+                if Alignment is not None:
+                    top_left = safe_get_writable_cell(ws, start_row, 5)
+                    try:
+                        top_left.alignment = Alignment(
+                            horizontal="center",
+                            vertical="center",
+                            wrap_text=True,
+                        )
+                    except Exception:
+                        pass
+
+                # Apply full borders to all cells in the E-F block
+                if Border is not None and Side is not None:
+                    thin = Side(style="thin")
+                    for r in range(start_row, end_row + 1):
+                        for c in (5, 6):
+                            cell = ws.cell(row=r, column=c)
+                            try:
+                                cell.border = Border(
+                                    left=thin,
+                                    right=thin,
+                                    top=thin,
+                                    bottom=thin,
+                                )
+                            except Exception:
+                                pass
+
+            # First note: 6-row span
+            if first_note_row is not None:
+                _format_note_block(first_note_row, 6)
+
+            # Second note: 8-row span (position will already include any extra rows
+            # introduced by Activewear logic, so we just span 8 rows from its text row)
+            if second_note_row is not None:
+                _format_note_block(second_note_row, 8)
+
+                # After we format the main 8-row block, remove any *other* instances
+                for row in range(20, 90):
+                    # Skip inside the formatted 8-row block
+                    if second_note_row <= row <= second_note_row + 7:
+                        continue
+                    for col in (5, 6):  # E/F
+                        value = safe_get_cell_value(ws, row, col)
+                        if not isinstance(value, str):
+                            continue
+                        upper = value.upper()
+                        if ("DEVELOPMENT DOES NOT INCLUDE" in upper and
+                            "BULK PRODUCTION INVENTORY" in upper):
+                            try:
+                                safe_set_cell_value(
+                                    ws,
+                                    f"{'E' if col == 5 else 'F'}{row}",
+                                    None,
+                                )
+                            except Exception:
+                                pass
+
+        except Exception:
+            # Notes formatting should never break workbook creation
+            pass
+
+        try:
+            # Only build the tall merged E–F \"box\" when there is at least one Activewear style. For regular-only projects we keep the original template behavior untouched.
+            if (
+                num_activewear > 0
+                and Border is not None
+                and Side is not None
+                and column_index_from_string is not None
+            ):
+                label_col_b = column_index_from_string("B")
+                final_samples_row_scan = None
+                costing_workbook_row_scan = None
+
+                # Scan a reasonable band where these labels live
+                for row in range(DELIVERABLE_BLOCK_START, DELIVERABLE_BLOCK_END + 15):
+                    value = safe_get_cell_value(ws, row, label_col_b)
+                    if not isinstance(value, str):
+                        continue
+                    lower = value.strip().lower()
+                    if "final samples" in lower and final_samples_row_scan is None:
+                        final_samples_row_scan = row
+                    elif ("costing" in lower and "workbook" in lower and
+                          costing_workbook_row_scan is None):
+                        costing_workbook_row_scan = row
+
+                if final_samples_row_scan is not None and costing_workbook_row_scan is not None:
+                    start_row = final_samples_row_scan
+                    end_row = costing_workbook_row_scan
+                    # Include one extra row below COSTING WORKBOOK to match the visual box
+                    box_end_row = end_row + 1
+
+                    thin = Side(style="thin")
+                    # First, apply full borders to E/F for the whole vertical span
+                    for r in range(start_row, box_end_row + 1):
+                        for c in (5, 6):  # E and F
+                            cell = ws.cell(row=r, column=c)
+                            try:
+                                cell.border = Border(
+                                    left=thin,
+                                    right=thin,
+                                    top=thin,
+                                    bottom=thin,
+                                )
+                            except Exception:
+                                pass
+
+                    # Then merge this entire E–F block into a single tall cell and center its content.
+                    for merged_range in list(ws.merged_cells.ranges):
+                        if (
+                            merged_range.min_col <= 6
+                            and merged_range.max_col >= 5
+                            and merged_range.min_row <= box_end_row
+                            and merged_range.max_row >= start_row
+                        ):
+                            try:
+                                ws.unmerge_cells(range_string=str(merged_range))
+                            except Exception:
+                                pass
+
+                    # Merge E-F from FINAL SAMPLES row down through COSTING WORKBOOK box
+                    safe_merge_cells(ws, f"E{start_row}:F{box_end_row}")
+
+                    if Alignment is not None:
+                        top_left = safe_get_writable_cell(ws, start_row, 5)
+                        try:
+                            top_left.alignment = Alignment(
+                                horizontal="center",
+                                vertical="center",
+                                wrap_text=True,
+                            )
+                        except Exception:
+                            pass
+        except Exception:
+            # Border \"box\" improvement should not break workbook creation
+            pass
 
         # SUB-TOTAL row (new) and Discount row (moved down)
         subtotal_row = SUMMARY_SUBTOTAL_ROW
