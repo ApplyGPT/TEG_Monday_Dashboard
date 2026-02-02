@@ -14,6 +14,9 @@ CURRENT_YEAR = datetime.now().year
 
 # TEG Introductory Call Calendly scheduling link (this dashboard shows only events from this link)
 TEG_INTRO_CALL_SCHEDULING_URL = "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call"
+# Per-person breakdown (Anthony, Heather, Ian)
+INTRO_PERSONS = ["Anthony", "Heather", "Ian"]
+INTRO_COLORS = {"Anthony": "#1f77b4", "Heather": "#2ca02c", "Ian": "#ff7f0e"}
 
 # Page configuration
 st.set_page_config(
@@ -86,43 +89,50 @@ def load_calendly_credentials():
 
 def load_calendly_data_from_db():
     """Load Calendly data from SQLite database, filtered to TEG Introductory Call events only.
-    Events are identified by event type name containing 'introductory' or 'intro call'
-    (matches the event type for https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call,
-    e.g. "TEG Introductory Call" or "Intro call with Teg").
+    Events are identified by event type name containing 'introductory' or 'intro call'.
+    Includes source column (Anthony, Heather, Ian) for per-person breakdown when set by refresh.
     """
     CALENDLY_DB_PATH = "calendly_data.db"
     
     try:
         conn = sqlite3.connect(CALENDLY_DB_PATH)
         cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(calendly_events)")
+        columns = [row[1] for row in cursor.fetchall()]
+        has_source = "source" in columns
         
-        # Check if table exists and has data
         cursor.execute("SELECT COUNT(*) FROM calendly_events")
         count = cursor.fetchone()[0]
-        
         if count == 0:
             conn.close()
             return None, "No Calendly data found in database. Please refresh Calendly data first."
         
-        # Get all events (we filter by name in Python so we can use str.contains)
-        cursor.execute("""
-            SELECT uri, name, start_time, end_time, status, event_type, 
-                   invitee_name, invitee_email, updated_at
-            FROM calendly_events
-            ORDER BY start_time DESC
-        """)
-        
-        rows = cursor.fetchall()
+        if has_source:
+            cursor.execute("""
+                SELECT uri, name, start_time, end_time, status, event_type,
+                       invitee_name, invitee_email, source, updated_at
+                FROM calendly_events
+                ORDER BY start_time DESC
+            """)
+            df = pd.DataFrame(cursor.fetchall(), columns=[
+                'uri', 'name', 'start_time', 'end_time', 'status', 'event_type',
+                'invitee_name', 'invitee_email', 'source', 'updated_at'
+            ])
+        else:
+            cursor.execute("""
+                SELECT uri, name, start_time, end_time, status, event_type,
+                       invitee_name, invitee_email, updated_at
+                FROM calendly_events
+                ORDER BY start_time DESC
+            """)
+            df = pd.DataFrame(cursor.fetchall(), columns=[
+                'uri', 'name', 'start_time', 'end_time', 'status', 'event_type',
+                'invitee_name', 'invitee_email', 'updated_at'
+            ])
+            df["source"] = ""
         conn.close()
         
-        # Convert to DataFrame
-        df = pd.DataFrame(rows, columns=[
-            'uri', 'name', 'start_time', 'end_time', 'status', 'event_type',
-            'invitee_name', 'invitee_email', 'updated_at'
-        ])
-        
-        # Keep only TEG Introductory Call events (event type for TEG_INTRO_CALL_SCHEDULING_URL)
-        # Match event type name: "TEG Introductory Call", "Introductory Call", or "Intro call with Teg"
+        # Keep only TEG Introductory Call events
         if not df.empty and 'name' in df.columns:
             name_lower = df['name'].astype(str).str.lower()
             is_intro_call = (
@@ -130,22 +140,24 @@ def load_calendly_data_from_db():
                 name_lower.str.contains('intro call', na=False)
             )
             df = df[is_intro_call].copy()
+        if df.empty:
+            return None, "No TEG Introductory Call events in database. Refresh Calendly data from the Database Refresh page."
         
-        # Convert timestamps
+        # Normalize source: empty -> keep Anthony, Heather, Ian
+        df["source"] = df["source"].fillna("").astype(str).str.strip()
+        df.loc[df["source"] == "", "source"] = "Other"
+        df.loc[~df["source"].isin(INTRO_PERSONS), "source"] = "Other"
+        
+        # Convert timestamps and add analysis columns
         df['start_time'] = pd.to_datetime(df['start_time'])
         df['end_time'] = pd.to_datetime(df['end_time'])
         df['updated_at'] = pd.to_datetime(df['updated_at'])
-        
-        # Add additional columns for analysis
         df['date'] = df['start_time'].dt.date
         df['month'] = df['start_time'].dt.strftime('%B %Y')
         df['week'] = df['start_time'].dt.isocalendar().week
         df['year'] = df['start_time'].dt.year
         df['day_of_week'] = df['start_time'].dt.strftime('%A')
         df['hour'] = df['start_time'].dt.hour
-        
-        if df.empty:
-            return None, "No TEG Introductory Call events in database. Refresh Calendly data from the Database Refresh page to include events from the TEG Introductory Call link."
         return df, None
         
     except sqlite3.Error as e:
@@ -389,6 +401,95 @@ def create_two_week_daily_chart(df, start_date, end_date):
     
     return fig
 
+
+def create_stacked_daily_chart(df, start_date, end_date):
+    """Stacked bar: each day on x-axis, count by Person (Anthony, Heather, Ian)."""
+    if start_date is None or end_date is None:
+        return None
+    date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+    all_dates = [d.date() for d in date_range]
+    if df.empty:
+        counts = pd.DataFrame(columns=['date', 'source', 'count'])
+    else:
+        counts = df.groupby(['date', 'source']).size().reset_index(name='count')
+    rows = []
+    for d in all_dates:
+        for person in INTRO_PERSONS:
+            n = counts[(counts['date'] == d) & (counts['source'] == person)]['count'].sum() if not counts.empty else 0
+            rows.append({'date': pd.Timestamp(d), 'Person': person, 'count': int(n)})
+    long = pd.DataFrame(rows)
+    fig = px.bar(
+        long, x='date', y='count', color='Person',
+        color_discrete_map=INTRO_COLORS,
+        barmode='stack',
+        title='Calls by Day (by person)',
+        labels={'count': 'Number of Calls', 'date': 'Date'},
+        category_orders={'Person': INTRO_PERSONS}
+    )
+    fig.update_layout(xaxis_title="Date", yaxis_title="Number of Calls", height=500, xaxis_tickangle=45)
+    fig.update_traces(textposition='inside', texttemplate='%{y}')
+    return fig
+
+
+def create_stacked_weekly_chart(df):
+    """Stacked bar: week on x-axis, count by Person (Anthony, Heather, Ian)."""
+    if df.empty:
+        return None
+    df_copy = df.copy()
+    df_copy['week_start'] = df_copy['start_time'].dt.to_period('W').dt.start_time
+    df_copy['week_label'] = df_copy['week_start'].apply(
+        lambda ts: f"{ts.strftime('%b %d')} - {(ts + pd.Timedelta(days=6)).strftime('%b %d')}"
+    )
+    counts = df_copy.groupby(['week_start', 'week_label', 'source']).size().reset_index(name='count')
+    counts = counts.sort_values('week_start')
+    long = counts.rename(columns={'source': 'Person'})
+    weeks = long[['week_start', 'week_label']].drop_duplicates()
+    rows = []
+    for _, r in weeks.iterrows():
+        for person in INTRO_PERSONS:
+            n = long[(long['week_start'] == r['week_start']) & (long['Person'] == person)]['count'].sum()
+            rows.append({'week_start': r['week_start'], 'week_label': r['week_label'], 'Person': person, 'count': int(n)})
+    long = pd.DataFrame(rows)
+    fig = px.bar(
+        long, x='week_label', y='count', color='Person',
+        color_discrete_map=INTRO_COLORS,
+        barmode='stack',
+        title='Calls by Week (by person)',
+        labels={'count': 'Number of Calls', 'week_label': 'Week'},
+        category_orders={'Person': INTRO_PERSONS}
+    )
+    fig.update_layout(xaxis_title="Week", yaxis_title="Number of Calls", height=500, xaxis_tickangle=45)
+    fig.update_traces(textposition='inside', texttemplate='%{y}')
+    return fig
+
+
+def create_stacked_monthly_chart(df):
+    """Stacked bar: month on x-axis, count by Person (Anthony, Heather, Ian)."""
+    if df.empty:
+        return None
+    counts = df.groupby(['month', 'source']).size().reset_index(name='count')
+    counts = counts.rename(columns={'source': 'Person'})
+    months = counts['month'].unique()
+    rows = []
+    for m in months:
+        for person in INTRO_PERSONS:
+            n = counts[(counts['month'] == m) & (counts['Person'] == person)]['count'].sum()
+            rows.append({'month': m, 'Person': person, 'count': int(n)})
+    counts = pd.DataFrame(rows)
+    counts['month_dt'] = pd.to_datetime(counts['month'])
+    counts = counts.sort_values('month_dt')
+    fig = px.bar(
+        counts, x='month', y='count', color='Person',
+        color_discrete_map=INTRO_COLORS,
+        barmode='stack',
+        title='Calls by Month (by person)',
+        labels={'count': 'Number of Calls', 'month': 'Month'},
+        category_orders={'Person': INTRO_PERSONS}
+    )
+    fig.update_layout(xaxis_title="Month", yaxis_title="Number of Calls", height=500, xaxis_tickangle=45)
+    fig.update_traces(textposition='inside', texttemplate='%{y}')
+    return fig
+
 def create_weekly_chart(df):
     """Create weekly calls chart"""
     if df.empty:
@@ -629,31 +730,30 @@ def main():
                 st.warning("No events found for the selected date range.")
                 return
 
-            # Charts section
+            # Charts section (stacked by person)
             st.markdown("---")
 
-            # Create tabs for different views
+            # Create tabs for different views (stacked by person)
             tab1, tab2, tab3 = st.tabs(["📅 Daily View", "📊 Weekly View", "📊 Monthly View"])
 
             with tab1:
-                # Display daily view graph for the selected date range
-                two_week_fig = create_two_week_daily_chart(df_filtered, start_date, end_date)
-                if two_week_fig:
-                    st.plotly_chart(two_week_fig, use_container_width=True)
+                stacked_daily = create_stacked_daily_chart(df_filtered, start_date, end_date)
+                if stacked_daily:
+                    st.plotly_chart(stacked_daily, use_container_width=True)
                 else:
                     st.info("No calls in the selected date range.")
 
             with tab2:
-                weekly_fig = create_weekly_chart(df_filtered)
-                if weekly_fig:
-                    st.plotly_chart(weekly_fig, use_container_width=True)
+                stacked_weekly = create_stacked_weekly_chart(df_filtered)
+                if stacked_weekly:
+                    st.plotly_chart(stacked_weekly, use_container_width=True)
                 else:
                     st.info("No weekly data available")
 
             with tab3:
-                monthly_fig = create_monthly_chart(df_filtered)
-                if monthly_fig:
-                    st.plotly_chart(monthly_fig, use_container_width=True)
+                stacked_monthly = create_stacked_monthly_chart(df_filtered)
+                if stacked_monthly:
+                    st.plotly_chart(stacked_monthly, use_container_width=True)
                 else:
                     st.info("No monthly data available")
             

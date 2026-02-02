@@ -9,14 +9,14 @@ import os
 # Get current year dynamically
 CURRENT_YEAR = datetime.now().year
 
-# Design Review Call: 3 Calendly links (one per person) + any other 30min link shown as "Design Review"
+# Design Review Call: 3 Calendly links (one per person)
 DESIGN_REVIEW_LINKS = {
     "Anthony": "https://calendly.com/anthony-the-evans-group/30min",
     "Heather": "https://calendly.com/heather-the-evans-group/30min",
     "Ian": "https://calendly.com/ian-the-evans-group/30min",
 }
-DESIGN_REVIEW_PERSONS = ["Anthony", "Heather", "Ian", "Design Review"]
-COLORS = {"Anthony": "#1f77b4", "Heather": "#2ca02c", "Ian": "#ff7f0e", "Design Review": "#9467bd"}  # Blue, Green, Orange, Purple
+DESIGN_REVIEW_PERSONS = ["Anthony", "Heather", "Ian"]
+COLORS = {"Anthony": "#1f77b4", "Heather": "#2ca02c", "Ian": "#ff7f0e"}  # Blue, Green, Orange
 
 # Page configuration
 st.set_page_config(
@@ -41,7 +41,6 @@ st.markdown("""
 
 def load_design_review_data_from_db():
     """Load Calendly data for Design Review only: events with source in Anthony, Heather, Ian.
-    If source column is empty for all rows, fallback: infer source from event type name (e.g. '30 min' with Anthony/Heather/Ian).
     """
     CALENDLY_DB_PATH = "calendly_data.db"
     if not os.path.exists(CALENDLY_DB_PATH):
@@ -67,7 +66,7 @@ def load_design_review_data_from_db():
             'uri', 'name', 'start_time', 'end_time', 'status', 'event_type',
             'invitee_name', 'invitee_email', 'source', 'updated_at'
         ])
-        # Keep only Design Review: source in Anthony, Heather, Ian, or Design Review
+        # Keep only Design Review: source in Anthony, Heather, Ian
         design_review = df[df['source'].isin(DESIGN_REVIEW_PERSONS)].copy()
         # Fallback: if no rows tagged by source, infer from event type name (e.g. "30 Minute Meeting" -> Design Review)
         if design_review.empty and 'name' in df.columns:
@@ -81,8 +80,6 @@ def load_design_review_data_from_db():
                     return 'Heather'
                 if 'ian' in n and 'christian' not in n:
                     return 'Ian'
-                if '30 min' in n or '30 minute' in n:
-                    return 'Design Review'
                 return None
             df['source_inferred'] = df['name'].apply(infer_source)
             design_review = df[df['source_inferred'].notna()].copy()
@@ -109,7 +106,7 @@ def load_design_review_data_from_db():
 
 
 def create_stacked_daily_chart(df, start_date, end_date):
-    """Stacked bar: each day on x-axis, count by Person (Anthony, Heather, Ian, Design Review)."""
+    """Stacked bar: each day on x-axis, count by Person (Anthony, Heather, Ian)."""
     if start_date is None or end_date is None:
         return None
     # Full date range
@@ -131,7 +128,7 @@ def create_stacked_daily_chart(df, start_date, end_date):
         long, x='date', y='count', color='Person',
         color_discrete_map=COLORS,
         barmode='stack',
-        title='Calls by Day (Design Review)',
+        title='Calls by Day',
         labels={'count': 'Number of Calls', 'date': 'Date'},
         category_orders={'Person': DESIGN_REVIEW_PERSONS}
     )
@@ -141,7 +138,7 @@ def create_stacked_daily_chart(df, start_date, end_date):
 
 
 def create_stacked_weekly_chart(df):
-    """Stacked bar: week range on x-axis, count by Person. Always show all 4 persons."""
+    """Stacked bar: week range on x-axis, count by Person. Always show all 3 persons."""
     if df.empty:
         return None
     df_copy = df.copy()
@@ -164,7 +161,7 @@ def create_stacked_weekly_chart(df):
         long, x='week_label', y='count', color='Person',
         color_discrete_map=COLORS,
         barmode='stack',
-        title='Calls by Week (Design Review)',
+        title='Calls by Week',
         labels={'count': 'Number of Calls', 'week_label': 'Week'},
         category_orders={'Person': DESIGN_REVIEW_PERSONS}
     )
@@ -174,7 +171,7 @@ def create_stacked_weekly_chart(df):
 
 
 def create_stacked_monthly_chart(df):
-    """Stacked bar: month on x-axis, count by Person. Always show all 4 persons."""
+    """Stacked bar: month on x-axis, count by Person. Always show all 3 persons."""
     if df.empty:
         return None
     counts = df.groupby(['month', 'source']).size().reset_index(name='count')
@@ -193,7 +190,7 @@ def create_stacked_monthly_chart(df):
         counts, x='month', y='count', color='Person',
         color_discrete_map=COLORS,
         barmode='stack',
-        title='Calls by Month (Design Review)',
+        title='Calls by Month',
         labels={'count': 'Number of Calls', 'month': 'Month'},
         category_orders={'Person': DESIGN_REVIEW_PERSONS}
     )

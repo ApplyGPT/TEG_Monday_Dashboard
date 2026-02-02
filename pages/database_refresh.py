@@ -157,20 +157,22 @@ def load_monday_credentials():
         return None
 
 def load_calendly_credentials():
-    """Load Calendly credentials from Streamlit secrets"""
+    """Load Calendly credentials from Streamlit secrets. Supports both calendly_api_key (v2) and calendly_burki_api_key."""
     try:
         if 'calendly' not in st.secrets:
             st.error("Calendly configuration not found in secrets.toml.")
             return None
         
         calendly_config = st.secrets['calendly']
-        
-        if 'calendly_api_key' not in calendly_config:
-            st.error("Calendly API key not found in secrets.toml.")
+        api_key = calendly_config.get('calendly_api_key') or calendly_config.get('api_key')
+        burki_key = calendly_config.get('calendly_burki_api_key')
+        if not api_key and not burki_key:
+            st.error("Calendly API key not found in secrets.toml. Add calendly_api_key or calendly_burki_api_key.")
             return None
             
         return {
-            'api_key': calendly_config['calendly_api_key']
+            'api_key': api_key,
+            'burki_key': burki_key,
         }
     except Exception as e:
         st.error(f"Error reading Calendly secrets: {str(e)}")
@@ -515,157 +517,285 @@ def generate_new_leads_cache():
         return False, f"Error generating cache: {str(e)}"
 
 def refresh_calendly_database():
-    """Refresh Calendly data from API"""
+    """Refresh Calendly data from API. Uses both calendly_api_key (v2) and calendly_burki_api_key when set."""
     credentials = load_calendly_credentials()
     if not credentials:
         return False, "Failed to load Calendly credentials"
     
-    api_key = credentials['api_key']
+    api_key = credentials.get('api_key')
+    burki_key = credentials.get('burki_key')
+    api_key = api_key or burki_key
     
     try:
-        # Get user info
-        headers = {
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json'
-        }
+        # Resolve org_uri for org-scoped attempt (use api_key / v2 when available)
+        org_uri = None
+        headers_org = None
+        if api_key and (not burki_key or api_key != burki_key):
+            try:
+                h = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+                r_me = requests.get('https://api.calendly.com/users/me', headers=h, timeout=30)
+                if r_me.status_code == 200:
+                    org_uri = (r_me.json().get('resource') or {}).get('current_organization')
+                    headers_org = h
+            except Exception:
+                pass
+        # Fallback: use Burki key for /users/me if we don't have org_uri yet
+        if not org_uri and burki_key:
+            try:
+                h = {'Authorization': f'Bearer {burki_key}', 'Content-Type': 'application/json'}
+                r_me = requests.get('https://api.calendly.com/users/me', headers=h, timeout=30)
+                if r_me.status_code == 200:
+                    org_uri = (r_me.json().get('resource') or {}).get('current_organization')
+                    headers_org = h
+            except Exception:
+                pass
+        if not org_uri:
+            r_me = requests.get('https://api.calendly.com/users/me',
+                                headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, timeout=30)
+            if r_me.status_code != 200:
+                return False, f"Failed to get user info: {r_me.status_code} - {r_me.text[:200]}"
+            org_uri = (r_me.json().get('resource') or {}).get('current_organization')
+            headers_org = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
         
-        # Get user info
-        user_response = requests.get('https://api.calendly.com/users/me', headers=headers, timeout=30)
-        if user_response.status_code != 200:
-            return False, f"Failed to get user info: {user_response.status_code} - {user_response.text[:200]}"
+        user_uri = None  # set per key in user path
+        headers = headers_org or {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
         
-        user_data = user_response.json()
-        user_uri = user_data.get('resource', {}).get('uri')
-        if not user_uri:
-            return False, "Calendly API did not return user URI"
-        
-        # Get event types
-        event_types_response = requests.get(f'https://api.calendly.com/event_types?user={user_uri}', headers=headers, timeout=30)
-        if event_types_response.status_code != 200:
-            return False, f"Failed to get event types: {event_types_response.status_code} - {event_types_response.text[:200]}"
-        
-        event_types_data = event_types_response.json()
-        event_types = event_types_data.get('collection', [])
-        
-        # Include: Burki, Intro Call, and Design Review event types
-        # Design Review: Anthony/Heather/Ian (by URL) OR any "30 min" type (e.g. jamie-the-evans-group/30min) as "Design Review"
+        # Helpers and constants (used by both org path and user path)
+        # Design Review: Anthony/Heather/Ian (by URL, name, or Event Type profile) OR any "30 min" type as "Design Review"
         DESIGN_REVIEW_PERSONS = [
             ('anthony-the-evans-group', 'Anthony'),
             ('heather-the-evans-group', 'Heather'),
             ('ian-the-evans-group', 'Ian'),
         ]
-        teg_event_types = []  # list of (event_type, source)
-        for event_type in event_types:
-            event_name = event_type.get('name', '')
-            scheduling_url = (event_type.get('scheduling_url') or '').lower()
-            name_lower = event_name.lower()
-            source = ''
-            # Burki dashboard: "TEG - Let's Chat" (normalize apostrophe/casing)
+        def _person_from_user_resource(user_resource):
+            """Infer Anthony/Heather/Ian from User resource (name, slug) - GET /users/{uuid} response."""
+            name_lower = (user_resource.get('name') or '').lower()
+            slug_lower = (user_resource.get('slug') or '').lower()
+            if 'anthony' in name_lower or 'anthony' in slug_lower:
+                return 'Anthony'
+            if 'heather' in name_lower or 'heather' in slug_lower:
+                return 'Heather'
+            if ('ian' in name_lower or 'ian' in slug_lower) and 'christian' not in name_lower and 'christian' not in slug_lower:
+                return 'Ian'
+            return ''
+        owner_to_person = {}  # cache: profile.owner URI -> Anthony/Heather/Ian or ''
+        def _person_from_owner(owner_uri):
+            """Resolve profile.owner via GET /users/{uuid} and infer person from user name/slug (cached)."""
+            if not owner_uri or owner_uri in owner_to_person:
+                return owner_to_person.get(owner_uri, '')
+            uuid = owner_uri.rstrip('/').split('/')[-1]
+            try:
+                r = requests.get(f'https://api.calendly.com/users/{uuid}', headers=headers, timeout=10)
+                if r.status_code == 200:
+                    user_resource = r.json().get('resource', {})
+                    owner_to_person[owner_uri] = _person_from_user_resource(user_resource)
+                else:
+                    owner_to_person[owner_uri] = ''
+            except Exception:
+                owner_to_person[owner_uri] = ''
+            return owner_to_person[owner_uri]
+        def _person_from_event_type(et):
+            """Infer Anthony/Heather/Ian from event type: scheduling_url, slug, name, profile.name, or GET user by profile.owner."""
+            url = (et.get('scheduling_url') or '').lower()
+            slug_lower = (et.get('slug') or '').lower()
+            name_lower = (et.get('name') or '').lower()
+            for url_part, person in DESIGN_REVIEW_PERSONS:
+                if url_part in url or url_part.replace('-the-evans-group', '') in name_lower or url_part.replace('-the-evans-group', '') in slug_lower:
+                    return person
+            profile = et.get('profile') or {}
+            profile_name = (profile.get('name') or '').lower()
+            if 'anthony' in profile_name:
+                return 'Anthony'
+            if 'heather' in profile_name:
+                return 'Heather'
+            if 'ian' in profile_name and 'christian' not in profile_name:
+                return 'Ian'
+            # Profile.owner is user URI when type=User; when type=Team, owner is team URI (GET /users not applicable)
+            owner_uri = profile.get('owner')
+            if owner_uri and (profile.get('type') == 'User' or '/users/' in owner_uri):
+                return _person_from_owner(owner_uri)
+            return ''
+        def _person_from_event_memberships(ev):
+            """Infer Anthony/Heather/Ian from event.event_memberships (round-robin: who actually handled the call)."""
+            memberships = ev.get('event_memberships') or []
+            for m in memberships:
+                if not isinstance(m, dict):
+                    continue
+                user_name = (m.get('user_name') or '').lower()
+                user_email = (m.get('user_email') or '').lower()
+                if 'anthony' in user_name or 'anthony' in user_email:
+                    return 'Anthony'
+                if 'heather' in user_name or 'heather' in user_email:
+                    return 'Heather'
+                if ('ian' in user_name or 'ian' in user_email) and 'christian' not in user_name and 'christian' not in user_email:
+                    return 'Ian'
+                user_uri = m.get('user')
+                if user_uri and '/users/' in user_uri:
+                    p = _person_from_owner(user_uri)
+                    if p:
+                        return p
+            return ''
+        def _teg_relevant_and_source(et):
+            """Return (is_teg_relevant, default_source) for an event type. Used by org path."""
+            event_name = et.get('name', '')
+            scheduling_url = (et.get('scheduling_url') or '').lower()
+            name_lower = (event_name or '').lower()
             if event_name and "teg" in name_lower and ("let's chat" in name_lower or "lets chat" in name_lower):
-                teg_event_types.append((event_type, source))
-            # Intro Call dashboard: event type for teg-introductory-call link
-            elif 'teg-introductory-call' in scheduling_url or 'introductory' in name_lower or 'intro call' in name_lower:
-                teg_event_types.append((event_type, source))
-            # Design Review: Anthony, Heather, Ian by URL or name
-            else:
-                matched = False
-                for url_part, person in DESIGN_REVIEW_PERSONS:
-                    if url_part in scheduling_url or url_part.replace('-the-evans-group', '') in name_lower:
-                        teg_event_types.append((event_type, person))
-                        matched = True
-                        break
-                # Design Review fallback: any 30min/30-min link (e.g. jamie-the-evans-group/30min) -> "Design Review"
-                if not matched and ('/30min' in scheduling_url or '/30-min' in scheduling_url or '30 minute' in name_lower or '30 min' in name_lower):
-                    teg_event_types.append((event_type, 'Design Review'))
-                    matched = True
-                if not matched:
-                    pass  # skip other event types
-        if not teg_event_types:
-            return False, "No TEG event types found ('TEG - Let's Chat', TEG Introductory Call, or Design Review 30min links)"
+                return True, ''
+            if 'teg-introductory-call' in scheduling_url or 'introductory' in name_lower or 'intro call' in name_lower:
+                return True, _person_from_event_type(et)
+            person = _person_from_event_type(et)
+            if person:
+                return True, person
+            if '/30min' in scheduling_url or '/30-min' in scheduling_url or '30 minute' in name_lower or '30 min' in name_lower:
+                return True, 'Design Review'
+            return False, ''
         
-        # Fetch events for all included event types; tag each event with source for Design Review
+        from datetime import datetime, timedelta
+        min_start_time = "2025-01-01T00:00:00.000000Z"
+        max_start_time = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%dT23:59:59.999999Z')
         all_events = []
-        event_names = []
-        
-        # Add progress tracking (cleared in finally so rerun doesn't show stale widgets)
+        event_names_set = set()
         progress_bar = st.progress(0)
         status_text = st.empty()
+        
         try:
-            total_event_types = len(teg_event_types)
-        
-            for i, (event_type, source) in enumerate(teg_event_types):
-                event_type_uri = event_type['uri']
-                event_type_uuid = event_type_uri.split('/')[-1]
-                event_name = event_type['name']
-                event_names.append(event_name)
+            # ORG-FIRST: Admin tokens grant org-wide access. Try scheduled_events?organization= first (on timeout, fall back to user path).
+            use_org_path = False
+            r_org = None
+            if org_uri and headers_org:
+                try:
+                    params_org = {'organization': org_uri, 'min_start_time': min_start_time, 'max_start_time': max_start_time, 'count': 100}
+                    r_org = requests.get('https://api.calendly.com/scheduled_events', headers=headers_org, params=params_org, timeout=90)
+                    if r_org.status_code == 200:
+                        use_org_path = True
+                except (requests.exceptions.ReadTimeout, requests.exceptions.RequestException):
+                    pass
             
-                # Update progress
-                progress = i / total_event_types
-                progress_bar.progress(progress)
-                status_text.text(f"Fetching events for: {event_name}")
-            
-                # Fetch scheduled events with pagination for this event type
-                page_count = 0
-                next_page_token = None
-            
-                # Date range for 2025
-                min_start_time = "2025-01-01T00:00:00.000000Z"
-                # Use current date plus 30 days to include future events
-                from datetime import datetime, timedelta
-                max_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%dT23:59:59.999999Z')
-                max_start_time = max_date
-            
-                while page_count < 100:  # Increased to fetch more events (up to 10,000 events)
-                    page_count += 1
-                
-                    params = {
-                        'user': user_uri,
-                        'event_type': event_type_uuid,
-                        'min_start_time': min_start_time,
-                        'max_start_time': max_start_time,
-                        'count': 100
-                    }
-                
-                    if next_page_token:
-                        params['page_token'] = next_page_token
-                
-                    events_response = requests.get('https://api.calendly.com/scheduled_events', 
-                                                headers=headers, params=params, timeout=60)
-                
-                    if events_response.status_code != 200:
-                        error_msg = f"Failed to get events for {event_name}: {events_response.status_code}"
-                        if events_response.status_code == 404:
-                            error_msg += f" - Response: {events_response.text}"
-                        return False, error_msg
-                
-                    events_data = events_response.json()
-                    raw_collection = events_data.get('collection', [])
-                    # Calendly API may return items as { "uri": "...", ... } or { "resource": { ... } }
-                    events = []
-                    for item in raw_collection:
+            if use_org_path:
+                headers = headers_org
+                status_text.text("Fetching all organization events (admin scope)...")
+                raw_org_events = []
+                data = r_org.json()
+                next_token = None
+                page = 0
+                while page < 100:
+                    page += 1
+                    if page > 1:
+                        params = {'organization': org_uri, 'min_start_time': min_start_time, 'max_start_time': max_start_time, 'count': 100, 'page_token': next_token}
+                        r = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params=params, timeout=60)
+                        if r.status_code != 200:
+                            break
+                        data = r.json()
+                    coll = data.get('collection', [])
+                    for item in coll:
                         if isinstance(item, dict) and "resource" in item:
-                            events.append({**item["resource"], "uri": item.get("uri") or item["resource"].get("uri")})
+                            raw_org_events.append({**item["resource"], "uri": item.get("uri") or item["resource"].get("uri")})
                         else:
-                            events.append(item if isinstance(item, dict) else {})
-                
-                    if not events:
+                            raw_org_events.append(item if isinstance(item, dict) else {})
+                    next_token = data.get('pagination', {}).get('next_page_token')
+                    if not next_token:
                         break
-                
-                    # Tag each event with source and ensure event type name is set (API may omit it)
-                    for event in events:
-                        if not event.get("name") and event_name:
-                            event = {**event, "name": event_name}
-                        event_with_source = {**event, 'source': source}
-                        all_events.append(event_with_source)
-                
-                    pagination = events_data.get('pagination', {})
-                    next_page_token = pagination.get('next_page_token')
-                
-                    if not next_page_token:
-                        break
-        
+                event_type_cache = {}
+                for ev in raw_org_events:
+                    et_raw = ev.get('event_type')
+                    et_uri = et_raw if isinstance(et_raw, str) else (et_raw.get('uri') if isinstance(et_raw, dict) else None)
+                    if et_uri and et_uri not in event_type_cache:
+                        uuid = et_uri.rstrip('/').split('/')[-1]
+                        try:
+                            rr = requests.get(f'https://api.calendly.com/event_types/{uuid}', headers=headers, timeout=10)
+                            if rr.status_code == 200:
+                                event_type_cache[et_uri] = rr.json().get('resource', {})
+                            else:
+                                event_type_cache[et_uri] = {}
+                        except Exception:
+                            event_type_cache[et_uri] = {}
+                    et = event_type_cache.get(et_uri) if et_uri else {}
+                    relevant, default_source = _teg_relevant_and_source(et) if et else (False, '')
+                    if not relevant and ev.get('name'):
+                        relevant, default_source = _teg_relevant_and_source({'name': ev.get('name'), 'scheduling_url': '', 'slug': ''})
+                    if relevant:
+                        event_names_set.add(ev.get('name') or et.get('name') or '')
+                        src = _person_from_event_memberships(ev) or default_source
+                        all_events.append({**ev, 'source': src})
+                event_names = list(event_names_set) if event_names_set else ['Organization events']
+            else:
+                # USER PATH: fetch with one or both keys (Burki + v2) and merge events
+                if burki_key and api_key and burki_key != api_key:
+                    keys_to_fetch = [burki_key, api_key]
+                else:
+                    keys_to_fetch = [burki_key or api_key]
+                for key in keys_to_fetch:
+                    headers = {'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'}
+                    user_response = requests.get('https://api.calendly.com/users/me', headers=headers, timeout=30)
+                    if user_response.status_code != 200:
+                        continue
+                    user_uri = (user_response.json().get('resource') or {}).get('uri')
+                    if not user_uri:
+                        continue
+                    resp = requests.get(f'https://api.calendly.com/event_types?user={user_uri}', headers=headers, timeout=30)
+                    if resp.status_code != 200:
+                        continue
+                    event_types = resp.json().get('collection', [])
+                    teg_event_types = []
+                    for event_type in event_types:
+                        event_name = event_type.get('name', '')
+                        scheduling_url = (event_type.get('scheduling_url') or '').lower()
+                        name_lower = (event_name or '').lower()
+                        source = ''
+                        if event_name and "teg" in name_lower and ("let's chat" in name_lower or "lets chat" in name_lower):
+                            teg_event_types.append((event_type, source))
+                        elif 'teg-introductory-call' in scheduling_url or 'introductory' in name_lower or 'intro call' in name_lower:
+                            teg_event_types.append((event_type, _person_from_event_type(event_type)))
+                        else:
+                            person = _person_from_event_type(event_type)
+                            if person:
+                                teg_event_types.append((event_type, person))
+                            elif '/30min' in scheduling_url or '/30-min' in scheduling_url or '30 minute' in name_lower or '30 min' in name_lower:
+                                teg_event_types.append((event_type, 'Design Review'))
+                    if not teg_event_types:
+                        continue
+                    total_event_types = len(teg_event_types)
+                    for i, (event_type, source) in enumerate(teg_event_types):
+                        event_type_uri = event_type['uri']
+                        event_type_uuid = event_type_uri.split('/')[-1]
+                        event_name = event_type['name']
+                        event_names_set.add(event_name)
+                        progress_bar.progress(min(1.0, (len(all_events) + i) / max(1, total_event_types * len(keys_to_fetch))))
+                        status_text.text(f"Fetching events for: {event_name}")
+                        page_count = 0
+                        next_page_token = None
+                        while page_count < 100:
+                            page_count += 1
+                            params = {'user': user_uri, 'event_type': event_type_uuid, 'min_start_time': min_start_time, 'max_start_time': max_start_time, 'count': 100}
+                            if next_page_token:
+                                params['page_token'] = next_page_token
+                            events_response = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params=params, timeout=60)
+                            if events_response.status_code != 200:
+                                break
+                            events_data = events_response.json()
+                            raw_collection = events_data.get('collection', [])
+                            events = []
+                            for item in raw_collection:
+                                if isinstance(item, dict) and "resource" in item:
+                                    events.append({**item["resource"], "uri": item.get("uri") or item["resource"].get("uri")})
+                                else:
+                                    events.append(item if isinstance(item, dict) else {})
+                            if not events:
+                                break
+                            for event in events:
+                                if not event.get("name") and event_name:
+                                    event = {**event, "name": event_name}
+                                source_from_membership = _person_from_event_memberships(event)
+                                final_source = source_from_membership if source_from_membership else source
+                                all_events.append({**event, 'source': final_source})
+                            next_page_token = events_data.get('pagination', {}).get('next_page_token')
+                            if not next_page_token:
+                                break
+                event_names = list(event_names_set)
+                if not all_events:
+                    return False, "No TEG events from any key ('TEG - Let's Chat', TEG Introductory Call, or Design Review 30min)"
         finally:
-            # Clear progress indicators even on exception so rerun doesn't show stale widgets
             progress_bar.empty()
             status_text.empty()
         

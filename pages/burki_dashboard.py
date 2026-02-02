@@ -62,20 +62,21 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def load_calendly_credentials():
-    """Load Calendly credentials from Streamlit secrets"""
+    """Load Calendly credentials from Streamlit secrets. Prefer Burki key for this dashboard (TEG - Let's Chat)."""
     try:
         if 'calendly' not in st.secrets:
             st.error("Calendly configuration not found in secrets.toml. Please check your configuration.")
             st.stop()
         
         calendly_config = st.secrets['calendly']
-        
-        if 'calendly_api_key' not in calendly_config:
-            st.error("Calendly API key not found in secrets.toml. Please add your Calendly API key.")
+        # Prefer Burki token for this dashboard so /users/me returns Jamie Burki and "TEG - Let's Chat" event types
+        api_key = calendly_config.get('calendly_burki_api_key') or calendly_config.get('calendly_api_key') or calendly_config.get('api_key')
+        if not api_key:
+            st.error("Calendly API key not found in secrets.toml. Add calendly_burki_api_key or calendly_api_key.")
             st.stop()
             
         return {
-            'api_key': calendly_config['calendly_api_key']
+            'api_key': api_key
         }
     except Exception as e:
         st.error(f"Error reading secrets: {str(e)}")
@@ -113,6 +114,14 @@ def load_calendly_data_from_db():
             'uri', 'name', 'start_time', 'end_time', 'status', 'event_type',
             'invitee_name', 'invitee_email', 'updated_at'
         ])
+        
+        # Keep only "TEG - Let's Chat" events (Burki dashboard shows this event type only)
+        if not df.empty and 'name' in df.columns:
+            name_lower = df['name'].astype(str).str.lower()
+            is_burki = (name_lower.str.contains("teg", na=False) & (name_lower.str.contains("let's chat", na=False) | name_lower.str.contains("lets chat", na=False)))
+            df = df[is_burki].copy()
+        if df.empty:
+            return None, "No TEG - Let's Chat events in database. Refresh Calendly data (use Burki token for this event type)."
         
         # Convert timestamps
         df['start_time'] = pd.to_datetime(df['start_time'])
