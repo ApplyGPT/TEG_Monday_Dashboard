@@ -46,33 +46,36 @@ except Exception:  # pragma: no cover - fallback if dependency missing at runtim
     get_column_letter = None
 
 
-# Pricing constants - New pricing table based on style count brackets and style type
-# Style types: "Regular", "Activewear/Lingerie/Swim", "Pattern Blocks"
+# Pricing constants - Package rates by # OF STYLES (style rows only)
+# 2-4 STYLES, 5-9 STYLES, 10-14 STYLES, +15 STYLES. Activewear includes *2 FITTINGS.
 PRICING_TABLE = {
     "Regular": {
-        "< 2": 3360.00,
-        "< 5": 2856.00,
-        "< 10": 2688.00,
-        "< 15": 2520.00,
+        "< 2": 3360.00,   # 1 style → same as 2-4
+        "< 5": 3360.00,   # 2-4 STYLES
+        "< 10": 2856.00,  # 5-9 STYLES
+        "< 15": 2688.00,  # 10-14 STYLES
+        "15+": 2520.00,   # +15 STYLES
     },
     "Activewear/Lingerie/Swim": {
         "< 2": 3800.00,
-        "< 5": 3230.00,
-        "< 10": 3040.00,
-        "< 15": 2850.00,
+        "< 5": 3800.00,
+        "< 10": 3230.00,
+        "< 15": 3040.00,
+        "15+": 2850.00,
     },
     "Pattern Blocks": {
         "< 2": 2500.00,
-        "< 5": 2125.00,  # 5 STYLES - 15% SAVINGS
-        "< 10": 2000.00,  # 10 STYLES - 20% SAVINGS
-        "< 15": 1875.00,  # 15 STYLES - 25% SAVINGS
+        "< 5": 2500.00,
+        "< 10": 2125.00,
+        "< 15": 2000.00,
+        "15+": 1875.00,
     }
 }
 
 OPTIONAL_PRICES = {
-    "wash_dye": 1330.00,
-    "design": 1330.00,
-    "treatment": 760.00,
+    "wash_dye": 1500.00,
+    "design": 1500.00,
+    "treatment": 860.00,
     # Note: "source" removed - no longer an option
 }
 SUMMARY_LABEL_COL = 14  # Column N
@@ -109,13 +112,13 @@ def calculate_base_price(num_styles: int, style_type: str) -> float:
     """Calculate base price based on number of styles and style type.
     
     Pricing is based on style count brackets and style type:
-    - < 2 styles: Regular=$3,360, Activewear/Lingerie/Swim=$3,800, Pattern Blocks=$2,500
-    - < 5 styles: Regular=$2,856, Activewear/Lingerie/Swim=$3,230, Pattern Blocks=$2,125
-    - < 10 styles: Regular=$2,688, Activewear/Lingerie/Swim=$3,040, Pattern Blocks=$2,000
-    - < 15 styles: Regular=$2,520, Activewear/Lingerie/Swim=$2,850, Pattern Blocks=$1,875
+    - 1 style / 2-4 STYLES: Regular=$3,360, Activewear=$3,800, Pattern Blocks=$2,500
+    - 5-9 STYLES: Regular=$2,856, Activewear=$3,230, Pattern Blocks=$2,125
+    - 10-14 STYLES: Regular=$2,688, Activewear=$3,040, Pattern Blocks=$2,000
+    - +15 STYLES: Regular=$2,520, Activewear=$2,850, Pattern Blocks=$1,875
     
     Args:
-        num_styles: Total number of styles (used to determine bracket)
+        num_styles: Number of style rows (used to determine bracket; custom items are not counted)
         style_type: One of "Regular", "Activewear/Lingerie/Swim", or "Pattern Blocks"
     
     Returns:
@@ -125,7 +128,7 @@ def calculate_base_price(num_styles: int, style_type: str) -> float:
     if style_type not in PRICING_TABLE:
         style_type = "Regular"
     
-    # Determine bracket based on number of styles
+    # Bracket: 1 style, 2-4, 5-9, 10-14, +15
     if num_styles < 2:
         bracket = "< 2"
     elif num_styles < 5:
@@ -135,8 +138,7 @@ def calculate_base_price(num_styles: int, style_type: str) -> float:
     elif num_styles < 15:
         bracket = "< 15"
     else:
-        # For 15 or more, use the < 15 pricing
-        bracket = "< 15"
+        bracket = "15+"
     
     return PRICING_TABLE[style_type][bracket]
 
@@ -842,8 +844,8 @@ def apply_development_package(
         row_options = entry.get("options", {})
 
         # Calculate base price based on tiered pricing and style type
-        # Use total_styles_count (regular + custom) for pricing tier
-        line_base_price = calculate_base_price(total_styles_count, style_type)
+        # Package rate bracket is based on number of styles only (not custom items)
+        line_base_price = calculate_base_price(num_styles, style_type)
 
         # Check if this is a new row (row_idx > 18) that needs Arial 20 font
         is_new_row = num_styles > 5 and row_idx > 18
@@ -3741,11 +3743,11 @@ def main() -> None:
     with header_cols[3]:
         st.markdown("**Complexity (%)**")
     with header_cols[4]:
-        st.markdown("**Wash/Dye ($1,330)**")
+        st.markdown("**Wash/Dye ($1,500)**")
     with header_cols[5]:
-        st.markdown("**Design ($1,330)**")
+        st.markdown("**Design ($1,500)**")
     with header_cols[6]:
-        st.markdown("**Treatment ($760)**")
+        st.markdown("**Treatment ($860)**")
     
     # Display existing style entries in horizontal rows
     if st.session_state["style_entries"]:
@@ -3835,6 +3837,29 @@ def main() -> None:
     
     # Calculate number of regular styles for custom item numbering
     num_regular_styles = len(st.session_state.get("style_entries", []))
+    
+    # QuickSelect buttons for common custom items
+    quick_select_cols = st.columns([1, 1, 2])
+    with quick_select_cols[0]:
+        if st.button("➕ Sourcing ($2,050)", key="quick_sourcing", help="Add Sourcing — $2,050"):
+            next_num = 101 + num_regular_styles + len(st.session_state["custom_styles"])
+            st.session_state["custom_styles"].append({
+                "name": "Sourcing",
+                "price": 2050.0,
+                "complexity": 0.0,
+                "style_number": next_num,
+            })
+            st.rerun()
+    with quick_select_cols[1]:
+        if st.button("➕ Sourcing Consult ($750)", key="quick_sourcing_consult", help="Add Sourcing Consult — $750"):
+            next_num = 101 + num_regular_styles + len(st.session_state["custom_styles"])
+            st.session_state["custom_styles"].append({
+                "name": "Sourcing Consult",
+                "price": 750.0,
+                "complexity": 0.0,
+                "style_number": next_num,
+            })
+            st.rerun()
     
     # Column headers for Custom Items
     custom_header_cols = st.columns([1.2, 2, 1.5, 1.5, 0.8])

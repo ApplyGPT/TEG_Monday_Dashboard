@@ -9,7 +9,8 @@ import toml
 import sys
 import subprocess
 import time
-from datetime import datetime
+import traceback
+from datetime import datetime, timedelta
 
 # Database paths
 MONDAY_DB_PATH = "monday_data.db"
@@ -58,11 +59,16 @@ def init_databases():
             event_type TEXT,
             invitee_name TEXT,
             invitee_email TEXT,
+            source TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+    try:
+        cursor.execute("ALTER TABLE calendly_events ADD COLUMN source TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.commit()
     conn.close()
 
@@ -333,7 +339,7 @@ def refresh_calendly_database(config):
         }
         
         # Get user info
-        user_response = requests.get('https://api.calendly.com/users/me', headers=headers)
+        user_response = requests.get('https://api.calendly.com/users/me', headers=headers, timeout=30)
         if user_response.status_code != 200:
             print(f"❌ Failed to get Calendly user info: {user_response.status_code}")
             print(f"   Response: {user_response.text[:200]}")
@@ -345,50 +351,71 @@ def refresh_calendly_database(config):
             return False
         
         user_data = user_response.json()
-        user_uri = user_data['resource']['uri']
+        user_uri = user_data.get('resource', {}).get('uri')
+        if not user_uri:
+            print("❌ Calendly API did not return user URI")
+            return False
         
         # Get event types
-        event_types_response = requests.get(f'https://api.calendly.com/event_types?user={user_uri}', headers=headers)
+        event_types_response = requests.get(f'https://api.calendly.com/event_types?user={user_uri}', headers=headers, timeout=30)
         if event_types_response.status_code != 200:
-            print(f"❌ Failed to get Calendly event types: {event_types_response.status_code}")
+            print(f"❌ Failed to get Calendly event types: {event_types_response.status_code} - {event_types_response.text[:200]}")
             return False
         
         event_types_data = event_types_response.json()
         event_types = event_types_data.get('collection', [])
         
-        # Find ONLY "TEG - Let's Chat" event type (filter out "Intro call with Teg")
-        teg_event_types = []
+        # Include: Burki, Intro Call, and Design Review event types (same logic as pages/database_refresh.py)
+        DESIGN_REVIEW_PERSONS = [
+            ('anthony-the-evans-group', 'Anthony'),
+            ('heather-the-evans-group', 'Heather'),
+            ('ian-the-evans-group', 'Ian'),
+        ]
+        teg_event_types = []  # list of (event_type, source)
         for event_type in event_types:
             event_name = event_type.get('name', '')
-            # Only include "TEG - Let's Chat", explicitly exclude "Intro call with Teg"
-            if event_name == "TEG - Let's Chat":
-                teg_event_types.append(event_type)
-            elif 'teg' in event_name.lower():
-                print(f"⚠️  Found other TEG event type: {event_name} (skipping)")
+            scheduling_url = (event_type.get('scheduling_url') or '').lower()
+            name_lower = event_name.lower()
+            source = ''
+            # Burki dashboard: "TEG - Let's Chat" (normalize apostrophe/casing)
+            if event_name and "teg" in name_lower and ("let's chat" in name_lower or "lets chat" in name_lower):
+                teg_event_types.append((event_type, source))
+            # Intro Call dashboard
+            elif 'teg-introductory-call' in scheduling_url or 'introductory' in name_lower or 'intro call' in name_lower:
+                teg_event_types.append((event_type, source))
+            # Design Review: Anthony, Heather, Ian by URL or name
+            else:
+                matched = False
+                for url_part, person in DESIGN_REVIEW_PERSONS:
+                    if url_part in scheduling_url or url_part.replace('-the-evans-group', '') in name_lower:
+                        teg_event_types.append((event_type, person))
+                        matched = True
+                        break
+                if not matched and ('/30min' in scheduling_url or '/30-min' in scheduling_url or '30 minute' in name_lower or '30 min' in name_lower):
+                    teg_event_types.append((event_type, 'Design Review'))
+                    matched = True
+                if not matched:
+                    pass
         
         if not teg_event_types:
-            print("❌ No 'TEG - Let's Chat' event type found")
+            print("❌ No TEG event types found ('TEG - Let's Chat', TEG Introductory Call, or Design Review 30min links)")
             return False
         
         all_events = []
+        min_start_time = "2025-01-01T00:00:00.000000Z"
+        max_start_time = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%dT23:59:59.999999Z')
         
-        for event_type in teg_event_types:
+        for event_type, source in teg_event_types:
             event_type_uri = event_type['uri']
             event_type_uuid = event_type_uri.split('/')[-1]
+            event_name = event_type['name']
+            print(f"   Fetching events for: {event_name}")
             
-            # Fetch events with pagination
             page_count = 0
             next_page_token = None
             
-            min_start_time = "2025-01-01T00:00:00.000000Z"
-            # Use current date plus 30 days to include future events
-            from datetime import datetime, timedelta
-            max_date = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%dT23:59:59.999999Z')
-            max_start_time = max_date
-            
             while page_count < 100:
                 page_count += 1
-                
                 params = {
                     'user': user_uri,
                     'event_type': event_type_uuid,
@@ -396,70 +423,87 @@ def refresh_calendly_database(config):
                     'max_start_time': max_start_time,
                     'count': 100
                 }
-                
                 if next_page_token:
                     params['page_token'] = next_page_token
                 
-                events_response = requests.get('https://api.calendly.com/scheduled_events', 
-                                             headers=headers, params=params)
-                
+                events_response = requests.get('https://api.calendly.com/scheduled_events',
+                                              headers=headers, params=params, timeout=60)
                 if events_response.status_code != 200:
+                    print(f"   ⚠️ Failed to get events for {event_name}: {events_response.status_code}")
                     break
                 
                 events_data = events_response.json()
-                events = events_data.get('collection', [])
-                
+                raw_collection = events_data.get('collection', [])
+                events = []
+                for item in raw_collection:
+                    if isinstance(item, dict) and "resource" in item:
+                        events.append({**item["resource"], "uri": item.get("uri") or item["resource"].get("uri")})
+                    else:
+                        events.append(item if isinstance(item, dict) else {})
                 if not events:
                     break
-                
-                all_events.extend(events)
-                
+                for event in events:
+                    if not event.get("name") and event_name:
+                        event = {**event, "name": event_name}
+                    all_events.append({**event, "source": source})
                 pagination = events_data.get('pagination', {})
                 next_page_token = pagination.get('next_page_token')
-                
                 if not next_page_token:
                     break
         
-        # Save to database
+        # Deduplicate by URI (same event can be returned under multiple event types)
+        seen_uris = set()
+        unique_events = []
+        for ev in all_events:
+            u = (ev.get('uri') or '').strip()
+            if u and u not in seen_uris:
+                seen_uris.add(u)
+                unique_events.append(ev)
+        
+        # Save to database (same logic as pages/database_refresh.py save_calendly_data_to_db)
         conn = sqlite3.connect(CALENDLY_DB_PATH)
         cursor = conn.cursor()
-        
+        try:
+            cursor.execute("ALTER TABLE calendly_events ADD COLUMN source TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
         cursor.execute("DELETE FROM calendly_events")
-        
-        # Save ALL events regardless of status for accurate counting
         saved_count = 0
-        for event in all_events:
-            
-            uri = event.get('uri', '')
-            name = event.get('name', '')
-            start_time = event.get('start_time', '')
-            end_time = event.get('end_time', '')
-            status = event.get('status', '')
-            event_type = event.get('event_type', '')
-            
-            invitees = event.get('invitees', [])
-            invitee_name = ""
-            invitee_email = ""
-            if invitees:
-                invitee = invitees[0]
-                invitee_name = invitee.get('name', '')
-                invitee_email = invitee.get('email', '')
-            
+        for event in unique_events:
+            if not isinstance(event, dict):
+                continue
+            uri = event.get('uri') or ''
+            name = event.get('name') or ''
+            start_time = event.get('start_time') or ''
+            end_time = event.get('end_time') or ''
+            status = event.get('status') or ''
+            raw_event_type = event.get('event_type', '')
+            if isinstance(raw_event_type, dict):
+                event_type_val = raw_event_type.get('uri') or raw_event_type.get('name') or ''
+            else:
+                event_type_val = str(raw_event_type) if raw_event_type else ''
+            source = event.get('source') or ''
+            invitees = event.get('invitees') or []
+            invitee_name = invitee_email = ""
+            if invitees and isinstance(invitees[0], dict):
+                invitee_name = invitees[0].get('name') or ''
+                invitee_email = invitees[0].get('email') or ''
             cursor.execute('''
-                INSERT INTO calendly_events 
-                (uri, name, start_time, end_time, status, event_type, invitee_name, invitee_email, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (uri, name, start_time, end_time, status, event_type, invitee_name, invitee_email, datetime.now()))
+                INSERT OR REPLACE INTO calendly_events 
+                (uri, name, start_time, end_time, status, event_type, invitee_name, invitee_email, source, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (uri, name, start_time, end_time, status, event_type_val, invitee_name, invitee_email, source, datetime.now()))
             saved_count += 1
-        
         conn.commit()
         conn.close()
         
-        print(f"✅ Calendly refresh complete: {saved_count} events saved (out of {len(all_events)} total)")
+        print(f"✅ Calendly refresh complete: {saved_count} events saved (out of {len(unique_events)} unique)")
         return True
         
     except Exception as e:
         print(f"❌ Error refreshing Calendly database: {str(e)}")
+        print(traceback.format_exc())
         return False
 
 def generate_new_leads_cache():

@@ -12,9 +12,12 @@ import calendar
 # Get current year dynamically
 CURRENT_YEAR = datetime.now().year
 
+# TEG Introductory Call Calendly scheduling link (this dashboard shows only events from this link)
+TEG_INTRO_CALL_SCHEDULING_URL = "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call"
+
 # Page configuration
 st.set_page_config(
-    page_title="Burki Dashboard",
+    page_title="TEG Introductory Call Dashboard",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -82,7 +85,11 @@ def load_calendly_credentials():
         st.stop()
 
 def load_calendly_data_from_db():
-    """Load Calendly data from SQLite database"""
+    """Load Calendly data from SQLite database, filtered to TEG Introductory Call events only.
+    Events are identified by event type name containing 'introductory' or 'intro call'
+    (matches the event type for https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call,
+    e.g. "TEG Introductory Call" or "Intro call with Teg").
+    """
     CALENDLY_DB_PATH = "calendly_data.db"
     
     try:
@@ -97,7 +104,7 @@ def load_calendly_data_from_db():
             conn.close()
             return None, "No Calendly data found in database. Please refresh Calendly data first."
         
-        # Get all events
+        # Get all events (we filter by name in Python so we can use str.contains)
         cursor.execute("""
             SELECT uri, name, start_time, end_time, status, event_type, 
                    invitee_name, invitee_email, updated_at
@@ -114,6 +121,16 @@ def load_calendly_data_from_db():
             'invitee_name', 'invitee_email', 'updated_at'
         ])
         
+        # Keep only TEG Introductory Call events (event type for TEG_INTRO_CALL_SCHEDULING_URL)
+        # Match event type name: "TEG Introductory Call", "Introductory Call", or "Intro call with Teg"
+        if not df.empty and 'name' in df.columns:
+            name_lower = df['name'].astype(str).str.lower()
+            is_intro_call = (
+                name_lower.str.contains('introductory', na=False) |
+                name_lower.str.contains('intro call', na=False)
+            )
+            df = df[is_intro_call].copy()
+        
         # Convert timestamps
         df['start_time'] = pd.to_datetime(df['start_time'])
         df['end_time'] = pd.to_datetime(df['end_time'])
@@ -127,6 +144,8 @@ def load_calendly_data_from_db():
         df['day_of_week'] = df['start_time'].dt.strftime('%A')
         df['hour'] = df['start_time'].dt.hour
         
+        if df.empty:
+            return None, "No TEG Introductory Call events in database. Refresh Calendly data from the Database Refresh page to include events from the TEG Introductory Call link."
         return df, None
         
     except sqlite3.Error as e:
@@ -135,7 +154,7 @@ def load_calendly_data_from_db():
         return None, f"Error loading Calendly data: {str(e)}"
 
 def get_calendly_data():
-    """Get Calendly data for Jamie Burki's TEG events"""
+    """Get Calendly data for TEG Introductory Call events (scheduling link: TEG_INTRO_CALL_SCHEDULING_URL)"""
     credentials = load_calendly_credentials()
     api_key = credentials['api_key']
     
@@ -539,13 +558,12 @@ def display_calendar_grid(daily_counts, selected_month):
 def main():
     """Main application function"""
     # Header
-    st.markdown('<div class="embed-header">📊 BURKI DASHBOARD</div>', unsafe_allow_html=True)
+    st.markdown('<div class="embed-header">📊 TEG INTRODUCTORY CALL DASHBOARD</div>', unsafe_allow_html=True)
     
     # Sidebar for configuration
     with st.sidebar:
         st.header("⚙️ Settings")
         st.info(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
         # Refresh button
         if st.button("🔄 Refresh Data"):
             st.rerun()
@@ -568,39 +586,39 @@ def main():
             # Date range filter at the very top - applies to all charts (same UX as ads_dashboard)
             # Use form so the page only reruns when user clicks Apply (not on every date change)
             st.subheader("📅 Date Range")
-            if "burki_start_date" not in st.session_state:
-                st.session_state.burki_start_date = date(CURRENT_YEAR, 1, 1)
-            if "burki_end_date" not in st.session_state:
-                st.session_state.burki_end_date = date.today()
-            with st.form(key="burki_date_range_form", clear_on_submit=False):
+            if "intro_call_start_date" not in st.session_state:
+                st.session_state.intro_call_start_date = date(CURRENT_YEAR, 1, 1)
+            if "intro_call_end_date" not in st.session_state:
+                st.session_state.intro_call_end_date = date.today()
+            with st.form(key="intro_call_date_range_form", clear_on_submit=False):
                 date_col1, date_col2, date_col3 = st.columns([1, 1, 1])
                 with date_col1:
                     start_input = st.date_input(
                         "Start Date",
-                        value=st.session_state.burki_start_date,
+                        value=st.session_state.intro_call_start_date,
                         help="Start date for all metrics and charts",
-                        key="burki_start_date_input",
+                        key="intro_call_start_date_input",
                     )
                 with date_col2:
                     end_input = st.date_input(
                         "End Date",
-                        value=st.session_state.burki_end_date,
+                        value=st.session_state.intro_call_end_date,
                         help="End date for all metrics and charts",
-                        key="burki_end_date_input",
+                        key="intro_call_end_date_input",
                     )
                 with date_col3:
                     st.markdown("<div style='margin-top: 14px; padding-top: 14px'></div>", unsafe_allow_html=True)
                     apply_clicked = st.form_submit_button("Apply Date Range Filters")
                 if apply_clicked:
                     if start_input > end_input:
-                        st.session_state.burki_start_date = end_input
-                        st.session_state.burki_end_date = end_input
+                        st.session_state.intro_call_start_date = end_input
+                        st.session_state.intro_call_end_date = end_input
                     else:
-                        st.session_state.burki_start_date = start_input
-                        st.session_state.burki_end_date = end_input
+                        st.session_state.intro_call_start_date = start_input
+                        st.session_state.intro_call_end_date = end_input
                     st.rerun()
-            start_date = st.session_state.burki_start_date
-            end_date = st.session_state.burki_end_date
+            start_date = st.session_state.intro_call_start_date
+            end_date = st.session_state.intro_call_end_date
             if start_date > end_date:
                 end_date = start_date
 

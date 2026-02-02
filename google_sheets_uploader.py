@@ -114,75 +114,6 @@ def _log_drive_quota(drive_service, shared_drive_id: Optional[str] = None) -> di
         return {}
 
 
-def cleanup_old_workbooks(
-    drive_service,
-    shared_drive_id: Optional[str],
-    parent_folder_id: Optional[str],
-    max_files: int = 25,
-) -> tuple[int, int]:
-    """Remove older Google Sheets created by this tool to avoid quota issues."""
-    try:
-        # If we have a parent_folder_id but no shared_drive_id, check if the folder is in a Shared Drive
-        if parent_folder_id and not shared_drive_id:
-            try:
-                folder_info = drive_service.files().get(
-                    fileId=parent_folder_id,
-                    fields="driveId",
-                    supportsAllDrives=True
-                ).execute()
-                folder_drive_id = folder_info.get("driveId")
-                if folder_drive_id:
-                    shared_drive_id = folder_drive_id
-            except Exception:
-                pass
-        
-        query = (
-            "mimeType='application/vnd.google-apps.spreadsheet' "
-            "and name contains 'Development Package'"
-        )
-        if parent_folder_id:
-            query += f" and '{parent_folder_id}' in parents"
-        list_kwargs = {
-            "q": query,
-            "orderBy": "createdTime desc",
-            "fields": "files(id,name,createdTime)",
-        }
-        # Use Shared Drive API parameters if we have a shared_drive_id
-        if shared_drive_id:
-            list_kwargs.update(
-                {
-                    "supportsAllDrives": True,
-                    "includeItemsFromAllDrives": True,
-                    "corpora": "drive",
-                    "driveId": shared_drive_id,
-                }
-            )
-        results = (
-            drive_service.files()
-            .list(**list_kwargs)
-            .execute()
-        )
-        files = results.get("files", [])
-        if len(files) <= max_files:
-            return 0, len(files)
-
-        deleted = 0
-        for file_meta in files[max_files:]:
-            try:
-                drive_service.files().delete(
-                    fileId=file_meta["id"], supportsAllDrives=bool(shared_drive_id)
-                ).execute()
-                deleted += 1
-            except Exception as exc:  # pragma: no cover - best effort cleanup
-                st.warning(f"Could not delete old Google Sheet {file_meta.get('name')}: {exc}")
-        if deleted:
-            st.info(f"Deleted {deleted} old Google Sheets to free space.")
-        return deleted, len(files)
-    except Exception as exc:  # pragma: no cover - best effort cleanup
-        st.warning(f"Cleanup of old Google Sheets failed: {exc}")
-        return 0, 0
-
-
 def _is_storage_quota_error(exc: HttpError) -> bool:
     """Return True if the Drive API error is a storage quota issue."""
     if getattr(exc, "resp", None) is None:
@@ -225,9 +156,6 @@ def upload_workbook_to_google_sheet(
         except Exception:
             # If we can't get folder info, continue without Shared Drive support
             pass
-
-    # Attempt to delete older spreadsheets so the service account does not exceed quota.
-    cleanup_old_workbooks(drive_service, shared_drive_id, parent_folder_id)
 
     file_metadata = {
         "name": sheet_name or "Workbook Copy",

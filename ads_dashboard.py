@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
-from datetime import datetime
+from datetime import datetime, date
 import plotly.express as px
 import plotly.graph_objects as go
 import sys
@@ -694,9 +694,7 @@ def calculate_roas(ads_df, sales_df):
         axis=1
     )
     
-    # Filter for current year only
-    roas_df = roas_df[roas_df['Month Year'].str.contains(str(CURRENT_YEAR), na=False)]
-    
+    # No year filter here - callers pass already date-filtered data
     # Sort by date
     roas_df['Date'] = pd.to_datetime(roas_df['Month Year'], errors='coerce')
     roas_df = roas_df.sort_values('Date')
@@ -746,11 +744,68 @@ def main():
         st.warning("No records found in either board. Add some items to Monday.com to see them here.")
         st.info("💡 **Tip**: Make sure your Monday.com boards have items and your API token has the correct permissions.")
     else:
-        # ROAS Section
-        st.subheader(f"📈 Return on Ad Spend (ROAS) - {CURRENT_YEAR}")
+        # Date range filter at the very top - applies to entire page (ROAS, Ad Spend, UTM, Qualified breakdown)
+        # Use form so the page only reruns when user clicks Apply (not on every date change)
+        st.subheader("📅 Date Range")
+        if "ads_start_date" not in st.session_state:
+            st.session_state.ads_start_date = date(CURRENT_YEAR, 1, 1)
+        if "ads_end_date" not in st.session_state:
+            st.session_state.ads_end_date = date.today()
+        with st.form(key="date_range_form", clear_on_submit=False):
+            date_col1, date_col2, date_col3 = st.columns([1, 1, 1])
+            with date_col1:
+                start_input = st.date_input(
+                    "Start Date",
+                    value=st.session_state.ads_start_date,
+                    help="Start date for all metrics and charts",
+                    key="ads_start_date_input",
+                )
+            with date_col2:
+                end_input = st.date_input(
+                    "End Date",
+                    value=st.session_state.ads_end_date,
+                    help="End date for all metrics and charts",
+                    key="ads_end_date_input",
+                )
+            with date_col3:
+                st.markdown("<div style='margin-top: 14px; padding-top: 14px'></div>", unsafe_allow_html=True)
+                apply_clicked = st.form_submit_button("Apply Date Range Filters")
+            if apply_clicked:
+                if start_input > end_input:
+                    st.session_state.ads_start_date = end_input
+                    st.session_state.ads_end_date = end_input
+                else:
+                    st.session_state.ads_start_date = start_input
+                    st.session_state.ads_end_date = end_input
+                st.rerun()
+        start_date = st.session_state.ads_start_date
+        end_date = st.session_state.ads_end_date
+        if start_date > end_date:
+            end_date = start_date
+        date_range_label = f"{start_date.strftime('%b %d, %Y')} – {end_date.strftime('%b %d, %Y')}"
+
+        # Filter ads and sales by selected date range (used by ROAS, Ad Spend, Detailed Sales)
+        ads_filtered = ads_df.copy()
+        if not ads_filtered.empty and "Attribution Date" in ads_filtered.columns:
+            ads_filtered = ads_filtered.dropna(subset=["Attribution Date"])
+            ads_filtered = ads_filtered[
+                (ads_filtered["Attribution Date"].dt.date >= start_date)
+                & (ads_filtered["Attribution Date"].dt.date <= end_date)
+            ]
+        sales_df_filtered = sales_df.copy()
+        if not sales_df_filtered.empty and "Date Created" in sales_df_filtered.columns:
+            sales_df_filtered = sales_df_filtered.dropna(subset=["Date Created"])
+            sales_df_filtered = sales_df_filtered[
+                (sales_df_filtered["Date Created"].dt.date >= start_date)
+                & (sales_df_filtered["Date Created"].dt.date <= end_date)
+            ]
+
+        # ROAS Section (uses date-filtered data)
+        st.markdown("---")
+        st.subheader(f"📈 Return on Ad Spend (ROAS) - {date_range_label}")
         
-        # Calculate ROAS
-        roas_df = calculate_roas(ads_df, sales_df)
+        # Calculate ROAS from date-filtered data
+        roas_df = calculate_roas(ads_filtered, sales_df_filtered)
         
         # Don't filter - show all months for current year
         if not roas_df.empty:
@@ -789,10 +844,10 @@ def main():
             st.plotly_chart(fig_roas, use_container_width=True)
             
             # Profit on Ads Graph (moved here)
-            st.subheader(f"📈 Profit on Ads {CURRENT_YEAR}")
+            st.subheader(f"📈 Profit on Ads - {date_range_label}")
             
             # Create separate ROAS data for profit chart (include ALL months, not just those with sales)
-            roas_df_profit = calculate_roas(ads_df, sales_df)
+            roas_df_profit = calculate_roas(ads_filtered, sales_df_filtered)
             
             if not roas_df_profit.empty:
                 # Calculate profit (Revenue - Ad Spend) for current year
@@ -832,18 +887,17 @@ def main():
                 
                 st.plotly_chart(fig_profit, use_container_width=True)
             else:
-                st.info(f"No profit data available for {CURRENT_YEAR}")
+                st.info(f"No profit data available for selected date range.")
             
             # Detailed Sales Table Section
             st.subheader("🔍 Detailed Sales Analysis")
             
             # Month selector for detailed view - only show months with qualifying sales (Closed + Paid Search)
-            if not sales_df.empty:
-                # Filter sales_df to only include Closed/Win + Paid Search records (same as ROAS)
-                # Use exact matching to accept both "Closed" and "Win" statuses
-                qualifying_sales = sales_df[
-                    (sales_df['Status'].str.lower().isin(['closed', 'win'])) &
-                    (sales_df['Channel'].str.lower() == 'paid search')
+            if not sales_df_filtered.empty:
+                # Filter to only include Closed/Win + Paid Search records (same as ROAS)
+                qualifying_sales = sales_df_filtered[
+                    (sales_df_filtered['Status'].str.lower().isin(['closed', 'win'])) &
+                    (sales_df_filtered['Channel'].str.lower() == 'paid search')
                 ]
                 
                 # Sort months chronologically and remove NaN values from qualifying sales only
@@ -917,40 +971,13 @@ def main():
                 else:
                     st.info("No sales data available for detailed analysis")
         else:
-            # Show message when there's no ROAS data for current year
-            st.info(f"No ROAS data available for {CURRENT_YEAR}. The ROAS, Profit, and Detailed Sales Analysis sections require data from both Ads and Sales boards for the current year.")
+            # Show message when there's no ROAS data for selected date range
+            st.info("No ROAS data available for the selected date range. The ROAS, Profit, and Detailed Sales Analysis sections require data from both Ads and Sales boards within the date range.")
         
         
-        # Original Ad Spend Section
-        if not ads_df.empty:
+        # Ad Spend Section (uses same date range as widget)
+        if not ads_filtered.empty:
             st.markdown("---")
-            
-            # Year filter for ads data
-            st.subheader("📅 Filter by Year")
-            
-            # Get unique years from the ads data
-            ads_with_dates = ads_df.dropna(subset=['Attribution Date'])
-            if not ads_with_dates.empty:
-                ads_with_dates['Year'] = ads_with_dates['Attribution Date'].dt.year
-                available_years = sorted(ads_with_dates['Year'].unique())
-                
-                # Add "All Years" option
-                year_options = ["All Years"] + [str(year) for year in available_years]
-                # Set default to current year if available, otherwise "All Years"
-                default_index = year_options.index(str(CURRENT_YEAR)) if str(CURRENT_YEAR) in year_options else 0
-                selected_year = st.selectbox("Select Year:", year_options, index=default_index)
-                
-                # Filter data based on selected year
-                if selected_year == "All Years":
-                    ads_filtered = ads_with_dates
-                    year_label = "All Years"
-                else:
-                    ads_filtered = ads_with_dates[ads_with_dates['Year'] == int(selected_year)]
-                    year_label = selected_year
-            else:
-                ads_filtered = ads_with_dates
-                year_label = "All Years"
-                selected_year = "All Years"
             
             # Total Adspend metric
             st.subheader("💰 Total Ad Spend")
@@ -958,7 +985,7 @@ def main():
             st.metric("Total Ad Spend", f"${total_adspend:,.2f}", delta=None)
             
             # Create the bar chart
-            st.subheader(f"📊 Adspend by Month - {year_label}")
+            st.subheader(f"📊 Adspend by Month - {date_range_label}")
             
             # Filter out rows with missing data for charting
             ads_chart = ads_filtered.dropna(subset=['Attribution Date', 'Google Adspend'])
@@ -969,7 +996,7 @@ def main():
                     ads_chart,
                     x='Month Year',
                     y='Google Adspend',
-                    title=f'Google Adspend by Month - {year_label}',
+                    title=f'Google Adspend by Month - {date_range_label}',
                     labels={'Google Adspend': 'Adspend ($)', 'Month Year': 'Month'},
                     color_discrete_sequence=['#1f77b4']
                 )
@@ -998,9 +1025,9 @@ def main():
             else:
                 st.warning("No ad spend data available for charting.")
 
-    # UTM Data Section at the bottom
+    # UTM Data Section at the bottom (uses same date range as widget)
     st.markdown("---")
-    st.subheader(f"📊 UTM Data (Leads by Channel - {CURRENT_YEAR})")
+    st.subheader(f"📊 UTM Data (Leads by Channel - {date_range_label})")
     
     # Get all leads data for UTM analysis
     with st.spinner("Loading UTM data..."):
@@ -1014,8 +1041,11 @@ def main():
         leads_df['date_created'] = pd.to_datetime(leads_df['date_created'], errors='coerce')
         leads_with_dates = leads_df.dropna(subset=['date_created'])
         
-        # Filter for current year data only
-        leads_with_dates = leads_with_dates[leads_with_dates['date_created'].dt.year == CURRENT_YEAR]
+        # Filter by selected date range
+        leads_with_dates = leads_with_dates[
+            (leads_with_dates['date_created'].dt.date >= start_date)
+            & (leads_with_dates['date_created'].dt.date <= end_date)
+        ]
         
         if not leads_with_dates.empty:
             # Add month-year column for grouping with proper formatting
@@ -1068,13 +1098,13 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
             
         else:
-            st.warning(f"No leads with valid creation dates found for {CURRENT_YEAR} UTM analysis.")
+            st.warning("No leads with valid creation dates found for the selected date range.")
     else:
         st.warning("No leads data found for UTM analysis.")
 
-    # UTM Data - Sales Board Section
+    # UTM Data - Sales Board Section (uses same date range as widget)
     st.markdown("---")
-    st.subheader(f"📊 UTM Data - Sales Board (Leads by Channel - {CURRENT_YEAR})")
+    st.subheader(f"📊 UTM Data - Sales Board (Leads by Channel - {date_range_label})")
     
     # Get sales board leads data for UTM analysis
     with st.spinner("Loading Sales Board UTM data..."):
@@ -1088,8 +1118,11 @@ def main():
         sales_leads_df['date_created'] = pd.to_datetime(sales_leads_df['date_created'], errors='coerce')
         sales_leads_with_dates = sales_leads_df.dropna(subset=['date_created'])
         
-        # Filter for current year data only
-        sales_leads_with_dates = sales_leads_with_dates[sales_leads_with_dates['date_created'].dt.year == CURRENT_YEAR]
+        # Filter by selected date range
+        sales_leads_with_dates = sales_leads_with_dates[
+            (sales_leads_with_dates['date_created'].dt.date >= start_date)
+            & (sales_leads_with_dates['date_created'].dt.date <= end_date)
+        ]
         
         if not sales_leads_with_dates.empty:
             # Add month-year column for grouping with proper formatting
@@ -1142,7 +1175,7 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
             
         else:
-            st.warning(f"No Sales Board leads with valid creation dates found for {CURRENT_YEAR} UTM analysis.")
+            st.warning("No Sales Board leads with valid creation dates found for the selected date range.")
     else:
         st.warning("No Sales Board leads data found for UTM analysis.")
 
@@ -1246,59 +1279,14 @@ def main():
     if qualification_data:
         df = pd.DataFrame(qualification_data)
         
-        # Initialize session state for date filter
-        if 'qualification_start_date' not in st.session_state:
-            st.session_state.qualification_start_date = None
-        if 'qualification_end_date' not in st.session_state:
-            st.session_state.qualification_end_date = None
-        
-        # Date Range Filter - Use form to prevent reruns until Submit is clicked
-        with st.form(key="qualification_date_filter_form", clear_on_submit=False):
-            col1, col2, col3 = st.columns([2, 2, 1])
-            
-            with col1:
-                start_date = st.date_input(
-                    "Start Date",
-                    value=st.session_state.qualification_start_date,
-                    help="Select the start date for filtering data"
-                )
-            
-            with col2:
-                end_date = st.date_input(
-                    "End Date",
-                    value=st.session_state.qualification_end_date,
-                    help="Select the end date for filtering data"
-                )
-            
-            with col3:
-                st.markdown("<div style='height: 25px'></div>", unsafe_allow_html=True)  # Reduced from 31px to 16px (15px up)
-                filter_submit = st.form_submit_button("Submit", type="primary", use_container_width=True)
-            
-            # Handle submit button click - update session state (inside form context)
-            if filter_submit:
-                if start_date or end_date:
-                    st.session_state.qualification_start_date = start_date
-                    st.session_state.qualification_end_date = end_date
-                else:
-                    # Clear filter if no dates selected
-                    st.session_state.qualification_start_date = None
-                    st.session_state.qualification_end_date = None
-                    st.info("Please select at least one date (Start Date or End Date) to filter.")
-        
-        # Convert date_created to datetime for filtering
+        # Use the same date range as the main 📅 Date Range at the top of the page
         if 'date_created' in df.columns:
-            # Try to parse date_created column
             df['date_created_parsed'] = pd.to_datetime(df['date_created'], errors='coerce')
-            
-            # Apply date filter based on session state values (only applied filter, not temp values)
-            if st.session_state.qualification_start_date or st.session_state.qualification_end_date:
-                if st.session_state.qualification_start_date:
-                    start_datetime = pd.Timestamp(st.session_state.qualification_start_date)
-                    df = df[df['date_created_parsed'] >= start_datetime]
-                
-                if st.session_state.qualification_end_date:
-                    end_datetime = pd.Timestamp(st.session_state.qualification_end_date) + pd.Timedelta(days=1)  # Include the entire end date
-                    df = df[df['date_created_parsed'] < end_datetime]
+            df = df[df['date_created_parsed'].notna()]
+            df = df[
+                (df['date_created_parsed'].dt.date >= start_date)
+                & (df['date_created_parsed'].dt.date <= end_date)
+            ]
         else:
             st.warning("Date information not available in the data. Date filtering is disabled.")
         
