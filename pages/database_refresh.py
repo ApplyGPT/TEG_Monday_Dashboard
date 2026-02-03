@@ -286,14 +286,16 @@ def get_board_data_from_monday(board_id, board_name, api_token, timeout=60):
                         status_code = extensions.get('status_code')
                         code = extensions.get('code', '')
                         error_code = extensions.get('error_code', '')
+                        msg = (error.get('message') or '').lower()
                         
-                        # Check for retryable errors: 429 (rate limit), LIMIT_EXCEEDED, or 500 (server error)
-                        # Option 4: Also retry on 500 Internal Server Errors
+                        # Check for retryable errors: 429 (rate limit), LIMIT_EXCEEDED, or 500/internal server error
                         if (status_code == 429 or 
                             status_code == 500 or
                             'RATE_LIMIT' in str(code) or 
                             'LIMIT_EXCEEDED' in str(code) or
-                            'INTERNAL_SERVER_ERROR' in str(error_code)):
+                            code == 'INTERNAL_SERVER_ERROR' or
+                            'INTERNAL_SERVER_ERROR' in str(error_code) or
+                            'internal server error' in msg):
                             is_retryable_error = True
                             # Get retry_in_seconds from error, default based on error type
                             if status_code == 500:
@@ -652,8 +654,14 @@ def refresh_calendly_database():
             return False, ''
         
         from datetime import datetime, timedelta
-        min_start_time = "2025-01-01T00:00:00.000000Z"
-        max_start_time = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%dT23:59:59.999999Z')
+        # Request by year to avoid API result limit (~9k events per range; ascending order so 2026 can be cut off)
+        now = datetime.now()
+        start_year = now.year - 1
+        end_year = now.year + 1
+        year_ranges = [
+            (y, f"{y}-01-01T00:00:00.000000Z", f"{y}-12-31T23:59:59.999999Z")
+            for y in range(start_year, end_year + 1)
+        ]
         all_events = []
         event_names_set = set()
         progress_bar = st.progress(0)
@@ -662,12 +670,12 @@ def refresh_calendly_database():
         try:
             # ORG-FIRST: Admin tokens grant org-wide access. Try scheduled_events?organization= first (on timeout, fall back to user path).
             use_org_path = False
-            r_org = None
             if org_uri and headers_org:
                 try:
-                    params_org = {'organization': org_uri, 'min_start_time': min_start_time, 'max_start_time': max_start_time, 'count': 100}
-                    r_org = requests.get('https://api.calendly.com/scheduled_events', headers=headers_org, params=params_org, timeout=90)
-                    if r_org.status_code == 200:
+                    y, mn, mx = year_ranges[0]
+                    params_org = {'organization': org_uri, 'min_start_time': mn, 'max_start_time': mx, 'count': 100}
+                    r_probe = requests.get('https://api.calendly.com/scheduled_events', headers=headers_org, params=params_org, timeout=90)
+                    if r_probe.status_code == 200:
                         use_org_path = True
                 except (requests.exceptions.ReadTimeout, requests.exceptions.RequestException):
                     pass
@@ -676,26 +684,30 @@ def refresh_calendly_database():
                 headers = headers_org
                 status_text.text("Fetching all organization events (admin scope)...")
                 raw_org_events = []
-                data = r_org.json()
-                next_token = None
-                page = 0
-                while page < 100:
-                    page += 1
-                    if page > 1:
-                        params = {'organization': org_uri, 'min_start_time': min_start_time, 'max_start_time': max_start_time, 'count': 100, 'page_token': next_token}
-                        r = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params=params, timeout=60)
+                for year, min_start_time, max_start_time in year_ranges:
+                    status_text.text(f"Fetching organization events for {year}...")
+                    page = 0
+                    next_token = None
+                    while page < 100:
+                        page += 1
+                        if page == 1:
+                            params = {'organization': org_uri, 'min_start_time': min_start_time, 'max_start_time': max_start_time, 'count': 100}
+                            r = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params=params, timeout=90)
+                        else:
+                            params = {'organization': org_uri, 'min_start_time': min_start_time, 'max_start_time': max_start_time, 'count': 100, 'page_token': next_token}
+                            r = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params=params, timeout=90)
                         if r.status_code != 200:
                             break
                         data = r.json()
-                    coll = data.get('collection', [])
-                    for item in coll:
-                        if isinstance(item, dict) and "resource" in item:
-                            raw_org_events.append({**item["resource"], "uri": item.get("uri") or item["resource"].get("uri")})
-                        else:
-                            raw_org_events.append(item if isinstance(item, dict) else {})
-                    next_token = data.get('pagination', {}).get('next_page_token')
-                    if not next_token:
-                        break
+                        coll = data.get('collection', [])
+                        for item in coll:
+                            if isinstance(item, dict) and "resource" in item:
+                                raw_org_events.append({**item["resource"], "uri": item.get("uri") or item["resource"].get("uri")})
+                            else:
+                                raw_org_events.append(item if isinstance(item, dict) else {})
+                        next_token = data.get('pagination', {}).get('next_page_token')
+                        if not next_token:
+                            break
                 event_type_cache = {}
                 for ev in raw_org_events:
                     et_raw = ev.get('event_type')
@@ -761,37 +773,38 @@ def refresh_calendly_database():
                         event_type_uuid = event_type_uri.split('/')[-1]
                         event_name = event_type['name']
                         event_names_set.add(event_name)
-                        progress_bar.progress(min(1.0, (len(all_events) + i) / max(1, total_event_types * len(keys_to_fetch))))
+                        progress_bar.progress(min(1.0, (len(all_events) + i) / max(1, total_event_types * len(keys_to_fetch) * len(year_ranges))))
                         status_text.text(f"Fetching events for: {event_name}")
-                        page_count = 0
-                        next_page_token = None
-                        while page_count < 100:
-                            page_count += 1
-                            params = {'user': user_uri, 'event_type': event_type_uuid, 'min_start_time': min_start_time, 'max_start_time': max_start_time, 'count': 100}
-                            if next_page_token:
-                                params['page_token'] = next_page_token
-                            events_response = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params=params, timeout=60)
-                            if events_response.status_code != 200:
-                                break
-                            events_data = events_response.json()
-                            raw_collection = events_data.get('collection', [])
-                            events = []
-                            for item in raw_collection:
-                                if isinstance(item, dict) and "resource" in item:
-                                    events.append({**item["resource"], "uri": item.get("uri") or item["resource"].get("uri")})
-                                else:
-                                    events.append(item if isinstance(item, dict) else {})
-                            if not events:
-                                break
-                            for event in events:
-                                if not event.get("name") and event_name:
-                                    event = {**event, "name": event_name}
-                                source_from_membership = _person_from_event_memberships(event)
-                                final_source = source_from_membership if source_from_membership else source
-                                all_events.append({**event, 'source': final_source})
-                            next_page_token = events_data.get('pagination', {}).get('next_page_token')
-                            if not next_page_token:
-                                break
+                        for year, min_start_time, max_start_time in year_ranges:
+                            page_count = 0
+                            next_page_token = None
+                            while page_count < 100:
+                                page_count += 1
+                                params = {'user': user_uri, 'event_type': event_type_uuid, 'min_start_time': min_start_time, 'max_start_time': max_start_time, 'count': 100}
+                                if next_page_token:
+                                    params['page_token'] = next_page_token
+                                events_response = requests.get('https://api.calendly.com/scheduled_events', headers=headers, params=params, timeout=60)
+                                if events_response.status_code != 200:
+                                    break
+                                events_data = events_response.json()
+                                raw_collection = events_data.get('collection', [])
+                                events = []
+                                for item in raw_collection:
+                                    if isinstance(item, dict) and "resource" in item:
+                                        events.append({**item["resource"], "uri": item.get("uri") or item["resource"].get("uri")})
+                                    else:
+                                        events.append(item if isinstance(item, dict) else {})
+                                if not events:
+                                    break
+                                for event in events:
+                                    if not event.get("name") and event_name:
+                                        event = {**event, "name": event_name}
+                                    source_from_membership = _person_from_event_memberships(event)
+                                    final_source = source_from_membership if source_from_membership else source
+                                    all_events.append({**event, 'source': final_source})
+                                next_page_token = events_data.get('pagination', {}).get('next_page_token')
+                                if not next_page_token:
+                                    break
                 event_names = list(event_names_set)
                 if not all_events:
                     return False, "No TEG events from any key ('TEG - Let's Chat', TEG Introductory Call, or Design Review 30min)"

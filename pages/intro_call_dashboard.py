@@ -148,10 +148,10 @@ def load_calendly_data_from_db():
         df.loc[df["source"] == "", "source"] = "Other"
         df.loc[~df["source"].isin(INTRO_PERSONS), "source"] = "Other"
         
-        # Convert timestamps and add analysis columns
-        df['start_time'] = pd.to_datetime(df['start_time'])
-        df['end_time'] = pd.to_datetime(df['end_time'])
-        df['updated_at'] = pd.to_datetime(df['updated_at'])
+        # Convert timestamps (Calendly API uses UTC) and add analysis columns; use UTC so date doesn't shift by timezone
+        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
+        df['end_time'] = pd.to_datetime(df['end_time'], utc=True)
+        df['updated_at'] = pd.to_datetime(df['updated_at'], utc=True)
         df['date'] = df['start_time'].dt.date
         df['month'] = df['start_time'].dt.strftime('%B %Y')
         df['week'] = df['start_time'].dt.isocalendar().week

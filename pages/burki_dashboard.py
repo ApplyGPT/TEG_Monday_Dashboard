@@ -123,12 +123,10 @@ def load_calendly_data_from_db():
         if df.empty:
             return None, "No TEG - Let's Chat events in database. Refresh Calendly data (use Burki token for this event type)."
         
-        # Convert timestamps
-        df['start_time'] = pd.to_datetime(df['start_time'])
-        df['end_time'] = pd.to_datetime(df['end_time'])
-        df['updated_at'] = pd.to_datetime(df['updated_at'])
-        
-        # Add additional columns for analysis
+        # Convert timestamps (Calendly API uses UTC); parse as UTC so date doesn't shift by timezone
+        df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
+        df['end_time'] = pd.to_datetime(df['end_time'], utc=True)
+        df['updated_at'] = pd.to_datetime(df['updated_at'], utc=True)
         df['date'] = df['start_time'].dt.date
         df['month'] = df['start_time'].dt.strftime('%B %Y')
         df['week'] = df['start_time'].dt.isocalendar().week
