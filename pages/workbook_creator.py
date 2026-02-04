@@ -660,16 +660,16 @@ def clear_style_rows(ws, num_styles: int = 0) -> None:
         safe_set_cell_value(ws, f"P{SUMMARY_SUBTOTAL_ROW}", None)
         safe_set_cell_value(ws, f"N{SUMMARY_DISCOUNT_ROW}", None)
         safe_set_cell_value(ws, f"P{SUMMARY_DISCOUNT_ROW}", None)
-        safe_set_cell_value(ws, "N21", None)
-        safe_set_cell_value(ws, "P21", None)
+        safe_set_cell_value(ws, "N19", None)
+        safe_set_cell_value(ws, "P19", None)
     else:
         # For more than 5 styles, clear all style rows and totals row
         max_style_rows = num_styles
+        totals_row_clear = 20 + (num_styles - 5) * 2
         for i in range(max_style_rows):
             row_idx = 10 + (i * 2)
             # Only clear if this is a style row (not the totals row)
-            totals_row = 20 + (num_styles - 5) * 2
-            if row_idx == totals_row:
+            if row_idx == totals_row_clear:
                 continue
             for col_idx in range(2, 13):  # Columns B through L (1-based)
                 cell = ws.cell(row=row_idx, column=col_idx)
@@ -701,18 +701,17 @@ def clear_style_rows(ws, num_styles: int = 0) -> None:
                             from openpyxl.utils import get_column_letter as gcl
                             safe_set_cell_value(ws, f"{gcl(col_idx)}{row_idx}", None)
         
-        # Clear the totals row
-        totals_row = 20 + (num_styles - 5) * 2
-        safe_set_cell_value(ws, f"B{totals_row}", None)
-        safe_set_cell_value(ws, f"F{totals_row}", None)
-        safe_set_cell_value(ws, f"H{totals_row}", None)
-        safe_set_cell_value(ws, f"L{totals_row}", None)
+        # Clear the totals row and TOTAL DUE AT SIGNING row (dynamic position)
+        safe_set_cell_value(ws, f"B{totals_row_clear}", None)
+        safe_set_cell_value(ws, f"F{totals_row_clear}", None)
+        safe_set_cell_value(ws, f"H{totals_row_clear}", None)
+        safe_set_cell_value(ws, f"L{totals_row_clear}", None)
         safe_set_cell_value(ws, f"N{SUMMARY_SUBTOTAL_ROW}", None)
         safe_set_cell_value(ws, f"P{SUMMARY_SUBTOTAL_ROW}", None)
         safe_set_cell_value(ws, f"N{SUMMARY_DISCOUNT_ROW}", None)
         safe_set_cell_value(ws, f"P{SUMMARY_DISCOUNT_ROW}", None)
-        safe_set_cell_value(ws, "N21", None)
-        safe_set_cell_value(ws, "P21", None)
+        safe_set_cell_value(ws, f"N{totals_row_clear - 1}", None)
+        safe_set_cell_value(ws, f"P{totals_row_clear - 1}", None)
 
 
 def apply_development_package(
@@ -2321,7 +2320,7 @@ def apply_development_package(
         cell_h_totals = safe_get_writable_cell(ws, totals_row, 8)
         if Alignment is not None:
             try:
-                cell_h_totals.alignment = Alignment(horizontal="center", vertical="center")
+                cell_h_totals.alignment = Alignment(horizontal="left", vertical="center")
             except Exception:
                 pass
         # Apply full borders to H-J merged cell (for more than 5 styles)
@@ -2876,61 +2875,85 @@ def apply_development_package(
                 # If it's referencing a style row in K, update to totals row
                 cell_p12.value = f"=K{totals_row}"
         
-        # Find and update "TOTAL DUE AT SIGNING" formula
-        # The label is in column N (14) and the formula is in column P (16) of the totals row
-        cell_n_totals = ws.cell(row=totals_row, column=14)  # Column N
-        cell_n_totals_value = safe_get_cell_value(ws, totals_row, SUMMARY_LABEL_COL)
-        if cell_n_totals_value and "TOTAL DUE AT SIGNING" in str(cell_n_totals_value).upper():
-            # Update the formula in column P to reference the dynamic totals row
-            cell_p_totals = ws.cell(row=totals_row, column=16)  # Column P
-            # If discount is 0, don't subtract discount; otherwise subtract P{discount_row}
-            if discount_percentage > 0:
-                cell_p_totals.value = f"=P{SUMMARY_SUBTOTAL_ROW}-P{SUMMARY_DISCOUNT_ROW}"
-            else:
-                cell_p_totals.value = f"=SUM(P10:P13)"
-            cell_p_totals.number_format = '$#,##0'  # Currency format
-            # Apply font size 20 and bold to TOTAL DUE AT SIGNING formula
-            if Font is not None:
-                cell_p_totals.font = Font(name="Arial", size=20, bold=True, color=cell_p_totals.font.color if cell_p_totals.font else None)
-            if Alignment is not None:
-                cell_p_totals.alignment = Alignment(horizontal="center", vertical="center")
-            # Apply cell color #ffff00 to TOTAL DUE AT SIGNING
-            if PatternFill is not None:
-                cell_p_totals.fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-            # Also make the label bold with size 20
-            if Font is not None:
-                cell_n_totals.font = Font(name="Arial", size=20, bold=True, color=cell_n_totals.font.color if cell_n_totals.font else None)
-            
-            # Add top border to merged cells N20:P20 (or dynamic totals row equivalent)
-            # Check if N20:P20 is merged and add top border
-            if Border is not None and Side is not None:
-                top_side = Side(style="thin")
-                # Check for merged range covering N20:P20 (columns 14-16, row totals_row)
-                for merged_range in list(ws.merged_cells.ranges):
-                    if (merged_range.min_row == totals_row and merged_range.max_row == totals_row and
-                        merged_range.min_col <= 14 and merged_range.max_col >= 16):
-                        # This is the merged cell for TOTAL DUE AT SIGNING
-                        # Apply top border to the top-left cell of the merged range
-                        merged_cell = ws.cell(row=merged_range.min_row, column=merged_range.min_col)
-                        existing_border = merged_cell.border if merged_cell.border else Border()
-                        merged_cell.border = Border(
-                            left=existing_border.left if existing_border.left else Side(style="thin"),
-                            right=existing_border.right if existing_border.right else Side(style="thin"),
-                            top=top_side,  # Add top border
-                            bottom=existing_border.bottom if existing_border.bottom else Side(style="thin"),
-                        )
-                        break
-                else:
-                    # If not merged, apply top border to columns N, O, P individually
-                    for col_idx in [14, 15, 16]:  # Columns N, O, P
-                        cell = ws.cell(row=totals_row, column=col_idx)
-                        existing_border = cell.border if cell.border else Border()
-                        cell.border = Border(
-                            left=existing_border.left if existing_border.left else Side(style="thin"),
-                            right=existing_border.right if existing_border.right else Side(style="thin"),
-                            top=top_side,  # Add top border
-                            bottom=existing_border.bottom if existing_border.bottom else Side(style="thin"),
-                        )
+        # Place "TOTAL DUE AT SIGNING" in the 2 rows just above totals row: N(totals_row-1):O(totals_row) and P(totals_row-1):P(totals_row).
+        # For <=5 styles: totals_row=20 → N19:O20, P19:P20. For 6 styles: totals_row=22 → N21:O22, P21:P22. Always dynamic.
+        total_due_start = totals_row - 1
+        total_due_end = totals_row
+        cell_n_label = ws.cell(row=total_due_start, column=14)
+        # Always place in dynamic position when we have a totals row (so 6+ styles get N21:O22, not N19:O20)
+        # When totals row > 20, unmerge and clear old position (N19:O20, P19:P20) to avoid duplicate
+        if total_due_start > 19:
+            for merged_range in list(ws.merged_cells.ranges):
+                if (merged_range.min_row <= 20 and merged_range.max_row >= 19 and
+                    merged_range.min_col >= 14 and merged_range.max_col <= 16):
+                    try:
+                        ws.unmerge_cells(range_string=str(merged_range))
+                    except Exception:
+                        pass
+            # Clear value, borders, and fill (yellow) from original N19:O20, P19:P20 so no leftover formatting
+            for r in (19, 20):
+                for c in (14, 15, 16):
+                    try:
+                        cell = ws.cell(row=r, column=c)
+                        cell.value = None
+                        if Border is not None:
+                            cell.border = Border()
+                        if PatternFill is not None:
+                            cell.fill = PatternFill(fill_type="none")
+                    except Exception:
+                        pass
+        # Unmerge any existing merge in N-P for the target two rows (total_due_start:total_due_end)
+        for merged_range in list(ws.merged_cells.ranges):
+            if (merged_range.min_row <= total_due_end and merged_range.max_row >= total_due_start and
+                merged_range.min_col >= 14 and merged_range.max_col <= 16):
+                try:
+                    ws.unmerge_cells(range_string=str(merged_range))
+                except Exception:
+                    pass
+        # Apply borders to every cell in both ranges BEFORE merging so the full perimeter is bordered
+        if Border is not None and Side is not None:
+            thin_side = Side(style="thin")
+            no_side = Side(style=None)
+            for r in range(total_due_start, total_due_end + 1):
+                top_side = thin_side if r == total_due_start else no_side
+                bottom_side = thin_side if r == total_due_end else no_side
+                for c in range(14, 16 + 1):  # N=14, O=15, P=16
+                    try:
+                        cell = ws.cell(row=r, column=c)
+                        if c == 14:
+                            cell.border = Border(left=thin_side, right=no_side, top=top_side, bottom=bottom_side)
+                        elif c == 15:
+                            cell.border = Border(left=no_side, right=thin_side, top=top_side, bottom=bottom_side)
+                        else:
+                            cell.border = Border(left=thin_side, right=thin_side, top=top_side, bottom=bottom_side)
+                    except Exception:
+                        pass
+        # Merge N(total_due_start):O(total_due_end) (label spanning 2 rows)
+        cell_n_label.value = "TOTAL DUE AT SIGNING"
+        safe_merge_cells(ws, f"N{total_due_start}:O{total_due_end}")
+        cell_n_label = safe_get_writable_cell(ws, total_due_start, 14)
+        # Merge P(total_due_start):P(total_due_end) (value spanning 2 rows)
+        cell_p_val = ws.cell(row=total_due_start, column=16)  # Column P
+        if discount_percentage > 0:
+            cell_p_val.value = f"=P{SUMMARY_SUBTOTAL_ROW}-P{SUMMARY_DISCOUNT_ROW}"
+        else:
+            cell_p_val.value = f"=SUM(P10:P13)"
+        safe_merge_cells(ws, f"P{total_due_start}:P{total_due_end}")
+        cell_p_val = safe_get_writable_cell(ws, total_due_start, 16)
+        cell_p_val.number_format = '$#,##0'  # Currency format
+        # Apply font size 20 and bold to TOTAL DUE AT SIGNING formula
+        if Font is not None:
+            cell_p_val.font = Font(name="Arial", size=20, bold=True, color=cell_p_val.font.color if cell_p_val.font else None)
+        if Alignment is not None:
+            cell_p_val.alignment = Alignment(horizontal="center", vertical="center")
+        # Apply cell color #ffff00 to TOTAL DUE AT SIGNING
+        if PatternFill is not None:
+            cell_p_val.fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+        # Label (merged N:O) bold size 20
+        if Font is not None:
+            cell_n_label.font = Font(name="Arial", size=20, bold=True, color=cell_n_label.font.color if cell_n_label.font else None)
+        if Alignment is not None:
+            cell_n_label.alignment = Alignment(horizontal="left", vertical="center")
         
         # Also update any other formulas in column P that reference F20 or L20 statically
         # Check a few rows around the totals row
