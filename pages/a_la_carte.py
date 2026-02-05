@@ -4462,11 +4462,11 @@ def main() -> None:
             })
             st.rerun()
     with quick_select_cols[1]:
-        if st.button("➕ Sourcing Consult ($750)", key="quick_sourcing_consult", help="Add Sourcing Consult — $750"):
+        if st.button("➕ Sourcing Consult ($860)", key="quick_sourcing_consult", help="Add Sourcing Consult — $860"):
             next_num = 101 + num_regular_styles + len(st.session_state["custom_styles"])
             st.session_state["custom_styles"].append({
                 "name": "Sourcing Consult",
-                "price": 750.0,
+                "price": 860.0,
                 "complexity": 0.0,
                 "style_number": next_num,
             })
