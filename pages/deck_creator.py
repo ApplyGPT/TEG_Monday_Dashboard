@@ -175,6 +175,13 @@ DECK_TYPES = {
 }
 
 SERVICE_COLUMNS_FILE = "SERVICE COLUMNS.pptx"
+# Marketing Services options (slide 16 in SERVICE COLUMNS; templates 1–4 options on slides 17–20)
+MARKETING_OPTIONS = [
+    "Branding",
+    "Web Design & Development",
+    "Photoshoot Management",
+    "Online Marketing",
+]
 IMAGE_GALLERY_FOLDER_ID = "1Uxn9oWjw22r0F5GPSLIQ_zUTUXfzO5yl"
 IMAGE_TARGET_SIZE = (421, 619)  # width x height in px
 EMU_PER_INCH = 914400
@@ -390,6 +397,76 @@ def get_resized_gallery_image(file_id: str) -> bytes:
 # ============================================================================
 # Slide Extraction Functions (from SERVICE COLUMNS.pptx)
 # ============================================================================
+
+# Slide 16 (0-based index 15) contains the 4 marketing options with full content (text blocks) in order.
+MARKETING_SLIDE_16_INDEX = 15
+# Templates 17–20: first text shape = Arial 14 (we restyle it); second = duplicate header (we remove it); then N placeholders.
+MARKETING_HEADER_FONT_PT = 63.5
+MARKETING_FONT_NAME = "Schibsted Grotesk"
+MARKETING_TITLE_PT = 20
+MARKETING_BODY_PT = 16
+
+
+def _clean_marketing_text(text: str) -> str:
+    """Remove vertical tab and _x000B_ artifacts from text copied from PowerPoint."""
+    if not text:
+        return text
+    # Vertical tab U+000B and literal _x000B_ often appear in PPTX text
+    text = text.replace("\x0b", "").replace("\v", "")
+    text = re.sub(r"_x000[Bb]_", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def _iter_slide_text_shapes(slide):
+    """Yield all shapes with a text frame on the slide, including shapes inside groups."""
+    for shape in slide.shapes:
+        if getattr(shape, "has_text_frame", False) and shape.has_text_frame:
+            yield shape
+        if hasattr(shape, "shapes"):
+            for child in shape.shapes:
+                if getattr(child, "has_text_frame", False) and child.has_text_frame:
+                    yield child
+
+
+def get_marketing_option_contents_from_slide_16() -> List[str]:
+    """
+    Extract the full text content for each of the 4 marketing options from SERVICE COLUMNS slide 16.
+    Returns a list of 4 strings in order: Branding, Web Design & Development, Photoshoot Management, Online Marketing.
+    Each string is the full content (possibly multi-line) for that option.
+    """
+    if Presentation is None:
+        return ["", "", "", ""]
+    service_columns_path = get_template_path(SERVICE_COLUMNS_FILE)
+    if not os.path.exists(service_columns_path):
+        return ["", "", "", ""]
+    try:
+        prs = Presentation(service_columns_path)
+        if len(prs.slides) <= MARKETING_SLIDE_16_INDEX:
+            return ["", "", "", ""]
+        slide = prs.slides[MARKETING_SLIDE_16_INDEX]
+        shape_data = []
+        for shape in slide.shapes:
+            if getattr(shape, "has_text_frame", False) and shape.has_text_frame:
+                text = (shape.text_frame.text or "").strip()
+                shape_data.append({"shape": shape, "left": shape.left, "top": shape.top, "text": text})
+        shape_data.sort(key=lambda x: (x["top"], x["left"]))
+        # Skip short shapes (e.g. "1", "2", "3", "4"); keep the 4 main content blocks in position order
+        content_shapes = [s for s in shape_data if len(s["text"]) > 3]
+        if len(content_shapes) >= 4:
+            return [_clean_marketing_text(content_shapes[i]["text"]) for i in range(4)]
+        # Fallback: 5+ shapes → skip first (title), take next 4; 4 shapes → use all 4
+        if len(shape_data) >= 5:
+            return [_clean_marketing_text(shape_data[i]["text"]) for i in range(1, 5)]
+        if len(shape_data) >= 4:
+            return [_clean_marketing_text(shape_data[i]["text"]) for i in range(4)]
+        result = ["", "", "", ""]
+        for i, s in enumerate(shape_data):
+            if i < 4:
+                result[i] = _clean_marketing_text(s["text"])
+        return result
+    except Exception:
+        return ["", "", "", ""]
+
 
 @st.cache_data
 def extract_slides_from_service_columns() -> Tuple[Dict[int, Dict[str, any]], Dict[int, Dict[str, any]]]:
@@ -911,6 +988,19 @@ def copy_slide_from_source(target_prs: Presentation, source_prs: Presentation, s
     return len(target_prs.slides) - 1
 
 
+def move_slide(prs: Presentation, old_index: int, new_index: int) -> None:
+    """Move a slide from old_index to new_index (0-based) by manipulating XML."""
+    if old_index == new_index:
+        return
+    xml_slides = prs.slides._sldIdLst
+    slides = list(xml_slides)
+    if old_index < 0 or old_index >= len(slides) or new_index < 0 or new_index >= len(slides):
+        return
+    el = slides[old_index]
+    xml_slides.remove(el)
+    xml_slides.insert(new_index, el)
+
+
 def replace_text_in_slide(slide, old_text: str, new_text: str, case_sensitive: bool = False):
     """Replace text in all text frames of a slide."""
     for shape in slide.shapes:
@@ -1103,11 +1193,12 @@ def create_deck_from_template(
     priority_slide_index: Optional[int],
     service_column_slide_index: Optional[int],
     image_bytes: bytes | None = None,
-    gallery_images: Optional[List[Dict[str, bytes]]] = None
+    gallery_images: Optional[List[Dict[str, bytes]]] = None,
+    marketing_options: Optional[List[str]] = None,
 ) -> bytes:
     """
     Create a deck from the selected template with customizations.
-    
+
     Args:
         deck_type: Selected deck type (key from DECK_TYPES)
         client_name: Client name for "Proposal For" slide
@@ -1115,7 +1206,8 @@ def create_deck_from_template(
         service_column_slide_index: Index of service column slide to insert (from SERVICE COLUMNS.pptx)
         image_bytes: Optional PDF first-page image bytes to place on slide 11
         gallery_images: Optional list of three resized gallery images for slide 9
-    
+        marketing_options: Optional list of selected marketing service labels (0–4); if non-empty, slide 11 is the Marketing slide from SERVICE COLUMNS (templates on slides 17–20).
+
     Returns:
         PPTX file bytes
     """
@@ -1340,11 +1432,111 @@ def create_deck_from_template(
                         st.warning("Template doesn't have a 10th slide")
             except Exception as e:
                 st.warning(f"Could not copy service column slide: {e}")
-    
-    # Step 5: Set slide 12 (index 11) - replace "1ST NAME'S APPROVAL OF PROJECT" with first name only
-    if len(prs.slides) > 11 and client_name:
+
+    # Step 4b: If marketing options selected, insert Marketing Services as slide 11 (index 10) from SERVICE COLUMNS slides 17–20 (1–4 options)
+    approval_slide_index = 11
+    pdf_slide_index = 10
+    if marketing_options and len(marketing_options) >= 1 and len(marketing_options) <= 4:
+        service_columns_path = get_template_path(SERVICE_COLUMNS_FILE)
+        if os.path.exists(service_columns_path):
+            try:
+                source_prs = Presentation(service_columns_path)
+                # Templates for 1, 2, 3, 4 options are on SERVICE COLUMNS slides 17–20 (0-based indices 16–19)
+                source_slide_index = 15 + len(marketing_options)  # 16, 17, 18, or 19
+                if source_slide_index < len(source_prs.slides):
+                    new_idx = copy_slide_from_source(prs, source_prs, source_slide_index)
+                    move_slide(prs, new_idx, 10)
+                    approval_slide_index = 12
+                    pdf_slide_index = 11
+                    # Header: 1st text shape (Arial 14) → Schibsted Grotesk 63.5 pt, center + middle; remove 2nd header shape.
+                    option_contents = get_marketing_option_contents_from_slide_16()
+                    marketing_slide = prs.slides[10]
+                    shape_data = []
+                    for shape in _iter_slide_text_shapes(marketing_slide):
+                        shape_data.append({"shape": shape, "left": shape.left, "top": shape.top})
+                    shape_data.sort(key=lambda x: (x["top"], x["left"]))
+                    if len(shape_data) >= 1:
+                        first_shape = shape_data[0]["shape"]
+                        first_tf = first_shape.text_frame
+                        first_tf.clear()
+                        p0 = first_tf.paragraphs[0]
+                        p0.text = "MARKETING SERVICES"
+                        p0.alignment = PP_PARAGRAPH_ALIGNMENT.CENTER
+                        if p0.runs:
+                            r = p0.runs[0]
+                        else:
+                            r = p0.add_run()
+                        r.text = "MARKETING SERVICES"
+                        r.font.name = MARKETING_FONT_NAME
+                        r.font.size = Pt(MARKETING_HEADER_FONT_PT)
+                        if MSO_ANCHOR:
+                            try:
+                                first_tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+                            except Exception:
+                                pass
+                    # Use 2nd shape onward as placeholders (2nd was the duplicate header; we overwrite it with 1st option)
+                    n_skip = 1
+                    placeholder_shapes = shape_data[n_skip : n_skip + len(marketing_options)]
+                    for i, option_label in enumerate(marketing_options):
+                        if i >= len(placeholder_shapes):
+                            break
+                        try:
+                            content_index = MARKETING_OPTIONS.index(option_label)
+                        except ValueError:
+                            content_index = i
+                        raw = option_contents[content_index] if content_index < len(option_contents) else option_label
+                        content = _clean_marketing_text(raw)
+                        if not content:
+                            content = option_label
+                        tf = placeholder_shapes[i]["shape"].text_frame
+                        tf.word_wrap = True
+                        tf.clear()
+                        content_normalized = (content or "").replace("\r\n", "\n").replace("\r", "\n")
+                        # Put each "###" on its own line so they don't merge with previous text (e.g. "Online Marketing### ###" -> separate lines)
+                        content_with_breaks = re.sub(r"(###)", r"\n\1\n", content_normalized)
+                        lines = [ln for ln in content_with_breaks.split("\n") if ln.strip()]
+                        if not lines:
+                            lines = [""]
+                        for line_idx, line in enumerate(lines):
+                            if line_idx == 0:
+                                p = tf.paragraphs[0]
+                            else:
+                                p = tf.add_paragraph()
+                            size_pt = MARKETING_TITLE_PT if line_idx == 0 else MARKETING_BODY_PT
+                            if "###" not in line:
+                                p.text = line
+                                if p.runs:
+                                    r = p.runs[0]
+                                else:
+                                    r = p.add_run()
+                                r.text = line
+                                r.font.name = MARKETING_FONT_NAME
+                                r.font.size = Pt(size_pt)
+                            else:
+                                p.clear()
+                                for part in re.split(r'(###)', line):
+                                    if part == "":
+                                        continue
+                                    r = p.add_run()
+                                    r.text = part
+                                    r.font.name = MARKETING_FONT_NAME
+                                    r.font.size = Pt(MARKETING_TITLE_PT if "###" in part else size_pt)
+                                    if "###" in part and RGBColor:
+                                        try:
+                                            r.font.color.rgb = RGBColor(255, 255, 255)
+                                        except Exception:
+                                            pass
+                            if line_idx == 0:
+                                p.alignment = PP_PARAGRAPH_ALIGNMENT.CENTER
+                            else:
+                                p.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT
+            except Exception as e:
+                st.warning(f"Could not insert marketing services slide: {e}")
+
+    # Step 5: Set approval slide - replace "1ST NAME'S APPROVAL OF PROJECT" with first name only
+    if len(prs.slides) > approval_slide_index and client_name:
         first_name = client_name.strip().split(" ")[0] if client_name else ""
-        slide12 = prs.slides[11]
+        slide12 = prs.slides[approval_slide_index]
         # Use regex replacement to handle various formats, similar to slide 4
         for shape in slide12.shapes:
             if not getattr(shape, 'has_text_frame', False):
@@ -1371,9 +1563,9 @@ def create_deck_from_template(
                     t = t.replace("'S'S", "'S").replace("'S'S", "'S")
                     p.text = t.upper()
     
-    # Step 6: Replace slide 11 (index 10) with PDF image if provided
-    if image_bytes and len(prs.slides) > 10:
-        add_or_replace_image(prs, 10, image_bytes)
+    # Step 6: Replace PDF slide with PDF image if provided
+    if image_bytes and len(prs.slides) > pdf_slide_index:
+        add_or_replace_image(prs, pdf_slide_index, image_bytes)
     
     # Save to bytes
     out = BytesIO()
@@ -1444,7 +1636,8 @@ def upload_deck_to_google_drive(
     service_column_slide_index: Optional[int],
     image_bytes: bytes | None = None,
     gallery_images: Optional[List[Dict[str, bytes]]] = None,
-    pptx_bytes: bytes | None = None
+    marketing_options: Optional[List[str]] = None,
+    pptx_bytes: bytes | None = None,
 ) -> str:
     """Upload deck PPTX to Google Drive and return file URL. Similar to upload_workbook_to_google_sheet."""
     if not build or not MediaIoBaseUpload:
@@ -1470,7 +1663,8 @@ def upload_deck_to_google_drive(
             priority_slide_index,
             service_column_slide_index,
             image_bytes,
-            gallery_images
+            gallery_images,
+            marketing_options,
         )
     
     # Check if parent_folder_id is in a Shared Drive
@@ -1815,6 +2009,17 @@ def render_service_columns_selector(deck_type: str) -> Optional[int]:
     return options_map.get(selected)
 
 
+def render_marketing_services_selector() -> List[str]:
+    """Render Marketing Services checkboxes (0–4 options). Returns selected option labels in order."""
+    st.subheader("Marketing Services")
+    st.caption("Optional - Select 0 to 4 options.")
+    selected = []
+    for i, label in enumerate(MARKETING_OPTIONS):
+        if st.checkbox(label, key=f"dc_marketing_{i}", help=f"Include {label} on the Marketing Services slide"):
+            selected.append(label)
+    return selected
+
+
 def render_pdf_upload() -> bytes | None:
     """Render PDF upload and return image bytes from first page."""
     st.subheader("PDF Upload")
@@ -2020,6 +2225,7 @@ def main():
     client_name = render_proposal_for_input(client_name_default)
     priority_slide_index = render_priorities_selector()
     service_column_slide_index = render_service_columns_selector(deck_type)
+    marketing_options = render_marketing_services_selector()
     image_bytes = render_pdf_upload()
     gallery_images = render_gallery_selector()
     
@@ -2054,7 +2260,8 @@ def main():
                 priority_slide_index,
                 service_column_slide_index,
                 image_bytes,
-                gallery_images
+                gallery_images,
+                marketing_options,
             )
             
             # Store in session state and trigger auto-download
@@ -2137,7 +2344,8 @@ def main():
                         priority_slide_index,
                         service_column_slide_index,
                         image_bytes,
-                        gallery_images
+                        gallery_images,
+                        marketing_options,
                     )
                     
                     # Upload to Google Drive (pass PPTX bytes to avoid regenerating)
@@ -2148,7 +2356,8 @@ def main():
                         service_column_slide_index,
                         image_bytes,
                         gallery_images,
-                        pptx_bytes
+                        marketing_options,
+                        pptx_bytes,
                     )
                     st.success(f"✅ Deck uploaded to Google Drive: [Open Deck]({deck_url})")
                     

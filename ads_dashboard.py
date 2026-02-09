@@ -892,7 +892,7 @@ def main():
             # Detailed Sales Table Section
             st.subheader("🔍 Detailed Sales Analysis")
             
-            # Month selector for detailed view - only show months with qualifying sales (Closed + Paid Search)
+            # Display all qualifying sales within the selected date range (Closed + Paid Search)
             if not sales_df_filtered.empty:
                 # Filter to only include Closed/Win + Paid Search records (same as ROAS)
                 qualifying_sales = sales_df_filtered[
@@ -900,34 +900,20 @@ def main():
                     (sales_df_filtered['Channel'].str.lower() == 'paid search')
                 ]
                 
-                # Sort months chronologically and remove NaN values from qualifying sales only
-                available_months = sorted([month for month in qualifying_sales['Month Year'].unique() 
-                                         if pd.notna(month) and month != 'nan'], 
-                                        key=lambda x: pd.to_datetime(x))
-                if available_months:
-                    selected_month = st.selectbox(
-                        "Select Month to View Detailed Sales:",
-                        available_months
-                    )
-                    
-                    # Filter sales data for selected month (using same criteria as ROAS calculation)
-                    month_sales = qualifying_sales[qualifying_sales['Month Year'] == selected_month]
-                    
+                if not qualifying_sales.empty:
                     # Filter out linked items to prevent double-counting
                     # Linked items' revenue is already included in their base items
-                    if '_is_linked_item' in month_sales.columns:
-                        month_sales_display = month_sales[~month_sales['_is_linked_item']].copy()
+                    if '_is_linked_item' in qualifying_sales.columns:
+                        sales_display = qualifying_sales[~qualifying_sales['_is_linked_item']].copy()
                     else:
                         # Fallback: if _is_linked_item column doesn't exist, use all items
-                        month_sales_display = month_sales.copy()
+                        sales_display = qualifying_sales.copy()
                     
-                    # Display total revenue for selected month (only from non-linked items)
-                    month_revenue = month_sales_display['Value'].sum()
-                    st.metric(f"Total Revenue ({selected_month})", f"${month_revenue:,.2f}")
-                    
-                    if not month_sales_display.empty:
+                    if not sales_display.empty:
                         # Prepare data for display
-                        display_data = month_sales_display.copy()
+                        display_data = sales_display.copy()
+                        # Sort ascending by Date Created
+                        display_data = display_data.sort_values('Date Created', ascending=True)
                         
                         # Remove internal columns before display
                         if '_is_linked_item' in display_data.columns:
@@ -967,7 +953,7 @@ def main():
                             }
                         )
                     else:
-                        st.info(f"No Closed + Paid Search sales found for {selected_month}")
+                        st.info("No Closed + Paid Search sales found in the selected date range")
                 else:
                     st.info("No sales data available for detailed analysis")
         else:
