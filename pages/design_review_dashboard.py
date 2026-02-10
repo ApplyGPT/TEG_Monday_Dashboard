@@ -9,11 +9,11 @@ import os
 # Get current year dynamically
 CURRENT_YEAR = datetime.now().year
 
-# Design Review Call: 3 Calendly links (one per person)
+# Design Review Call: shared Calendly link (all 3 people use the same link)
 DESIGN_REVIEW_LINKS = {
-    "Anthony": "https://calendly.com/anthony-the-evans-group/30min",
-    "Heather": "https://calendly.com/heather-the-evans-group/30min",
-    "Ian": "https://calendly.com/ian-the-evans-group/30min",
+    "Anthony": "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call",
+    "Heather": "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call",
+    "Ian": "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call",
 }
 DESIGN_REVIEW_PERSONS = ["Anthony", "Heather", "Ian"]
 COLORS = {"Anthony": "#1f77b4", "Heather": "#2ca02c", "Ian": "#ff7f0e"}  # Blue, Green, Orange

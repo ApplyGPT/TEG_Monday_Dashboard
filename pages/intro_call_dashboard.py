@@ -13,7 +13,7 @@ import calendar
 CURRENT_YEAR = datetime.now().year
 
 # TEG Introductory Call Calendly scheduling link (this dashboard shows only events from this link)
-TEG_INTRO_CALL_SCHEDULING_URL = "https://calendly.com/d/ctc8-ndq-rjz/teg-introductory-call"
+TEG_INTRO_CALL_SCHEDULING_URL = "https://calendly.com/d/dv7-542-3nm/intro-call-with-teg"
 # Per-person breakdown (Anthony, Heather, Ian)
 INTRO_PERSONS = ["Anthony", "Heather", "Ian"]
 INTRO_COLORS = {"Anthony": "#1f77b4", "Heather": "#2ca02c", "Ian": "#ff7f0e"}
