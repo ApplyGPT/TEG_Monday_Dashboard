@@ -182,7 +182,7 @@ MARKETING_OPTIONS = [
     "Photoshoot Management",
     "Online Marketing",
 ]
-IMAGE_GALLERY_FOLDER_ID = "1Uxn9oWjw22r0F5GPSLIQ_zUTUXfzO5yl"
+IMAGE_GALLERY_FOLDER_ID = "13RDexXkFO4veiLK0BUu_oX266FUKm2sC"
 IMAGE_TARGET_SIZE = (421, 619)  # width x height in px
 EMU_PER_INCH = 914400
 EMU_PER_PX = EMU_PER_INCH / 96.0
