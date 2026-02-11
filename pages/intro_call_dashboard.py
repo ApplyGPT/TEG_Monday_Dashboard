@@ -12,11 +12,16 @@ import calendar
 # Get current year dynamically
 CURRENT_YEAR = datetime.now().year
 
-# TEG Introductory Call Calendly scheduling link (this dashboard shows only events from this link)
-TEG_INTRO_CALL_SCHEDULING_URL = "https://calendly.com/d/dv7-542-3nm/intro-call-with-teg"
-# Per-person breakdown (Anthony, Heather, Ian)
-INTRO_PERSONS = ["Anthony", "Heather", "Ian"]
-INTRO_COLORS = {"Anthony": "#1f77b4", "Heather": "#2ca02c", "Ian": "#ff7f0e"}
+# Intro Call Dashboard: Two Calendly links (for reference, filtering is dynamic)
+INTRO_CALL_LINKS = {
+    "Burki": "https://calendly.com/jamie-the-evans-group/teg-lets-chat",
+    "Intro Call with TEG": "https://calendly.com/d/dv7-542-3nm/intro-call-with-teg",
+}
+
+def get_color_palette(sources):
+    """Generate a color palette for the given sources dynamically."""
+    base_colors = ["#1f77b4", "#2ca02c", "#ff7f0e", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"]
+    return {source: base_colors[i % len(base_colors)] for i, source in enumerate(sorted(sources))}
 
 # Page configuration
 st.set_page_config(
@@ -88,9 +93,10 @@ def load_calendly_credentials():
         st.stop()
 
 def load_calendly_data_from_db():
-    """Load Calendly data from SQLite database, filtered to TEG Introductory Call events only.
-    Events are identified by event type name containing 'introductory' or 'intro call'.
-    Includes source column (Anthony, Heather, Ian) for per-person breakdown when set by refresh.
+    """Load Calendly data from SQLite database, filtered to Burki Calls and Intro Call with TEG events.
+    Events are identified by:
+    - Burki: event name containing "TEG" and "Let's Chat" or "Lets Chat"
+    - Intro Call with TEG: event name containing 'introductory' or 'intro call' or scheduling URL contains 'intro-call-with-teg'
     """
     CALENDLY_DB_PATH = "calendly_data.db"
     
@@ -132,21 +138,39 @@ def load_calendly_data_from_db():
             df["source"] = ""
         conn.close()
         
-        # Keep only TEG Introductory Call events
+        # Filter to Burki Calls and Intro Call with TEG events
         if not df.empty and 'name' in df.columns:
             name_lower = df['name'].astype(str).str.lower()
+            event_type_lower = df['event_type'].astype(str).str.lower()
+            
+            # Burki: "TEG" + "Let's Chat" or "Lets Chat"
+            is_burki = (
+                name_lower.str.contains('teg', na=False) &
+                (name_lower.str.contains("let's chat", na=False) | name_lower.str.contains("lets chat", na=False))
+            )
+            
+            # Intro Call with TEG: name contains 'introductory' or 'intro call' OR event_type URL contains 'intro-call-with-teg'
             is_intro_call = (
                 name_lower.str.contains('introductory', na=False) |
-                name_lower.str.contains('intro call', na=False)
+                name_lower.str.contains('intro call', na=False) |
+                event_type_lower.str.contains('intro-call-with-teg', na=False)
             )
-            df = df[is_intro_call].copy()
-        if df.empty:
-            return None, "No TEG Introductory Call events in database. Refresh Calendly data from the Database Refresh page."
+            
+            # Create mask for filtering
+            mask = is_burki | is_intro_call
+            df = df[mask].copy()
+            
+            # Preserve existing source if present (e.g., person names), otherwise set based on pattern
+            df["source"] = df["source"].fillna("").astype(str).str.strip()
+            # Only set source if it's empty or "Other" (generic)
+            empty_or_generic = (df["source"] == "") | (df["source"] == "Other")
+            df.loc[is_burki[mask] & empty_or_generic, "source"] = "Burki"
+            df.loc[is_intro_call[mask] & empty_or_generic, "source"] = "Intro Call with TEG"
+            # If source is still empty after pattern matching, set to "Other"
+            df.loc[df["source"] == "", "source"] = "Other"
         
-        # Normalize source: empty -> keep Anthony, Heather, Ian
-        df["source"] = df["source"].fillna("").astype(str).str.strip()
-        df.loc[df["source"] == "", "source"] = "Other"
-        df.loc[~df["source"].isin(INTRO_PERSONS), "source"] = "Other"
+        if df.empty:
+            return None, "No Burki Calls or Intro Call with TEG events in database. Refresh Calendly data from the Database Refresh page."
         
         # Convert timestamps (Calendly API uses UTC) and add analysis columns; use UTC so date doesn't shift by timezone
         df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
@@ -403,28 +427,31 @@ def create_two_week_daily_chart(df, start_date, end_date):
 
 
 def create_stacked_daily_chart(df, start_date, end_date):
-    """Stacked bar: each day on x-axis, count by Person (Anthony, Heather, Ian)."""
+    """Stacked bar: each day on x-axis, count by Source (dynamic)."""
     if start_date is None or end_date is None:
         return None
     date_range = pd.date_range(start=start_date, end=end_date, freq='D')
     all_dates = [d.date() for d in date_range]
     if df.empty:
         counts = pd.DataFrame(columns=['date', 'source', 'count'])
+        sources = []
     else:
         counts = df.groupby(['date', 'source']).size().reset_index(name='count')
+        sources = sorted(df['source'].unique())
+    colors = get_color_palette(sources)
     rows = []
     for d in all_dates:
-        for person in INTRO_PERSONS:
-            n = counts[(counts['date'] == d) & (counts['source'] == person)]['count'].sum() if not counts.empty else 0
-            rows.append({'date': pd.Timestamp(d), 'Person': person, 'count': int(n)})
+        for source in sources:
+            n = counts[(counts['date'] == d) & (counts['source'] == source)]['count'].sum() if not counts.empty else 0
+            rows.append({'date': pd.Timestamp(d), 'Source': source, 'count': int(n)})
     long = pd.DataFrame(rows)
     fig = px.bar(
-        long, x='date', y='count', color='Person',
-        color_discrete_map=INTRO_COLORS,
+        long, x='date', y='count', color='Source',
+        color_discrete_map=colors,
         barmode='stack',
-        title='Calls by Day (by person)',
+        title='Calls by Day (by source)',
         labels={'count': 'Number of Calls', 'date': 'Date'},
-        category_orders={'Person': INTRO_PERSONS}
+        category_orders={'Source': sources}
     )
     fig.update_layout(xaxis_title="Date", yaxis_title="Number of Calls", height=500, xaxis_tickangle=45)
     fig.update_traces(textposition='inside', texttemplate='%{y}')
@@ -432,7 +459,7 @@ def create_stacked_daily_chart(df, start_date, end_date):
 
 
 def create_stacked_weekly_chart(df):
-    """Stacked bar: week on x-axis, count by Person (Anthony, Heather, Ian)."""
+    """Stacked bar: week on x-axis, count by Source (dynamic)."""
     if df.empty:
         return None
     df_copy = df.copy()
@@ -442,21 +469,23 @@ def create_stacked_weekly_chart(df):
     )
     counts = df_copy.groupby(['week_start', 'week_label', 'source']).size().reset_index(name='count')
     counts = counts.sort_values('week_start')
-    long = counts.rename(columns={'source': 'Person'})
+    long = counts.rename(columns={'source': 'Source'})
+    sources = sorted(df['source'].unique())
+    colors = get_color_palette(sources)
     weeks = long[['week_start', 'week_label']].drop_duplicates()
     rows = []
     for _, r in weeks.iterrows():
-        for person in INTRO_PERSONS:
-            n = long[(long['week_start'] == r['week_start']) & (long['Person'] == person)]['count'].sum()
-            rows.append({'week_start': r['week_start'], 'week_label': r['week_label'], 'Person': person, 'count': int(n)})
+        for source in sources:
+            n = long[(long['week_start'] == r['week_start']) & (long['Source'] == source)]['count'].sum()
+            rows.append({'week_start': r['week_start'], 'week_label': r['week_label'], 'Source': source, 'count': int(n)})
     long = pd.DataFrame(rows)
     fig = px.bar(
-        long, x='week_label', y='count', color='Person',
-        color_discrete_map=INTRO_COLORS,
+        long, x='week_label', y='count', color='Source',
+        color_discrete_map=colors,
         barmode='stack',
-        title='Calls by Week (by person)',
+        title='Calls by Week (by source)',
         labels={'count': 'Number of Calls', 'week_label': 'Week'},
-        category_orders={'Person': INTRO_PERSONS}
+        category_orders={'Source': sources}
     )
     fig.update_layout(xaxis_title="Week", yaxis_title="Number of Calls", height=500, xaxis_tickangle=45)
     fig.update_traces(textposition='inside', texttemplate='%{y}')
@@ -464,27 +493,29 @@ def create_stacked_weekly_chart(df):
 
 
 def create_stacked_monthly_chart(df):
-    """Stacked bar: month on x-axis, count by Person (Anthony, Heather, Ian)."""
+    """Stacked bar: month on x-axis, count by Source (dynamic)."""
     if df.empty:
         return None
     counts = df.groupby(['month', 'source']).size().reset_index(name='count')
-    counts = counts.rename(columns={'source': 'Person'})
+    counts = counts.rename(columns={'source': 'Source'})
+    sources = sorted(df['source'].unique())
+    colors = get_color_palette(sources)
     months = counts['month'].unique()
     rows = []
     for m in months:
-        for person in INTRO_PERSONS:
-            n = counts[(counts['month'] == m) & (counts['Person'] == person)]['count'].sum()
-            rows.append({'month': m, 'Person': person, 'count': int(n)})
+        for source in sources:
+            n = counts[(counts['month'] == m) & (counts['Source'] == source)]['count'].sum()
+            rows.append({'month': m, 'Source': source, 'count': int(n)})
     counts = pd.DataFrame(rows)
     counts['month_dt'] = pd.to_datetime(counts['month'])
     counts = counts.sort_values('month_dt')
     fig = px.bar(
-        counts, x='month', y='count', color='Person',
-        color_discrete_map=INTRO_COLORS,
+        counts, x='month', y='count', color='Source',
+        color_discrete_map=colors,
         barmode='stack',
-        title='Calls by Month (by person)',
+        title='Calls by Month (by source)',
         labels={'count': 'Number of Calls', 'month': 'Month'},
-        category_orders={'Person': INTRO_PERSONS}
+        category_orders={'Source': sources}
     )
     fig.update_layout(xaxis_title="Month", yaxis_title="Number of Calls", height=500, xaxis_tickangle=45)
     fig.update_traces(textposition='inside', texttemplate='%{y}')
@@ -659,7 +690,7 @@ def display_calendar_grid(daily_counts, selected_month):
 def main():
     """Main application function"""
     # Header
-    st.markdown('<div class="embed-header">📊 TEG INTRODUCTORY CALL DASHBOARD</div>', unsafe_allow_html=True)
+    st.markdown('<div class="embed-header">📊 INTRO CALL DASHBOARD</div>', unsafe_allow_html=True)
     
     # Sidebar for configuration
     with st.sidebar:

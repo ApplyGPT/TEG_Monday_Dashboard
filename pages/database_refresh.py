@@ -570,9 +570,11 @@ def refresh_calendly_database():
             ('ian-the-evans-group', 'Ian'),
         ]
         def _person_from_user_resource(user_resource):
-            """Infer Anthony/Heather/Ian from User resource (name, slug) - GET /users/{uuid} response."""
+            """Infer Anthony/Heather/Ian/Jennifer from User resource (name, slug) - GET /users/{uuid} response."""
             name_lower = (user_resource.get('name') or '').lower()
             slug_lower = (user_resource.get('slug') or '').lower()
+            if 'jennifer' in name_lower or 'jennifer' in slug_lower:
+                return 'Jennifer'
             if 'anthony' in name_lower or 'anthony' in slug_lower:
                 return 'Anthony'
             if 'heather' in name_lower or 'heather' in slug_lower:
@@ -597,15 +599,20 @@ def refresh_calendly_database():
                 owner_to_person[owner_uri] = ''
             return owner_to_person[owner_uri]
         def _person_from_event_type(et):
-            """Infer Anthony/Heather/Ian from event type: scheduling_url, slug, name, profile.name, or GET user by profile.owner."""
+            """Infer Anthony/Heather/Ian/Jennifer from event type: scheduling_url, slug, name, profile.name, or GET user by profile.owner."""
             url = (et.get('scheduling_url') or '').lower()
             slug_lower = (et.get('slug') or '').lower()
             name_lower = (et.get('name') or '').lower()
+            # Check for Jennifer's specific link first
+            if 'jennifer-teg/30minutegooglemeet' in url or 'jennifer-teg' in url or ('jennifer' in name_lower and '30min' in url):
+                return 'Jennifer'
             for url_part, person in DESIGN_REVIEW_PERSONS:
                 if url_part in url or url_part.replace('-the-evans-group', '') in name_lower or url_part.replace('-the-evans-group', '') in slug_lower:
                     return person
             profile = et.get('profile') or {}
             profile_name = (profile.get('name') or '').lower()
+            if 'jennifer' in profile_name:
+                return 'Jennifer'
             if 'anthony' in profile_name:
                 return 'Anthony'
             if 'heather' in profile_name:
@@ -618,13 +625,15 @@ def refresh_calendly_database():
                 return _person_from_owner(owner_uri)
             return ''
         def _person_from_event_memberships(ev):
-            """Infer Anthony/Heather/Ian from event.event_memberships (round-robin: who actually handled the call)."""
+            """Infer Anthony/Heather/Ian/Jennifer from event.event_memberships (round-robin: who actually handled the call)."""
             memberships = ev.get('event_memberships') or []
             for m in memberships:
                 if not isinstance(m, dict):
                     continue
                 user_name = (m.get('user_name') or '').lower()
                 user_email = (m.get('user_email') or '').lower()
+                if 'jennifer' in user_name or 'jennifer' in user_email:
+                    return 'Jennifer'
                 if 'anthony' in user_name or 'anthony' in user_email:
                     return 'Anthony'
                 if 'heather' in user_name or 'heather' in user_email:
@@ -646,6 +655,9 @@ def refresh_calendly_database():
                 return True, ''
             if 'teg-introductory-call' in scheduling_url or 'introductory' in name_lower or 'intro call' in name_lower:
                 return True, _person_from_event_type(et)
+            # Check for Jennifer's link specifically
+            if 'jennifer-teg/30minutegooglemeet' in scheduling_url or ('jennifer' in name_lower and '30min' in scheduling_url):
+                return True, 'Jennifer'
             person = _person_from_event_type(et)
             if person:
                 return True, person
@@ -759,6 +771,8 @@ def refresh_calendly_database():
                             teg_event_types.append((event_type, source))
                         elif 'teg-introductory-call' in scheduling_url or 'introductory' in name_lower or 'intro call' in name_lower:
                             teg_event_types.append((event_type, _person_from_event_type(event_type)))
+                        elif 'jennifer-teg/30minutegooglemeet' in scheduling_url or ('jennifer' in name_lower and '30min' in scheduling_url):
+                            teg_event_types.append((event_type, 'Jennifer'))
                         else:
                             person = _person_from_event_type(event_type)
                             if person:
