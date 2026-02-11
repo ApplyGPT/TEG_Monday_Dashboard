@@ -1707,7 +1707,7 @@ def load_signnow_credentials(account_name: str = None) -> Dict[str, str]:
     Load SignNow credentials from Streamlit secrets
     
     Args:
-        account_name: Name of the account to load ('heather', 'jennifer', 'anthony', or None for default)
+        account_name: Name of the account to load ('heather', 'jennifer', 'anthony', 'ian' or None for default)
     
     Returns:
         Dict containing SignNow credentials

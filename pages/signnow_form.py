@@ -135,7 +135,8 @@ def main():
     account_options = {
         "Heather": "heather",
         "Jennifer": "jennifer",
-        "Anthony": "anthony"
+        "Anthony": "anthony",
+        "Ian": "ian"
     }
     
     # Initialize session state for selected account if not exists
