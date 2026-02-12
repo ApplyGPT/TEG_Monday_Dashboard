@@ -274,3 +274,55 @@ TEG_Monday_Dashboard/
 - Pillow (for image processing)
 
 See `secrets.toml` for specific versions.
+
+## Server & Deployment
+
+### Cron Jobs
+
+The server is configured with the following cron jobs to handle background tasks and process monitoring:
+
+1.  **Database Refresh** (`*/30 * * * *`):
+    -   Runs every 30 minutes.
+    -   Executes `refresh_database.py` to sync Monday.com and Calendly data to local SQLite databases.
+    -   Logs output to `/root/TEG_Monday_Dashboard/cron.log`.
+
+2.  **Tmux Monitor** (`*/5 * * * *`):
+    -   Runs every 5 minutes.
+    -   Executes `/root/check_tmux.sh` to ensure essential services are running.
+    -   Logs output to `/root/tmux_cron.log`.
+
+### Tmux Sessions
+
+The application processes are managed via `tmux`. Use `tmux ls` to view active sessions.
+
+| Session Name | Description | Command |
+| :--- | :--- | :--- |
+| **dashboard** | Main Streamlit Dashboard | `streamlit run ads_dashboard.py --server.port 8500 --server.address 0.0.0.0 --server.baseUrlPath ads-dashboard` |
+| **qualifier** | Lead Qualifier API | `python lead_qualifier_api.py --port 5000` |
+| **tools** | Tools Page | `streamlit run pages/tools.py --server.port 8501 --server.address 0.0.0.0 --server.baseUrlPath /tools` |
+
+### Auto-Restart Script (`check_tmux.sh`)
+
+Located at `/root/check_tmux.sh`, this script ensures that the `dashboard`, `qualifier`, and `tools` sessions are always active.
+
+-   **Logic**: It iterates through the defined apps. If a session is missing (crashed or stopped), it automatically restarts it.
+-   **Logging**: Restarts and status checks are logged to `/root/tmux_monitor.log`.
+
+### Nginx Configuration
+
+The server uses Nginx as a reverse proxy to route traffic to the appropriate ports based on the URL path. The configuration is located at `/etc/nginx/sites-available/blanklabelshop.conf`.
+
+-   **Domain**: `blanklabelshop.com`
+-   **SSL**: Secured via Let's Encrypt (Certbot). HTTP requests are automatically redirected to HTTPS.
+
+**Routing Rules:**
+
+| Path | Destination | Description |
+| :--- | :--- | :--- |
+| `/ads-dashboard/` | `http://127.0.0.1:8500` | Main Dashboard (Streamlit) |
+| `/tools/` | `http://127.0.0.1:8501/` | Tools Dashboard (Streamlit) |
+| `/qualify` | `http://127.0.0.1:5000` | Lead Qualifier API (Flask) |
+
+**Notes:**
+-   The `/tools` path executes a 301 redirect to `/tools/` to ensure proper trailing slash handling.
+-   Websockets and connection upgrades are configured to support Streamlit's interactive features.
