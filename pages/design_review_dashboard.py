@@ -5,6 +5,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import sqlite3
 import os
+import pytz
+
+# California timezone for displaying dates (user's timezone)
+CALIFORNIA_TZ = pytz.timezone('America/Los_Angeles')
 
 # Get current year dynamically
 CURRENT_YEAR = datetime.now().year
@@ -72,48 +76,71 @@ def load_design_review_data_from_db():
             'uri', 'name', 'start_time', 'end_time', 'status', 'event_type',
             'invitee_name', 'invitee_email', 'source', 'updated_at'
         ])
-        # Filter to TEG Introductory Call and Jennifer events
+        # Filter to Design Review events
+        # Based on CSV export Event Type Name: "30 Minute Meeting" and "*TEG Introductory Call*"
+        # Note: Database may store names with or without asterisks, so we check both
         if not df.empty:
-            name_lower = df['name'].astype(str).str.lower()
-            event_type_lower = df['event_type'].astype(str).str.lower()
+            name_str = df['name'].astype(str)
+            name_lower = name_str.str.lower()
             
-            # TEG Introductory Call: URL contains 'ctc8-ndq-rjz/teg-introductory-call' or name contains 'introductory'
-            is_teg_intro = (
-                event_type_lower.str.contains('ctc8-ndq-rjz/teg-introductory-call', na=False) |
-                name_lower.str.contains('introductory', na=False)
+            # Match "*TEG Introductory Call*" exactly (case-insensitive, handles asterisks)
+            # CSV: "*TEG Introductory Call*"
+            # Must contain both "teg" and "introductory" and "call"
+            is_teg_introductory_call = (
+                name_lower.str.contains('teg', na=False) &
+                name_lower.str.contains('introductory', na=False) &
+                name_lower.str.contains('call', na=False)
             )
             
-            # Jennifer: URL contains 'jennifer-teg/30minutegooglemeet' or name contains 'jennifer'
-            is_jennifer = (
-                event_type_lower.str.contains('jennifer-teg/30minutegooglemeet', na=False) |
-                name_lower.str.contains('jennifer', na=False)
-            )
+            # For "30 Minute Meeting": only include when Source == "Jennifer"
+            # Jennifer's actual events are named "30 Min Google Meet w/ JE", so we include those for Jennifer
+            # Check source field to identify Jennifer's events
+            if 'source' in df.columns:
+                is_jennifer_source = df['source'].astype(str).str.lower() == 'jennifer'
+                
+                # Match "30 Min Google Meet w/ JE" (Jennifer's actual event type)
+                # Only include if source is Jennifer
+                is_jennifer_30min = (
+                    name_lower.str.contains('30 min google meet', na=False) |
+                    (name_lower.str.contains('30 minute', na=False) &
+                     name_lower.str.contains('meeting', na=False) &
+                     ~name_lower.str.contains('google meet', na=False))
+                ) & is_jennifer_source
+            else:
+                is_jennifer_30min = pd.Series([False] * len(df), index=df.index)
             
             # Create mask for filtering
-            mask = is_teg_intro | is_jennifer
+            # Include TEG Introductory Call OR (30 Min Google Meet w/ JE with Jennifer source)
+            mask = is_teg_introductory_call | is_jennifer_30min
             df = df[mask].copy()
             
-            # Preserve existing source if present, otherwise set based on pattern
+            # Filter to only active events (exclude canceled)
+            if 'status' in df.columns:
+                df = df[df['status'].str.lower() == 'active'].copy()
+            
+            # Preserve existing source if present (person names like Anthony, Heather, Ian, Jennifer)
+            # Don't overwrite person names with generic labels
             df["source"] = df["source"].fillna("").astype(str).str.strip()
-            # Only set source if it's empty or "Other" or "Design Review" (generic)
-            empty_or_generic = (df["source"] == "") | (df["source"] == "Other") | (df["source"] == "Design Review")
-            df.loc[is_teg_intro[mask] & empty_or_generic, "source"] = "TEG Introductory Call"
-            df.loc[is_jennifer[mask] & empty_or_generic, "source"] = "Jennifer"
-            # If source is still empty after pattern matching, set to "Other"
-            df.loc[df["source"] == "", "source"] = "Other"
+            # Remove generic labels - they should be replaced with person names from database
+            # If source is generic, clear it (person name should come from database refresh)
+            generic_labels = ["Design Review", "TEG Introductory Call", "*TEG Introductory Call*", "30 Minute Meeting", "Other"]
+            df.loc[df["source"].isin(generic_labels), "source"] = ""
+            # If source is still empty after cleaning, leave it empty (don't set to "Other")
+            # This helps identify events that need database refresh
         
         if df.empty:
             return pd.DataFrame(), None
-        # Calendly API uses UTC; parse as UTC so date doesn't shift by timezone
+        # Calendly API uses UTC; convert to California timezone before extracting date (user's timezone)
         df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
         df['end_time'] = pd.to_datetime(df['end_time'], utc=True)
         df['updated_at'] = pd.to_datetime(df['updated_at'], utc=True)
-        df['date'] = df['start_time'].dt.date
-        df['month'] = df['start_time'].dt.strftime('%B %Y')
-        df['week'] = df['start_time'].dt.isocalendar().week
-        df['year'] = df['start_time'].dt.year
-        df['day_of_week'] = df['start_time'].dt.strftime('%A')
-        df['hour'] = df['start_time'].dt.hour
+        df['start_time_local'] = df['start_time'].dt.tz_convert(CALIFORNIA_TZ)
+        df['date'] = df['start_time_local'].dt.date
+        df['month'] = df['start_time_local'].dt.strftime('%B %Y')
+        df['week'] = df['start_time_local'].dt.isocalendar().week
+        df['year'] = df['start_time_local'].dt.year
+        df['day_of_week'] = df['start_time_local'].dt.strftime('%A')
+        df['hour'] = df['start_time_local'].dt.hour
         return df, None
     except sqlite3.Error as e:
         return None, f"Database error: {str(e)}"
@@ -134,7 +161,8 @@ def create_stacked_daily_chart(df, start_date, end_date):
         sources = []
     else:
         counts = df.groupby(['date', 'source']).size().reset_index(name='count')
-        sources = sorted(df['source'].unique())
+        # Filter out empty sources - only include sources that have at least one event
+        sources = sorted([s for s in df['source'].unique() if s and str(s).strip()])
     colors = get_color_palette(sources)
     # One row per (date, Source) with count (0 if missing) so all sources always appear
     rows = []
@@ -161,7 +189,7 @@ def create_stacked_weekly_chart(df):
     if df.empty:
         return None
     df_copy = df.copy()
-    df_copy['week_start'] = df_copy['start_time'].dt.to_period('W').dt.start_time
+    df_copy['week_start'] = df_copy['start_time_local'].dt.to_period('W').dt.start_time
     df_copy['week_label'] = df_copy['week_start'].apply(
         lambda ts: f"{ts.strftime('%b %d')} - {(ts + pd.Timedelta(days=6)).strftime('%b %d')}"
     )
@@ -197,7 +225,8 @@ def create_stacked_monthly_chart(df):
         return None
     counts = df.groupby(['month', 'source']).size().reset_index(name='count')
     counts = counts.rename(columns={'source': 'Source'})
-    sources = sorted(df['source'].unique())
+    # Filter out empty sources - only include sources that have at least one event
+    sources = sorted([s for s in df['source'].unique() if s and str(s).strip()])
     colors = get_color_palette(sources)
     # Ensure all sources per month (fill 0) so all appear in legend
     months = counts['month'].unique()
@@ -224,11 +253,6 @@ def create_stacked_monthly_chart(df):
 
 def main():
     st.markdown('<div class="embed-header">📊 DESIGN REVIEW CALL DASHBOARD</div>', unsafe_allow_html=True)
-    with st.sidebar:
-        st.header("⚙️ Settings")
-        st.info(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        if st.button("🔄 Refresh Data"):
-            st.rerun()
 
     with st.spinner("Loading Design Review data..."):
         df, error = load_design_review_data_from_db()

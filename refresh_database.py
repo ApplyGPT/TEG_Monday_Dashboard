@@ -411,7 +411,7 @@ def refresh_calendly_database(config):
                 return _person_from_owner(owner_uri)
             return ''
         def _person_from_event_memberships(ev):
-            """Infer Anthony/Heather/Ian/Jennifer from event.event_memberships (round-robin: who actually handled the call)."""
+            """Infer Anthony/Heather/Ian/Jennifer/Burki from event.event_memberships (round-robin: who actually handled the call)."""
             memberships = ev.get('event_memberships') or []
             for m in memberships:
                 if not isinstance(m, dict):
@@ -426,11 +426,28 @@ def refresh_calendly_database(config):
                     return 'Heather'
                 if ('ian' in user_name or 'ian' in user_email) and 'christian' not in user_name and 'christian' not in user_email:
                     return 'Ian'
+                if 'jamie' in user_name or 'jamie' in user_email or 'burki' in user_name or 'burki' in user_email:
+                    return 'Burki'
                 user_uri = m.get('user')
                 if user_uri and '/users/' in user_uri:
                     p = _person_from_owner(user_uri)
                     if p:
                         return p
+            # Fallback: check event host/organizer if available
+            host = ev.get('host') or ev.get('organizer')
+            if isinstance(host, dict):
+                host_name = (host.get('name') or '').lower()
+                host_email = (host.get('email') or '').lower()
+                if 'jennifer' in host_name or 'jennifer' in host_email:
+                    return 'Jennifer'
+                if 'anthony' in host_name or 'anthony' in host_email:
+                    return 'Anthony'
+                if 'heather' in host_name or 'heather' in host_email:
+                    return 'Heather'
+                if ('ian' in host_name or 'ian' in host_email) and 'christian' not in host_name and 'christian' not in host_email:
+                    return 'Ian'
+                if 'jamie' in host_name or 'jamie' in host_email or 'burki' in host_name or 'burki' in host_email:
+                    return 'Burki'
             return ''
         def _teg_relevant_and_source(et):
             """Return (is_teg_relevant, default_source) for an event type."""
@@ -439,7 +456,13 @@ def refresh_calendly_database(config):
             name_lower = (event_name or '').lower()
             if event_name and "teg" in name_lower and ("let's chat" in name_lower or "lets chat" in name_lower):
                 return True, ''
-            if 'teg-introductory-call' in scheduling_url or 'introductory' in name_lower or 'intro call' in name_lower:
+            # "*TEG Introductory Call*" - check if it's Jennifer's link or owned by TEG team (likely Jennifer)
+            if 'teg-introductory-call' in scheduling_url or ('introductory' in name_lower and 'teg' in name_lower):
+                person = _person_from_event_type(et)
+                # If event type is owned by team/org and no person found, default to empty (let event memberships determine)
+                # This allows event memberships to correctly identify Jennifer for TEG-owned events
+                return True, person if person else ''
+            if 'intro call' in name_lower and 'introductory' not in name_lower:
                 return True, _person_from_event_type(et)
             # Check for Jennifer's specific link before generic person check
             if 'jennifer-teg' in scheduling_url or ('jennifer' in name_lower and '30minutegooglemeet' in scheduling_url):
@@ -521,7 +544,19 @@ def refresh_calendly_database(config):
                 if not relevant and ev.get('name'):
                     relevant, default_source = _teg_relevant_and_source({'name': ev.get('name'), 'scheduling_url': '', 'slug': ''})
                 if relevant:
-                    src = _person_from_event_memberships(ev) or default_source
+                    # Always prioritize person name from event memberships/host
+                    src = _person_from_event_memberships(ev)
+                    if not src and et:
+                        # Fallback: try to get person from event type owner/profile
+                        src = _person_from_event_type(et)
+                    # For "TEG - Let's Chat", if no person found, default to "Burki"
+                    ev_name_lower = (ev.get('name') or '').lower()
+                    if not src and "teg" in ev_name_lower and ("let's chat" in ev_name_lower or "lets chat" in ev_name_lower):
+                        src = 'Burki'
+                    # Never use generic labels - but keep person names like Burki, Anthony, Heather, Ian, Jennifer
+                    # Only filter out truly generic labels
+                    if src and src in ['Design Review', 'Intro Call with TEG', 'TEG Introductory Call', '30 Minute Meeting']:
+                        src = ''
                     all_events.append({**ev, 'source': src})
         else:
             # USER PATH: fetch with one or both keys (Burki + v2) and merge events
@@ -569,6 +604,8 @@ def refresh_calendly_database(config):
                     event_type_uri = event_type['uri']
                     event_type_uuid = event_type_uri.split('/')[-1]
                     event_name = event_type['name']
+                    # Get person from event type as fallback
+                    event_type_person = _person_from_event_type(event_type)
                     print(f"   Fetching events for: {event_name}")
                     for year, min_start_time, max_start_time in year_ranges:
                         page_count = 0
@@ -602,8 +639,18 @@ def refresh_calendly_database(config):
                             for event in events:
                                 if not event.get("name") and event_name:
                                     event = {**event, "name": event_name}
-                                source_from_membership = _person_from_event_memberships(event)
-                                final_source = source_from_membership if source_from_membership else source
+                                # Always prioritize person name from event memberships/host
+                                final_source = _person_from_event_memberships(event)
+                                if not final_source:
+                                    # Fallback: use person from event type
+                                    final_source = event_type_person
+                                # For "TEG - Let's Chat", if no person found, default to "Burki"
+                                if not final_source and source == '' and "teg" in event_name.lower() and ("let's chat" in event_name.lower() or "lets chat" in event_name.lower()):
+                                    final_source = 'Burki'
+                                # Never use generic labels - but keep person names like Burki, Anthony, Heather, Ian, Jennifer
+                                # Only filter out truly generic labels
+                                if final_source and final_source in ['Design Review', 'Intro Call with TEG', 'TEG Introductory Call', '30 Minute Meeting']:
+                                    final_source = ''
                                 all_events.append({**event, "source": final_source})
                             next_page_token = events_data.get('pagination', {}).get('next_page_token')
                             if not next_page_token:

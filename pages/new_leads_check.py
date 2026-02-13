@@ -264,6 +264,9 @@ def display_calendar_html(daily_counts, selected_date):
     st.markdown(html, unsafe_allow_html=True)
 
 
+# Get current year for date range default
+CURRENT_YEAR = datetime.now().year
+
 # ----------------------
 # Main UI
 # ----------------------
@@ -278,19 +281,9 @@ def main():
         )
         return
 
-    # Sidebar
-    with st.sidebar:
-        st.header("⚙️ Settings")
-        refresh = st.button("🔄 Refresh Data")
-        st.info(f"Last Updated: {datetime.now():%Y-%m-%d %H:%M:%S}")
-
     if "nlc_selected_date" not in st.session_state:
         st.session_state["nlc_selected_date"] = date.today()
     selected_date = st.session_state["nlc_selected_date"]
-
-    # If user requested refresh, clear cache BEFORE calling cached function
-    if refresh:
-        st.cache_data.clear()
 
     cache_path = _cache_file_path()
     cached_df, cached_daily_counts = try_load_cached_current_month_df(cache_path)
@@ -314,34 +307,42 @@ def main():
         df_calendar = df_full.copy()
         daily_counts_cache = {}
 
-    # Prepare aggregated data for charts using full dataset
+    if "nlc_chart_start_date" not in st.session_state:
+        st.session_state.nlc_chart_start_date = date(CURRENT_YEAR, 1, 1)
+    if "nlc_chart_end_date" not in st.session_state:
+        st.session_state.nlc_chart_end_date = date.today()
+    chart_start_date = st.session_state.nlc_chart_start_date
+    chart_end_date = st.session_state.nlc_chart_end_date
+    if chart_start_date > chart_end_date:
+        chart_end_date = chart_start_date
+
+    # Prepare aggregated data for charts using date-range-filtered dataset
     chart_df = df_full.dropna(subset=["Effective Date"]).copy()
     if not chart_df.empty:
         chart_df["Date"] = chart_df["Effective Date"].dt.date
-        last_date = max(chart_df["Date"])
+        # Filter by selected date range for Daily / Weekly / Monthly
+        chart_df_range = chart_df[(chart_df["Date"] >= chart_start_date) & (chart_df["Date"] <= chart_end_date)].copy()
+        last_date = chart_end_date
 
-        # Daily counts for the past two weeks from the latest date
-        two_weeks_ago = last_date - timedelta(days=14)
-        mask_daily = (chart_df["Date"] >= two_weeks_ago) & (chart_df["Date"] <= last_date)
+        # Daily counts for the selected date range
+        mask_daily = (chart_df_range["Date"] >= chart_start_date) & (chart_df_range["Date"] <= chart_end_date)
         daily_counts_chart = (
-            chart_df.loc[mask_daily]
+            chart_df_range.loc[mask_daily]
             .groupby("Date")
             .size()
             .reset_index(name="Leads")
         )
-        full_daily_range = pd.date_range(two_weeks_ago, last_date, freq="D")
+        full_daily_range = pd.date_range(chart_start_date, chart_end_date, freq="D")
         daily_counts_chart = (
-            pd.DataFrame({"Date": full_daily_range.date})
+            pd.DataFrame({"Date": [d.date() for d in full_daily_range]})
             .merge(daily_counts_chart, on="Date", how="left")
             .fillna({"Leads": 0})
         )
         daily_counts_chart["Leads"] = daily_counts_chart["Leads"].astype(int)
         daily_counts_chart["Date"] = pd.to_datetime(daily_counts_chart["Date"])
 
-        # Weekly counts since the beginning of the current year
-        start_of_year = date(last_date.year, 1, 1)
-        mask_year = chart_df["Date"] >= start_of_year
-        chart_df_year = chart_df.loc[mask_year].copy()
+        # Weekly counts for the selected date range
+        chart_df_year = chart_df_range.copy()
         if not chart_df_year.empty:
             date_times = pd.to_datetime(chart_df_year["Date"])
             chart_df_year["Week Start"] = date_times - pd.to_timedelta(date_times.dt.weekday, unit="d")
@@ -351,8 +352,8 @@ def main():
                 .reset_index(name="Leads")
                 .sort_values("Week Start")
             )
-            first_week_start = min(weekly_counts["Week Start"])
-            week_range = pd.date_range(first_week_start, pd.to_datetime(last_date), freq="W-MON")
+            first_week_start = pd.to_datetime(min(weekly_counts["Week Start"]))
+            week_range = pd.date_range(first_week_start, pd.to_datetime(chart_end_date), freq="W-MON")
             weekly_counts = (
                 pd.DataFrame({"Week Start": week_range})
                 .merge(weekly_counts, on="Week Start", how="left")
@@ -368,7 +369,7 @@ def main():
         else:
             weekly_counts = pd.DataFrame()
 
-        # Monthly counts since January of the current year
+        # Monthly counts for the selected date range
         chart_df_year["Month Start"] = pd.to_datetime(chart_df_year["Date"]).dt.to_period("M").dt.to_timestamp()
         monthly_counts = (
             chart_df_year.groupby("Month Start")
@@ -377,8 +378,8 @@ def main():
             .sort_values("Month Start")
         )
         month_range = pd.date_range(
-            start=start_of_year,
-            end=last_date,
+            start=chart_start_date,
+            end=chart_end_date,
             freq="MS",
         )
         monthly_counts = (
@@ -436,16 +437,39 @@ def main():
                 },
             )
 
+    def _render_date_range_form(form_key: str, start_key: str, end_key: str) -> None:
+        with st.form(key=form_key, clear_on_submit=False):
+            c1, c2, c3 = st.columns([1, 1, 1])
+            with c1:
+                start_in = st.date_input("Start Date", value=st.session_state.nlc_chart_start_date, key=start_key)
+            with c2:
+                end_in = st.date_input("End Date", value=st.session_state.nlc_chart_end_date, key=end_key)
+            with c3:
+                st.markdown("<div style='margin-top: 14px; padding-top: 14px'></div>", unsafe_allow_html=True)
+                apply_btn = st.form_submit_button("Apply Date Range Filters")
+            if apply_btn:
+                if start_in > end_in:
+                    st.session_state.nlc_chart_start_date = end_in
+                    st.session_state.nlc_chart_end_date = end_in
+                else:
+                    st.session_state.nlc_chart_start_date = start_in
+                    st.session_state.nlc_chart_end_date = end_in
+                st.rerun()
+
     with tab_daily:
+        st.subheader("📅 Date Range")
+        _render_date_range_form("nlc_date_range_daily", "nlc_start_daily", "nlc_end_daily")
+        st.markdown("---")
         if chart_df.empty or daily_counts_chart.empty:
-            st.info("No daily lead activity to display.")
+            st.info("No daily lead activity to display for the selected date range.")
         else:
+            date_range_label = f"{chart_start_date:%b %d, %Y} – {chart_end_date:%b %d, %Y}"
             fig_daily = px.bar(
                 daily_counts_chart,
                 x="Date",
                 y="Leads",
-                title="Leads by Day (Past 2 Weeks)",
-                labels={"Date": "Date", "Leads": "Calls"},
+                title=f"Leads by Day ({date_range_label})",
+                labels={"Date": "Date", "Leads": "Leads"},
                 color_discrete_sequence=["#1f77b4"],
             )
             fig_daily.update_layout(height=600, showlegend=False)
@@ -463,14 +487,17 @@ def main():
             st.plotly_chart(fig_daily, use_container_width=True)
 
     with tab_weekly:
+        st.subheader("📅 Date Range")
+        _render_date_range_form("nlc_date_range_weekly", "nlc_start_weekly", "nlc_end_weekly")
+        st.markdown("---")
         if chart_df.empty or weekly_counts.empty:
-            st.info("No weekly lead activity to display.")
+            st.info("No weekly lead activity to display for the selected date range.")
         else:
             fig_weekly = px.bar(
                 weekly_counts,
                 x="Week Label",
                 y="Leads",
-                title="Leads by Week",
+                title=f"Leads by Week ({chart_start_date:%b %d, %Y} – {chart_end_date:%b %d, %Y})",
                 labels={"Week Label": "Week", "Leads": "Calls"},
                 color_discrete_sequence=["#2ca02c"],
             )
@@ -484,14 +511,17 @@ def main():
             st.plotly_chart(fig_weekly, use_container_width=True)
 
     with tab_monthly:
+        st.subheader("📅 Date Range")
+        _render_date_range_form("nlc_date_range_monthly", "nlc_start_monthly", "nlc_end_monthly")
+        st.markdown("---")
         if chart_df.empty or monthly_counts.empty:
-            st.info("No monthly lead activity to display.")
+            st.info("No monthly lead activity to display for the selected date range.")
         else:
             fig_monthly = px.bar(
                 monthly_counts,
                 x="Month Label",
                 y="Leads",
-                title="Leads by Month",
+                title=f"Leads by Month ({chart_start_date:%b %d, %Y} – {chart_end_date:%b %d, %Y})",
                 labels={"Month Label": "Month", "Leads": "Calls"},
                 color_discrete_sequence=["#ff7f0e"],
             )

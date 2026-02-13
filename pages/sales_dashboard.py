@@ -305,16 +305,6 @@ def main():
         st.info("💡 Please go to the 'Database Refresh' page to initialize the database with Monday.com data.")
         return
     
-    # Sidebar for configuration
-    with st.sidebar:
-        st.header("⚙️ Settings")
-        st.info(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # Refresh button
-        if st.button("🔄 Refresh Data"):
-            st.cache_data.clear()
-            st.rerun()
-    
     # Load and process data from database
     with st.spinner("Loading sales data from database..."):
         data = get_sales_data_from_db()

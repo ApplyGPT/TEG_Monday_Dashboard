@@ -548,15 +548,6 @@ def main():
     # Header
     st.markdown('<div class="embed-header">📊 BURKI DASHBOARD</div>', unsafe_allow_html=True)
     
-    # Sidebar for configuration
-    with st.sidebar:
-        st.header("⚙️ Settings")
-        st.info(f"Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        
-        # Refresh button
-        if st.button("🔄 Refresh Data"):
-            st.rerun()
-    
     # Load Calendly data from database
     with st.spinner("Loading Calendly data from database..."):
         try:
